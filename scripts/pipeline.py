@@ -31,10 +31,13 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from multiprocessing import Manager
 from pathlib import Path
+from queue import Empty
 
 import duckdb
 
@@ -227,9 +230,22 @@ def process_state(
     themes: list[Theme],
     keep_intermediate: bool,
     verbose: bool = False,
+    progress_queue=None,
 ) -> dict:
+    """Run clip + all themes for one state.
+
+    If progress_queue is provided (a Manager().Queue), emit events so a
+    parent process can drive a live multi-bar display:
+      ('start',       iso, {'name': str, 'total': int})
+      ('step_done',   iso, {'step': str})
+      ('done',        iso, {'manifest': dict, 'duration': float})
+    """
     global VERBOSE
     VERBOSE = verbose  # make subprocess echoing consistent in this worker
+
+    def emit(kind: str, **data) -> None:
+        if progress_queue is not None:
+            progress_queue.put((kind, state.iso, data))
 
     t_state = time.time()
 
@@ -246,6 +262,9 @@ def process_state(
     state_out_dir   = out_dir / f"country={country}" / f"state={state.iso}"
     state_out_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1 clip step + one step per theme
+    emit("start", name=state.name, total=1 + len(themes))
+
     if verbose:
         print(f"\n=== {state.iso} ({state.name}) ===")
 
@@ -261,6 +280,7 @@ def process_state(
                   f"({state_pbf.stat().st_size/(1024*1024):.1f} MB)")
     elif verbose:
         print(f"  [clip] reusing {state_pbf.name}")
+    emit("step_done", step="clip")
 
     counts: dict[str, int] = {}
     for theme in themes:
@@ -281,13 +301,18 @@ def process_state(
             if verbose:
                 print(f"    [{theme.name}] {time.time()-t0:.1f}s total")
         except subprocess.CalledProcessError as e:
-            # Failures are always loud, even in quiet mode.
+            # Failures are always loud, even in quiet mode. Surface stderr
+            # (captured by run() in quiet mode) so we don't have to replay.
+            stderr = e.stderr.decode(errors="replace") if e.stderr else ""
             print(f"    [{state.iso}/{theme.name}] FAILED: {e}")
+            if stderr.strip():
+                print(f"      stderr: {stderr.strip()[:500]}")
             counts[theme.name] = -1
 
         if not keep_intermediate:
             theme_pbf.unlink(missing_ok=True)
             theme_jsonseq.unlink(missing_ok=True)
+        emit("step_done", step=theme.name)
 
     duration = round(time.time() - t_state, 1)
     total_features = sum(c for c in counts.values() if c > 0)
@@ -312,7 +337,110 @@ def process_state(
         except OSError:
             pass
 
+    emit("done", manifest=manifest, duration=duration)
     return manifest
+
+
+# ---------- execution strategies ----------
+
+def _run_verbose(states: list[State], kwargs_common: dict, workers: int) -> None:
+    """Plain stdout log, one summary line per state as in the earlier UI."""
+    total = len(states)
+
+    def report(i: int, m: dict) -> None:
+        print(f"[{i:3d}/{total}]  {m['state_iso']:7s} {m['state_name']:30.30s}  "
+              f"{m['total_features']:>11,} features  {m['duration_s']:>6.1f}s")
+
+    if workers > 1:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(process_state, state=s, **kwargs_common) for s in states]
+            for i, f in enumerate(as_completed(futures), 1):
+                report(i, f.result())
+    else:
+        for i, state in enumerate(states, 1):
+            report(i, process_state(state=state, **kwargs_common))
+
+
+def _run_with_progress(states: list[State], kwargs_common: dict, workers: int) -> None:
+    """Docker-style stacked bars via rich.Progress.
+
+    Completed states scroll up as ✓ log lines; currently-running states
+    keep a spinner + bar at the bottom of the screen until they finish.
+    """
+    from rich.console import Console
+    from rich.progress import (
+        Progress, SpinnerColumn, BarColumn, TextColumn,
+        MofNCompleteColumn, TimeElapsedColumn,
+    )
+
+    console = Console(log_path=False, log_time_format="%H:%M:%S")
+    total = len(states)
+    done_count = [0]  # mutable cell for closures
+
+    progress = Progress(
+        SpinnerColumn(style="cyan"),
+        TextColumn("[cyan]{task.fields[iso]:<7}[/cyan]"),
+        TextColumn("{task.fields[name]:<22.22}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        TextColumn("{task.fields[step]:<18.18}", style="dim"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+
+    stop = threading.Event()
+    q = Manager().Queue()
+    tasks: dict[str, int] = {}  # iso -> TaskID
+
+    def drainer() -> None:
+        while not stop.is_set() or not q.empty():
+            try:
+                kind, iso, data = q.get(timeout=0.1)
+            except Empty:
+                continue
+            if kind == "start":
+                tasks[iso] = progress.add_task(
+                    description="",
+                    total=data["total"],
+                    iso=iso,
+                    name=data["name"],
+                    step="clipping…",
+                )
+            elif kind == "step_done":
+                tid = tasks.get(iso)
+                if tid is not None:
+                    progress.update(tid, advance=1, step=f"→ {data['step']}")
+            elif kind == "done":
+                tid = tasks.pop(iso, None)
+                if tid is not None:
+                    progress.remove_task(tid)
+                done_count[0] += 1
+                m = data["manifest"]
+                console.print(
+                    f"[green]✓[/green] [{done_count[0]:>3}/{total}]  "
+                    f"[cyan]{iso:<7}[/cyan] {m['state_name']:<22.22}  "
+                    f"{m['total_features']:>11,} features  "
+                    f"{data['duration']:>6.1f}s"
+                )
+
+    thread = threading.Thread(target=drainer, daemon=True)
+    thread.start()
+
+    try:
+        with progress:
+            kw = {**kwargs_common, "progress_queue": q}
+            if workers > 1:
+                with ProcessPoolExecutor(max_workers=workers) as ex:
+                    futures = [ex.submit(process_state, state=s, **kw) for s in states]
+                    for f in as_completed(futures):
+                        f.result()  # re-raise on worker failure
+            else:
+                for state in states:
+                    process_state(state=state, **kw)
+    finally:
+        stop.set()
+        thread.join(timeout=5)
 
 
 # ---------- main ----------
@@ -377,24 +505,15 @@ def main() -> None:
         verbose=args.verbose,
     )
 
-    total = len(states)
     if args.workers > 1:
         print(f"Workers:    {args.workers}")
     print()
 
-    def report(i: int, m: dict) -> None:
-        print(f"[{i:3d}/{total}]  {m['state_iso']:7s} {m['state_name']:30.30s}  "
-              f"{m['total_features']:>11,} features  {m['duration_s']:>6.1f}s")
-
     t0 = time.time()
-    if args.workers > 1:
-        with ProcessPoolExecutor(max_workers=args.workers) as ex:
-            futures = {ex.submit(process_state, state=s, **kwargs_common): s for s in states}
-            for i, f in enumerate(as_completed(futures), 1):
-                report(i, f.result())  # re-raise on worker failure
+    if args.verbose:
+        _run_verbose(states, kwargs_common, args.workers)
     else:
-        for i, state in enumerate(states, 1):
-            report(i, process_state(state=state, **kwargs_common))
+        _run_with_progress(states, kwargs_common, args.workers)
     print(f"\nDone in {time.time()-t0:.1f}s")
 
     if not args.keep_intermediate:

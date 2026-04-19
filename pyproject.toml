@@ -11,4 +11,5 @@ authors = [
 dependencies = [
     "duckdb>=1.1.0",
     "geoparquet-io>=0.2.0",
+    "rich>=13.0",
 ]
