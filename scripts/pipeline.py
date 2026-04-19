@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """
-State-first OSM -> GeoParquet pipeline.
+Admin-region-first OSM -> GeoParquet pipeline.
 
-Reads a single GeoJSON FeatureCollection of US states (OSM-derived, with
-ISO3166-2 and name in properties), clips the source PBF per-state, extracts
-each theme declared in themes.py, writes optimized GeoParquet.
+Reads a single GeoJSON FeatureCollection of admin regions (OSM-derived, with
+ISO3166-2 and name in properties), clips the source PBF per region, extracts
+each theme declared in themes.py, writes optimized GeoParquet 2.0.
+
+Country is derived from the ISO3166-2 prefix (e.g. 'US-NY' -> 'US',
+'CA-ON' -> 'CA'), so the same pipeline invocation can process mixed-country
+inputs.
 
 Output layout:
-  out/states/state=<STATE_ISO>/<theme>.parquet
-  out/states/state=<STATE_ISO>/_manifest.json
+  out/country=<CC>/state=<ISO3166-2>/<theme>.parquet
+  out/country=<CC>/state=<ISO3166-2>/_manifest.json
 
 Usage:
   python3 scripts/pipeline.py \
-      --source-pbf data/us-northeast-latest.osm.pbf \
-      --states-geojson data/us_states.geojson \
+      --source-pbf data/north-america-latest.osm.pbf \
+      --states-geojson data/admin_regions.geojson \
       --out-dir out/
 
   # Subset:
-  python3 scripts/pipeline.py ... --states US-MA US-RI --themes buildings roads
+  python3 scripts/pipeline.py ... --states US-MA CA-ON --themes buildings roads
 """
 
 from __future__ import annotations
@@ -132,7 +136,6 @@ def write_theme_parquet(
     country: str,
     state_name: str,
     state_iso: str,
-    region: str,
 ) -> int:
     if not jsonseq.exists() or jsonseq.stat().st_size == 0:
         print(f"    [{theme.name}] empty jsonseq, skipping")
@@ -190,7 +193,6 @@ def write_theme_parquet(
                 ? AS country,
                 ? AS state,
                 ? AS state_iso,
-                ? AS region,
                 {typed_sql},
                 tags,
                 geometry
@@ -203,7 +205,7 @@ def write_theme_parquet(
             COMPRESSION ZSTD,
             ROW_GROUP_SIZE 50000
         )
-    """, [country, state_name, state_iso, region])
+    """, [country, state_name, state_iso])
 
     size_mb = out_parquet.stat().st_size / (1024 * 1024)
     print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0)")
@@ -216,20 +218,20 @@ def process_state(
     source_pbf: Path,
     work_dir: Path,
     out_dir: Path,
-    country: str,
-    region: str,
     themes: list[Theme],
     keep_intermediate: bool,
 ) -> dict:
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
 
+    country = state.iso.split("-")[0]  # 'US-NY' -> 'US', 'CA-ON' -> 'CA'
+
     state_work = work_dir / state.iso
     state_work.mkdir(parents=True, exist_ok=True)
 
     state_poly_path = state_work / f"{state.iso}.geojson"
     state_pbf       = state_work / f"{state.iso}.osm.pbf"
-    state_out_dir   = out_dir / "states" / f"state={state.iso}"
+    state_out_dir   = out_dir / f"country={country}" / f"state={state.iso}"
 
     print(f"\n=== {state.iso} ({state.name}) ===")
 
@@ -257,7 +259,7 @@ def process_state(
             n = write_theme_parquet(
                 con, theme, theme_jsonseq, theme_parquet,
                 country=country, state_name=state.name,
-                state_iso=state.iso, region=region,
+                state_iso=state.iso,
             )
             counts[theme.name] = n
             print(f"    [{theme.name}] {time.time()-t0:.1f}s total")
@@ -271,10 +273,9 @@ def process_state(
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "country": country,
         "state_iso": state.iso,
         "state_name": state.name,
-        "country": country,
-        "region": region,
         "source_pbf": source_pbf.name,
         "themes": counts,
     }
@@ -300,10 +301,8 @@ def main() -> None:
                    help="Single GeoJSON FeatureCollection with all state polygons. "
                         "Each feature must have 'ISO3166-2' and 'name' properties.")
     p.add_argument("--out-dir",        required=True, type=Path)
-    p.add_argument("--country",        default="US")
-    p.add_argument("--region",         default="us-northeast")
     p.add_argument("--states",         nargs="*",
-                   help="Subset of state ISO codes, e.g. US-MA US-RI. Default: all in geojson.")
+                   help="Subset of admin-region ISO codes, e.g. US-MA CA-ON. Default: all in geojson.")
     p.add_argument("--themes",         nargs="*",
                    help="Subset of theme names. Default: all in themes.py.")
     p.add_argument("--keep-intermediate", action="store_true")
@@ -344,8 +343,6 @@ def main() -> None:
         source_pbf=args.source_pbf,
         work_dir=work_dir,
         out_dir=args.out_dir,
-        country=args.country,
-        region=args.region,
         themes=themes,
         keep_intermediate=args.keep_intermediate,
     )
