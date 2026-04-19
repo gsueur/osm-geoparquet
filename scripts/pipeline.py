@@ -45,18 +45,6 @@ def run(cmd: list[str]) -> None:
     print(f"    $ {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
-def gpio_convert_to_v2(src: Path, dst: Path) -> None:
-    """Upgrade GeoParquet 1.1 (DuckDB output) to 2.0 via gpio.
-
-    Replaces the WKB geometry column with the native Parquet GEOMETRY
-    logical type and drops the redundant bbox STRUCT column.
-    """
-    run([
-        "gpio", "convert",
-        str(src), str(dst),
-        "--geoparquet-version", "2.0",
-    ])
-
 def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path) -> None:
     run([
         "osmium", "extract",
@@ -186,11 +174,16 @@ def write_theme_parquet(
     )
 
     out_parquet.parent.mkdir(parents=True, exist_ok=True)
-    tmp_v11 = out_parquet.with_suffix(".v11.parquet")
 
-    # Stage 1: DuckDB writes GeoParquet 1.1 unsorted (gpio Hilbert-sorts in Stage 2)
+    # DuckDB writes GeoParquet 2.0 directly (native Parquet GEOMETRY logical type).
+    # Hilbert-ordered via ST_Extent_Agg CTE; no sidecar bbox column needed in v2.0.
     con.execute(f"""
         COPY (
+            WITH extent AS (
+                SELECT ST_Extent(ST_Extent_Agg(geometry)) AS box
+                FROM src
+                WHERE {where}
+            )
             SELECT
                 osm_id,
                 osm_type,
@@ -200,25 +193,17 @@ def write_theme_parquet(
                 ? AS region,
                 {typed_sql},
                 tags,
-                STRUCT_PACK(
-                    xmin := ST_XMin(geometry),
-                    ymin := ST_YMin(geometry),
-                    xmax := ST_XMax(geometry),
-                    ymax := ST_YMax(geometry)
-                ) AS bbox,
                 geometry
-            FROM src
+            FROM src, extent
             WHERE {where}
-        ) TO '{tmp_v11}' (
+            ORDER BY ST_Hilbert(geometry, extent.box)
+        ) TO '{out_parquet}' (
             FORMAT PARQUET,
+            GEOPARQUET_VERSION 'V2',
             COMPRESSION ZSTD,
             ROW_GROUP_SIZE 50000
         )
     """, [country, state_name, state_iso, region])
-
-    # Stage 2: upgrade to GeoParquet 2.0 via gpio
-    gpio_convert_to_v2(tmp_v11, out_parquet)
-    tmp_v11.unlink()
 
     size_mb = out_parquet.stat().st_size / (1024 * 1024)
     print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0)")
