@@ -65,6 +65,84 @@ def sh_json(cmd: list[str]) -> list | dict:
     return json.loads(r.stdout)
 
 
+# ---------- rclone progress-bar integration ----------
+
+_SIZE_RE = re.compile(r"([\d.]+)\s*([KMGTP]?i?B)\b")
+_UNITS = {
+    "B": 1,
+    "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4, "PiB": 1024**5,
+    "kB": 1000, "KB": 1000, "MB": 10**6, "GB": 10**9, "TB": 10**12, "PB": 10**15,
+}
+_STATS_RE = re.compile(
+    r"([\d.]+\s*[KMGTP]?i?B)\s*/\s*([\d.]+\s*[KMGTP]?i?B)"
+)
+
+
+def _parse_size(s: str) -> int:
+    m = _SIZE_RE.search(s)
+    if not m:
+        return 0
+    return int(float(m.group(1)) * _UNITS.get(m.group(2), 1))
+
+
+def _count_bytes(root: Path, exclude_dirs: tuple[str, ...] = ("_work",)) -> int:
+    total = 0
+    for p in root.rglob("*"):
+        if p.is_file() and not any(part in exclude_dirs for part in p.parts):
+            total += p.stat().st_size
+    return total
+
+
+def rclone_with_progress(cmd: list[str], *, label: str, total_bytes: int,
+                         dry_run: bool = False) -> None:
+    """Run an rclone copy/sync with a Rich live progress bar.
+
+    Parses rclone's one-line stats output (emitted every second at NOTICE
+    level) to drive a Rich bar with bytes-transferred / total / speed / ETA.
+    """
+    full = cmd + ["--stats", "1s", "--stats-one-line", "--stats-log-level", "NOTICE"]
+    print(f"  $ {' '.join(full)}")
+    if dry_run:
+        return
+
+    from rich.console import Console
+    from rich.progress import (
+        Progress, BarColumn, TextColumn,
+        DownloadColumn, TransferSpeedColumn, TimeRemainingColumn,
+    )
+
+    console = Console()
+    with Progress(
+        TextColumn("[cyan]{task.description}[/cyan]"),
+        BarColumn(bar_width=30),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(label, total=total_bytes or 1)
+        proc = subprocess.Popen(
+            full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                m = _STATS_RE.search(line)
+                if m:
+                    done = _parse_size(m.group(1))
+                    total = _parse_size(m.group(2))
+                    # rclone's "total" grows as it discovers files; lift
+                    # the bar's total when it exceeds our initial guess.
+                    if total and total > progress.tasks[task].total:
+                        progress.update(task, total=total)
+                    progress.update(task, completed=done)
+        finally:
+            proc.wait()
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, full)
+        progress.update(task, completed=progress.tasks[task].total)
+
+
 def write_remote_text(remote: str, name: str, text: str, *, dry_run: bool) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".tmp", delete=False) as f:
         f.write(text)
@@ -132,18 +210,27 @@ def main() -> None:
     print(f"Dry-run:   {args.dry_run}")
     print()
 
+    total_bytes = _count_bytes(args.out_dir)
+    print(f"Total:     {total_bytes/1e9:.2f} GB across "
+          f"{sum(1 for _ in args.out_dir.rglob('*.parquet'))} parquet files")
+    print()
+
     print(f"[1/4] upload -> {dest}")
-    sh(["rclone", "copy", "--progress",
-        "--exclude", "_work/**",
-        f"{args.out_dir}/", dest],
-       dry_run=args.dry_run)
+    rclone_with_progress(
+        ["rclone", "copy", "--exclude", "_work/**", f"{args.out_dir}/", dest],
+        label="upload",
+        total_bytes=total_bytes,
+        dry_run=args.dry_run,
+    )
 
     latest = f"{args.remote}/latest/"
     print(f"\n[2/4] sync latest/ -> {latest}")
-    sh(["rclone", "sync", "--progress",
-        "--exclude", "_work/**",
-        f"{args.out_dir}/", latest],
-       dry_run=args.dry_run)
+    rclone_with_progress(
+        ["rclone", "sync", "--exclude", "_work/**", f"{args.out_dir}/", latest],
+        label="latest/",
+        total_bytes=total_bytes,
+        dry_run=args.dry_run,
+    )
 
     print(f"\n[3/4] attribution")
     ensure_attribution(args.remote, dry_run=args.dry_run)
