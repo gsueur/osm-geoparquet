@@ -232,6 +232,7 @@ def process_state(
     state_poly_path = state_work / f"{state.iso}.geojson"
     state_pbf       = state_work / f"{state.iso}.osm.pbf"
     state_out_dir   = out_dir / f"country={country}" / f"state={state.iso}"
+    state_out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n=== {state.iso} ({state.name}) ===")
 
