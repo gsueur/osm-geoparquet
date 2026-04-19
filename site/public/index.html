@@ -18,8 +18,6 @@
   --border: #e5e5e5;
   --code-bg: #f6f6f4;
   --code-fg: #1a1a1a;
-  --map-covered: #4fd1a3;
-  --map-covered-stroke: rgba(0,0,0,0.35);
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 }
@@ -33,8 +31,6 @@
     --border: #2e2e2e;
     --code-bg: #0f0f0f;
     --code-fg: #e8e8e8;
-    --map-covered: #4fd1a3;
-    --map-covered-stroke: rgba(255,255,255,0.25);
   }
 }
 * { box-sizing: border-box; }
@@ -90,17 +86,6 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
 }
 .callout p { margin: .25rem 0; }
 .callout strong { color: var(--accent); }
-
-.map-frame {
-  margin: 1rem 0 1.5rem;
-  padding: 1rem;
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.map-frame svg { width: 100%; height: auto; display: block; }
-.map-legend { display: flex; gap: 1.25rem; margin-top: .75rem; color: var(--muted); font-size: .88rem; align-items: center; flex-wrap: wrap; }
-.map-legend .swatch { display: inline-block; width: 1rem; height: 1rem; border-radius: 2px; vertical-align: middle; margin-right: .4rem; background: var(--map-covered); }
 
 .usecases { display: grid; gap: 1rem; margin: 1rem 0 1.5rem; }
 .usecase {
@@ -183,14 +168,13 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 </div>
 
 <h2>Coverage</h2>
-<p>Currently covers <strong>United States, Canada, and Mexico</strong> — 96 states, provinces, and territories. Each is available as 16 separate thematic files (one per data kind), published fresh each day.</p>
-
-<div class="map-frame">
-  <img src="/coverage.svg" alt="Coverage map of North America highlighting the 96 covered regions across US, Canada, and Mexico" loading="lazy">
-  <div class="map-legend"><span><span class="swatch"></span>Covered · refreshed daily</span></div>
-</div>
-
-<p>Europe, South America, and the rest of the world are on the roadmap. <a href="#custom">Need a specific region sooner?</a></p>
+<p>Currently spans three countries — <strong>98 admin regions × 16 themes = 1,568 files</strong> per daily snapshot, roughly 15 GB altogether:</p>
+<ul>
+<li><strong>United States</strong> — 50 states, the District of Columbia, Puerto Rico, and US Virgin Islands <em>(53 regions)</em></li>
+<li><strong>Canada</strong> — 10 provinces and 3 territories <em>(13 regions)</em></li>
+<li><strong>Mexico</strong> — 31 states and Ciudad de México <em>(32 regions)</em></li>
+</ul>
+<p>New snapshots publish every 24 hours; each one is dated and immutable, so analysis you run today is reproducible next year against the same bytes. Europe, South America, and the rest of the world are on the roadmap — <a href="#custom">need a specific region sooner?</a></p>
 
 <h2>What can I do with it?</h2>
 
