@@ -4,6 +4,23 @@ Pipeline that turns OpenStreetMap PBF extracts into cloud-native GeoParquet 2.0 
 
 Status: exploratory MVP.
 
+## Query the hosted data
+
+Snapshots are published at `https://parquetry.geomermaids.com/<YYYY-MM-DD>/country=<CC>/state=<ISO>/<theme>.parquet`. No download required — query straight from DuckDB:
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+INSTALL spatial; LOAD spatial;
+
+SELECT building, COUNT(*)
+FROM read_parquet('https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-RI/buildings.parquet')
+GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
+```
+
+Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/snapshots.json` for the list of available snapshots.
+
+Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See the `ATTRIBUTION.txt` file at the bucket root for redistribution terms.
+
 ## Requirements
 
 - Python ≥ 3.12
@@ -30,6 +47,16 @@ gpio check all out/country=US/state=US-RI/buildings.parquet
 ```
 
 See `scripts/pipeline.py --help` for all flags.
+
+## Publishing
+
+`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) as a dated immutable snapshot, and maintains a bucket-root `snapshots.json` index + `ATTRIBUTION.txt`. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>`).
+
+```bash
+python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/<today>/
+python3 scripts/publish.py --dry-run     # preview
+python3 scripts/publish.py --date 2026-04-18   # backfill a specific date
+```
 
 ## Data
 
