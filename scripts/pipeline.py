@@ -159,7 +159,10 @@ def write_theme_parquet(
         FROM read_json_auto(
             '{jsonseq}',
             format = 'newline_delimited',
-            maximum_object_size = 33554432,
+            -- 256 MB per object. OSM multipolygon relations for complex
+            -- landuse / natural areas can serialize to tens of MB of
+            -- GeoJSON each (Alaska had a ~36 MB amenities_polygons row).
+            maximum_object_size = 268435456,
             columns = {{'type': 'VARCHAR', 'id': 'VARCHAR',
                        'properties': 'JSON', 'geometry': 'JSON'}}
         )
