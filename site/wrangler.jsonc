@@ -1,0 +1,19 @@
+// Cloudflare Workers + Static Assets config.
+// Lives inside site/ so Cloudflare treats site/ as the project root and
+// doesn't trip its Python auto-detector on the repo's pyproject.toml /
+// .python-version at the actual repo root.
+//
+// Cloudflare dashboard settings:
+//   Root directory:   site/
+//   Build command:    (leave empty)
+//   Deploy command:   npx wrangler deploy
+//
+// Or locally, from site/:
+//   npx wrangler deploy
+{
+  "name": "geoparquet-geomermaids",
+  "compatibility_date": "2026-04-01",
+  "assets": {
+    "directory": "./public"
+  }
+}
