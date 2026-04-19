@@ -69,6 +69,44 @@ def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path) -> None:
     ])
 
 
+def osmium_extract_batch(
+    src_pbf: Path,
+    state_polys: dict[str, Path],
+    work_dir: Path,
+) -> None:
+    """Extract many per-state PBFs in one scan of the source PBF.
+
+    Orders of magnitude faster than calling osmium_extract per state when
+    the source is large — the source is only scanned once regardless of
+    how many extracts we produce.
+
+    Each state's output lands at work_dir/<ISO>/<ISO>.osm.pbf, matching
+    what process_state expects when it later reuses the clipped state PBF.
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    extracts = []
+    for iso, poly_path in state_polys.items():
+        (work_dir / iso).mkdir(parents=True, exist_ok=True)
+        extracts.append({
+            "output": f"{iso}/{iso}.osm.pbf",
+            "polygon": {
+                "file_name": str(poly_path.resolve()),
+                "file_type": "geojson",
+            },
+        })
+    config_path = work_dir / "_extract_config.json"
+    config_path.write_text(json.dumps({"extracts": extracts}))
+    run([
+        "osmium", "extract",
+        "-c", str(config_path),
+        "-d", str(work_dir),
+        "-s", "complete_ways",
+        "--overwrite",
+        str(src_pbf),
+    ])
+    config_path.unlink(missing_ok=True)
+
+
 def osmium_tags_filter(src_pbf: Path, expr: str, out_pbf: Path) -> None:
     tokens = expr.split()
     run(
@@ -343,6 +381,47 @@ def process_state(
 
 # ---------- execution strategies ----------
 
+def _bulk_extract(source_pbf: Path, states: list[State],
+                  work_dir: Path, verbose: bool) -> None:
+    """Single-scan osmium extract producing one state PBF per input state.
+
+    If every expected state PBF already exists (e.g. a previous crashed run
+    with --keep-intermediate), skip the scan.
+    """
+    expected = {s.iso: work_dir / s.iso / f"{s.iso}.osm.pbf" for s in states}
+
+    if all(p.exists() and p.stat().st_size > 0 for p in expected.values()):
+        print(f"Reusing {len(expected)} existing state PBFs in {work_dir}/")
+        return
+
+    # Write state polygons for osmium to clip against.
+    state_polys: dict[str, Path] = {}
+    for s in states:
+        state_work = work_dir / s.iso
+        state_work.mkdir(parents=True, exist_ok=True)
+        poly = state_work / f"{s.iso}.geojson"
+        write_state_polygon(s, poly)
+        state_polys[s.iso] = poly
+
+    msg = (f"Bulk-extracting {len(state_polys)} state PBFs from "
+           f"{source_pbf.name} ({source_pbf.stat().st_size/1e9:.1f} GB) — "
+           f"single scan")
+
+    t0 = time.time()
+    if verbose:
+        print(f"\n{msg}")
+        osmium_extract_batch(source_pbf, state_polys, work_dir)
+    else:
+        from rich.console import Console
+        from rich.live import Live
+        from rich.spinner import Spinner
+        console = Console()
+        spinner = Spinner("dots", text=msg, style="cyan")
+        with Live(spinner, console=console, refresh_per_second=10):
+            osmium_extract_batch(source_pbf, state_polys, work_dir)
+        console.print(f"[green]✓[/green] {msg} — done in {time.time()-t0:.1f}s")
+
+
 def _run_verbose(states: list[State], kwargs_common: dict, workers: int) -> None:
     """Plain stdout log, one summary line per state as in the earlier UI."""
     total = len(states)
@@ -510,6 +589,13 @@ def main() -> None:
     print()
 
     t0 = time.time()
+
+    # Stage 0: one scan of the source PBF produces per-state PBFs for every
+    # requested state. Orders of magnitude faster than re-scanning per state.
+    _bulk_extract(args.source_pbf, states, work_dir, verbose=args.verbose)
+
+    # Stage 1: per-state theme processing. process_state now just reuses
+    # the state_pbf that bulk extract already wrote.
     if args.verbose:
         _run_verbose(states, kwargs_common, args.workers)
     else:
