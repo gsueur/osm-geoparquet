@@ -367,6 +367,11 @@ Spatial order          Hilbert   (consecutive/random ratio 0.00089 —
                        "strongly spatially clustered")
 Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code></pre>
 
+<div class="callout">
+<p><strong>Wait, what's a bloom filter?</strong> A tiny probabilistic index (a few KB per column, per row group) that answers one question very fast: <em>"could this value be in this row group?"</em> If the filter says <em>no</em>, the query engine skips the whole group without opening it. If it says <em>maybe</em>, the engine reads the group and checks for real. No false negatives — a match is never missed.</p>
+<p>The win: a query like <code>WHERE name = 'Central Park'</code> across 4.5M New York buildings touches <strong>one row group out of 88</strong> instead of the whole 394 MB file. Same story for every typed column and for tag-key lookups.</p>
+</div>
+
 <p>Every file in every theme in every region carries the same guarantees:</p>
 
 <ul>
@@ -374,7 +379,7 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
 <li><strong>ZSTD compression</strong> on every column, including geometry.</li>
 <li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
-<li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map. Point lookups like <code>WHERE building = 'residential'</code> skip whole groups before any I/O.</li>
+<li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
 <li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>
 <li><strong>Dated, immutable snapshots</strong> plus a <code>latest/</code> alias. Pin a date for reproducibility; use <code>latest/</code> when you just want today's data.</li>
 <li><strong>29 of 29 <code>gpio check</code> validations pass</strong> on every file — zero warnings, zero cosmetic metadata drift.</li>
