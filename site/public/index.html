@@ -152,7 +152,13 @@ footer a { color: var(--muted); }
 <body>
 <main>
 
-<img class="hero-logo" src="/logo.png" alt="geomermaids logo" width="96" height="96" loading="eager">
+<picture>
+  <source type="image/webp"
+          srcset="/logo-96.webp 1x, /logo-192.webp 2x, /logo-384.webp 4x">
+  <img class="hero-logo" src="/logo-96.png"
+       srcset="/logo-96.png 1x, /logo-192.png 2x, /logo-384.png 4x"
+       alt="geomermaids logo" width="96" height="96" loading="eager">
+</picture>
 <h1><span class="brand">geomermaids</span> · GeoParquet</h1>
 <p class="sub">
 Free daily snapshots of OpenStreetMap data for North America, packaged so you can <strong>query them straight from a URL</strong> — no downloads, no account, no setup beyond DuckDB.
