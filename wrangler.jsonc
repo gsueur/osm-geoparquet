@@ -1,0 +1,16 @@
+// Cloudflare Workers + Static Assets config.
+// Serves site/ as static files, no Worker script.
+//
+// Deploy via the dashboard (connect this repo) with:
+//   Build command:    (leave empty)
+//   Deploy command:   npx wrangler deploy
+//
+// Or locally:
+//   npx wrangler deploy
+{
+  "name": "geoparquet-geomermaids",
+  "compatibility_date": "2026-04-01",
+  "assets": {
+    "directory": "./site"
+  }
+}
