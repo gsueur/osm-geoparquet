@@ -187,14 +187,9 @@ def write_theme_parquet(
     out_parquet.parent.mkdir(parents=True, exist_ok=True)
     tmp_v11 = out_parquet.with_suffix(".v11.parquet")
 
-    # Stage 1: DuckDB writes valid GeoParquet 1.1 (WKB + bbox struct + sidecar metadata)
+    # Stage 1: DuckDB writes GeoParquet 1.1 unsorted (gpio Hilbert-sorts in Stage 2)
     con.execute(f"""
         COPY (
-            WITH extent AS (
-                SELECT ST_Extent(ST_Extent_Agg(geometry)) AS box
-                FROM src
-                WHERE {where}
-            )
             SELECT
                 osm_id,
                 osm_type,
@@ -211,13 +206,12 @@ def write_theme_parquet(
                     ymax := ST_YMax(geometry)
                 ) AS bbox,
                 geometry
-            FROM src, extent
+            FROM src
             WHERE {where}
-            ORDER BY ST_Hilbert(geometry, extent.box)
         ) TO '{tmp_v11}' (
             FORMAT PARQUET,
             COMPRESSION ZSTD,
-            ROW_GROUP_SIZE 100000
+            ROW_GROUP_SIZE 50000
         )
     """, [country, state_name, state_iso, region])
 
