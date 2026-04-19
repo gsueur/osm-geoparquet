@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data files (download separately)
+/data/*.pbf
+/data/*.geojson
+/data/*.json
+
+# Pipeline output
+/out/
+
+# Local-only notes
+/CLAUDE.md
