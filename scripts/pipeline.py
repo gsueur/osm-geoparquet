@@ -145,16 +145,10 @@ def write_theme_parquet(
     con.execute(f"""
         CREATE VIEW src AS
         SELECT
-            TRY_CAST(id AS BIGINT)       AS osm_id,
-            CAST(type AS VARCHAR)        AS osm_type,
-            MAP(
-                json_keys(properties),
-                list_transform(
-                    json_keys(properties),
-                    k -> json_extract_string(properties, '$.' || k)
-                )
-            )                            AS tags,
-            ST_GeomFromGeoJSON(geometry) AS geometry
+            TRY_CAST(id AS BIGINT)                      AS osm_id,
+            CAST(type AS VARCHAR)                       AS osm_type,
+            CAST(properties AS MAP(VARCHAR, VARCHAR))   AS tags,
+            ST_GeomFromGeoJSON(geometry)                AS geometry
         FROM read_json_auto(
             '{jsonseq}',
             format = 'newline_delimited',
