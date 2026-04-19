@@ -109,6 +109,34 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
 .usecase h4 { margin: 0 0 .3rem; font-size: .98rem; }
 .usecase p { margin: .25rem 0; font-size: .92rem; }
 
+.browse {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.1rem 1.2rem;
+  margin: 1rem 0 1.5rem;
+  background: var(--code-bg);
+}
+.browse-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .9rem; margin-bottom: 1rem; }
+.browse label { display: block; font-size: .82rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: .3rem; }
+.browse select {
+  width: 100%; padding: .5rem .6rem; font-family: var(--sans); font-size: .95rem;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
+}
+.browse select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.browse-output { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: .75rem .9rem; }
+.browse-url { font-family: var(--mono); font-size: .85rem; word-break: break-all; color: var(--fg); display: block; margin-bottom: .7rem; }
+.browse-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.browse-actions button, .browse-actions a {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .45rem .85rem; font-size: .88rem;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; text-decoration: none; font-family: var(--sans);
+}
+.browse-actions button:hover, .browse-actions a:hover { border-color: var(--accent); color: var(--accent); }
+.browse-actions .primary { background: var(--accent); color: white; border-color: var(--accent); }
+.browse-actions .primary:hover { filter: brightness(1.1); color: white; }
+.browse-copied { color: var(--accent); font-size: .82rem; align-self: center; }
+
 .cta {
   background: var(--accent-soft); border: 1px solid var(--accent);
   border-radius: 8px; padding: 1.25rem 1.5rem; margin: 2rem 0 1rem;
@@ -280,7 +308,49 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
 
 <h2>URL pattern</h2>
 <pre><code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
-<p>Dated snapshots are immutable — safe to pin a specific date in reproducible pipelines. The <code>latest/</code> alias always points at the most recent. See <a href="https://parquetry.geomermaids.com/snapshots.json">snapshots.json</a> for what's currently available.</p>
+<p>A few concrete examples:</p>
+<pre><code># Every building in New York State (latest snapshot)
+https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet
+
+# Ontario's entire road network
+https://parquetry.geomermaids.com/latest/country=CA/state=CA-ON/roads.parquet
+
+# Points of interest in Jalisco, Mexico
+https://parquetry.geomermaids.com/latest/country=MX/state=MX-JAL/pois.parquet
+
+# Pinned to a specific date — immutable, reproducible
+https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.parquet
+
+# Machine-readable index of every snapshot ever published
+https://parquetry.geomermaids.com/snapshots.json</code></pre>
+<p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
+
+<h2>Build a URL</h2>
+<p>Pick a region and theme; we'll assemble the URL for you.</p>
+<div class="browse">
+  <div class="browse-inputs">
+    <div>
+      <label for="br-country">Country</label>
+      <select id="br-country"></select>
+    </div>
+    <div>
+      <label for="br-state">State / Province</label>
+      <select id="br-state"></select>
+    </div>
+    <div>
+      <label for="br-theme">Theme</label>
+      <select id="br-theme"></select>
+    </div>
+  </div>
+  <div class="browse-output">
+    <code class="browse-url" id="br-url">—</code>
+    <div class="browse-actions">
+      <button id="br-copy" type="button" title="Copy URL to clipboard">Copy URL</button>
+      <a id="br-open" href="#" target="_blank" rel="noopener" class="primary">Open in new tab ↗</a>
+      <span class="browse-copied" id="br-copied" hidden>✓ copied</span>
+    </div>
+  </div>
+</div>
 
 <h2>Technical details (for the curious)</h2>
 <ul>
@@ -315,8 +385,7 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
 </main>
 
 <script>
-// Fetch the latest snapshot stats. Requires CORS on parquetry.geomermaids.com.
-// Fails silently (fallback dashes stay) if blocked.
+// --- Live snapshot stats (CORS-dependent; silent fallback) ---
 (async () => {
   try {
     const r = await fetch('https://parquetry.geomermaids.com/snapshots.json', { cache: 'no-store' });
@@ -330,6 +399,54 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
     document.getElementById('stat-date').textContent = latest.date;
   } catch (_) {}
 })();
+
+// --- URL builder widget ---
+const REGIONS = {
+  US: [["US-AL","Alabama"],["US-AK","Alaska"],["US-AZ","Arizona"],["US-AR","Arkansas"],["US-CA","California"],["US-CO","Colorado"],["US-CT","Connecticut"],["US-DE","Delaware"],["US-DC","District of Columbia"],["US-FL","Florida"],["US-GA","Georgia"],["US-HI","Hawaii"],["US-ID","Idaho"],["US-IL","Illinois"],["US-IN","Indiana"],["US-IA","Iowa"],["US-KS","Kansas"],["US-KY","Kentucky"],["US-LA","Louisiana"],["US-ME","Maine"],["US-MD","Maryland"],["US-MA","Massachusetts"],["US-MI","Michigan"],["US-MN","Minnesota"],["US-MS","Mississippi"],["US-MO","Missouri"],["US-MT","Montana"],["US-NE","Nebraska"],["US-NV","Nevada"],["US-NH","New Hampshire"],["US-NJ","New Jersey"],["US-NM","New Mexico"],["US-NY","New York"],["US-NC","North Carolina"],["US-ND","North Dakota"],["US-OH","Ohio"],["US-OK","Oklahoma"],["US-OR","Oregon"],["US-PA","Pennsylvania"],["US-PR","Puerto Rico"],["US-RI","Rhode Island"],["US-SC","South Carolina"],["US-SD","South Dakota"],["US-TN","Tennessee"],["US-TX","Texas"],["US-UT","Utah"],["US-VT","Vermont"],["US-VA","Virginia"],["US-VI","US Virgin Islands"],["US-WA","Washington"],["US-WV","West Virginia"],["US-WI","Wisconsin"],["US-WY","Wyoming"]],
+  CA: [["CA-AB","Alberta"],["CA-BC","British Columbia"],["CA-MB","Manitoba"],["CA-NB","New Brunswick"],["CA-NL","Newfoundland and Labrador"],["CA-NT","Northwest Territories"],["CA-NS","Nova Scotia"],["CA-NU","Nunavut"],["CA-ON","Ontario"],["CA-PE","Prince Edward Island"],["CA-QC","Québec"],["CA-SK","Saskatchewan"],["CA-YT","Yukon"]],
+  MX: [["MX-AGU","Aguascalientes"],["MX-BCN","Baja California"],["MX-BCS","Baja California Sur"],["MX-CAM","Campeche"],["MX-CHP","Chiapas"],["MX-CHH","Chihuahua"],["MX-CMX","Ciudad de México"],["MX-COA","Coahuila"],["MX-COL","Colima"],["MX-DUR","Durango"],["MX-MEX","Estado de México"],["MX-GUA","Guanajuato"],["MX-GRO","Guerrero"],["MX-HID","Hidalgo"],["MX-JAL","Jalisco"],["MX-MIC","Michoacán"],["MX-MOR","Morelos"],["MX-NAY","Nayarit"],["MX-NLE","Nuevo León"],["MX-OAX","Oaxaca"],["MX-PUE","Puebla"],["MX-QUE","Querétaro"],["MX-ROO","Quintana Roo"],["MX-SLP","San Luis Potosí"],["MX-SIN","Sinaloa"],["MX-SON","Sonora"],["MX-TAB","Tabasco"],["MX-TAM","Tamaulipas"],["MX-TLA","Tlaxcala"],["MX-VER","Veracruz"],["MX-YUC","Yucatán"],["MX-ZAC","Zacatecas"]]
+};
+const COUNTRIES = [["US","United States"],["CA","Canada"],["MX","Mexico"]];
+const THEMES = [
+  "buildings","roads","railways","waterways","water","landuse","natural_areas",
+  "natural_features","places","boundaries","pois","amenities_polygons","power",
+  "aeroways","barriers","public_transport"
+];
+const BASE = "https://parquetry.geomermaids.com/latest";
+
+const $c = document.getElementById("br-country");
+const $s = document.getElementById("br-state");
+const $t = document.getElementById("br-theme");
+const $u = document.getElementById("br-url");
+const $o = document.getElementById("br-open");
+const $cp = document.getElementById("br-copy");
+const $ok = document.getElementById("br-copied");
+
+function opt(v, label) { const o = document.createElement("option"); o.value = v; o.textContent = label; return o; }
+
+COUNTRIES.forEach(([v, l]) => $c.appendChild(opt(v, l)));
+THEMES.forEach(t => $t.appendChild(opt(t, t)));
+
+function refillStates() {
+  $s.innerHTML = "";
+  (REGIONS[$c.value] || []).forEach(([iso, name]) => $s.appendChild(opt(iso, name)));
+}
+function rebuild() {
+  const url = `${BASE}/country=${$c.value}/state=${$s.value}/${$t.value}.parquet`;
+  $u.textContent = url;
+  $o.href = url;
+}
+$c.addEventListener("change", () => { refillStates(); rebuild(); });
+$s.addEventListener("change", rebuild);
+$t.addEventListener("change", rebuild);
+
+$cp.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($u.textContent); $ok.hidden = false; setTimeout(() => $ok.hidden = true, 1600); }
+  catch (_) {}
+});
+
+// defaults: US · New York · buildings
+$c.value = "US"; refillStates(); $s.value = "US-NY"; $t.value = "buildings"; rebuild();
 </script>
 
 </body>
