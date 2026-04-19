@@ -81,6 +81,7 @@ def osmium_export(src_pbf: Path, geometry_types: str, out_jsonseq: Path) -> None
         str(src_pbf),
         "--geometry-types", geometry_types,
         "--output-format", "geojsonseq",
+        "-x", "print_record_separator=false",
         "-o", str(out_jsonseq),
         "--overwrite",
     ])
@@ -107,18 +108,21 @@ def load_states(geojson_path: Path) -> list[State]:
         sys.exit(f"{geojson_path} is not a FeatureCollection")
 
     states: list[State] = []
+    skipped = 0
     for feat in data["features"]:
         props = feat.get("properties") or {}
         iso = props.get("ISO3166-2")
         name = props.get("name")
         if not iso or not name:
-            print(f"  WARNING: skipping feature missing ISO3166-2 or name: "
-                  f"{props.get('name') or props.get('id')}")
+            skipped += 1
             continue
         states.append(State(iso=iso, name=name, feature=feat))
 
     if not states:
         sys.exit(f"No usable features in {geojson_path}")
+    if skipped:
+        print(f"Loaded {len(states)} states "
+              f"(skipped {skipped} non-state features from {geojson_path.name})")
     return states
 
 
