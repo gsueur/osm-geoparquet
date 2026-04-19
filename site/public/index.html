@@ -159,9 +159,9 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 
 <h2>What is this?</h2>
 
-<p><strong>OpenStreetMap (OSM)</strong> is the world's free, collaborative map — think of it as Wikipedia for geography. It has every road, building, park, restaurant, subway stop, and hiking trail that anyone has bothered to map. All of it free to use.</p>
+<p><strong>OpenStreetMap (OSM)</strong> is the world's free, collaborative map — think of it as Wikipedia for cartography and geopatial data. It has every road, building, park, restaurant, subway stop, and hiking trail that anyone has bothered to map. All of it free to use.</p>
 
-<p>The hard part has always been <strong>getting OSM into a form you can analyze</strong>. The raw data is a single giant file (~200 GB for the whole planet), in a specialised format, not designed for the kind of queries you'd run in SQL or pandas.</p>
+<p>The hard part has always been <strong>getting OSM into a form you can analyze</strong>. The raw data is a single giant file (more than 2TB uncompressed for the whole planet according to <a href='https://wiki.openstreetmap.org/wiki/Planet.osm'>the OSM Wiki</a>), in a specialised format, not designed for the kind of queries you'd run in SQL or pandas.</p>
 
 <p>This site publishes that same OSM data in <strong>GeoParquet 2.0</strong> — a modern, open, columnar file format — split by country, by state/province/region, and by <em>theme</em> (buildings, roads, water, etc.). Every file is small enough to use on a laptop, and the format is <strong>cloud-native</strong>: your query engine can read just the columns and rows it needs over HTTP, without downloading the whole file.</p>
 
@@ -177,35 +177,6 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 <li><strong>Mexico</strong> — 31 states and Ciudad de México <em>(32 regions)</em></li>
 </ul>
 <p>New snapshots publish every 24 hours; each one is dated and immutable, so analysis you run today is reproducible next year against the same bytes. Europe, South America, and the rest of the world are on the roadmap — <a href="#custom">need a specific region sooner?</a></p>
-
-<h2>What can I do with it?</h2>
-
-<div class="usecases">
-  <div class="usecase">
-    <h4>Urban planning &amp; housing</h4>
-    <p>Every building footprint in a city, with typed columns for <code>building</code> type, number of <code>levels</code>, and <code>height</code>. Compute total floor area, detect neighborhoods with unusual density, or map new construction over time.</p>
-  </div>
-  <div class="usecase">
-    <h4>Retail &amp; site selection</h4>
-    <p>Every shop, restaurant, amenity, and point of interest, already split into <code>pois</code> (points) and <code>amenities_polygons</code>. Find the 5 closest competitors to a proposed site, or count cafes per ZIP code.</p>
-  </div>
-  <div class="usecase">
-    <h4>Transportation &amp; logistics</h4>
-    <p>Full road network (<code>roads</code>), rail (<code>railways</code>), public transit stops, and airports (<code>aeroways</code>). Build route networks, estimate corridor coverage, or map intersections per square kilometre.</p>
-  </div>
-  <div class="usecase">
-    <h4>Environment &amp; natural resources</h4>
-    <p>Rivers and canals (<code>waterways</code>), lakes and oceans (<code>water</code>), forests and protected areas (<code>natural_areas</code>), and land use zoning (<code>landuse</code>). Compute watershed areas, estimate forest cover, or overlay with any of the above.</p>
-  </div>
-  <div class="usecase">
-    <h4>Public infrastructure</h4>
-    <p>Power grid (<code>power</code>) including lines and substations, administrative boundaries (<code>boundaries</code>), and fencing / walls (<code>barriers</code>). Useful for utilities, compliance, and mapping government boundaries.</p>
-  </div>
-  <div class="usecase">
-    <h4>Research &amp; journalism</h4>
-    <p>Reproducible datasets for stories and studies — snapshots are dated and immutable, so your analysis can be rerun next year with today's data. The full pipeline is <a href="https://github.com/gsueur/osm-geoparquet">open-source</a> if you want to verify what's in each file.</p>
-  </div>
-</div>
 
 <h2>Try it now</h2>
 <p>Everything below runs against the live URL. <a href="https://duckdb.org/docs/installation/">Install DuckDB</a> (single binary, no daemon, free) and paste a snippet. Only the bytes your query actually needs get fetched from Cloudflare's edge.</p>
@@ -385,6 +356,60 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <li><strong>29 of 29 <code>gpio check</code> validations pass</strong> on every file — zero warnings, zero cosmetic metadata drift.</li>
 <li><strong>Open-source pipeline.</strong> Built with <a href="https://osmcode.org/osmium-tool/">osmium-tool</a> + <a href="https://duckdb.org/">DuckDB</a>. Full source at <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a> (MIT) — every file here is reproducible from source.</li>
 </ul>
+
+<h2>Where this fits in the OSM data ecosystem</h2>
+
+<p>A healthy ecosystem of projects already publishes OSM-derived data in various forms — each with a slightly different focus. We stand on that work rather than replace it; our pitch is to fill a specific gap: <em>daily, cloud-native, OSM-native GeoParquet 2.0 that you query straight off a URL</em>.</p>
+
+<table>
+<thead><tr><th>Project</th><th>Format</th><th>Cadence</th><th>What it offers</th></tr></thead>
+<tbody>
+<tr>
+  <td><a href="https://download.geofabrik.de/">Geofabrik</a></td>
+  <td>PBF, Shapefile, GeoPackage, GeoJSON</td>
+  <td>Daily</td>
+  <td><strong>Our upstream.</strong> Pre-clipped regional OSM in every standard GIS format — the canonical place to get regional extracts. Every snapshot we publish starts from the regional PBF Geofabrik produces.</td>
+</tr>
+<tr>
+  <td><a href="https://openstreetmap.us/our-work/layercake/">Layercake</a></td>
+  <td>GeoParquet + FlatGeobuf</td>
+  <td>Weekly</td>
+  <td>Thematic OSM extracts from OpenStreetMap US. Currently buildings, highways, and settlements, with a growing theme catalog.</td>
+</tr>
+<tr>
+  <td><a href="https://overturemaps.org/">Overture Maps</a></td>
+  <td>GeoParquet</td>
+  <td>Monthly</td>
+  <td>Global. Merges OSM with Meta, Microsoft, and TomTom data under a single unified schema — a one-stop integrated worldview across multiple sources.</td>
+</tr>
+<tr>
+  <td><a href="https://daylightmap.org/">Daylight Map</a></td>
+  <td>PBF + GeoJSON</td>
+  <td>Monthly</td>
+  <td>Meta's "cleaned" OSM distribution — OSM only, with quality-validation filters applied on top.</td>
+</tr>
+<tr>
+  <td><a href="https://console.cloud.google.com/marketplace/product/bigquery-public-data/geo-openstreetmap">BigQuery public OSM</a></td>
+  <td>BigQuery tables</td>
+  <td>Weekly</td>
+  <td>Full OSM served as BigQuery tables for anyone already living in Google Cloud.</td>
+</tr>
+<tr>
+  <td><a href="https://planet.openstreetmap.org/">planet.osm.org</a></td>
+  <td>PBF / XML</td>
+  <td>Minute diffs</td>
+  <td>The raw source. Everything, no pre-processing — you bring the extraction and format conversion.</td>
+</tr>
+<tr>
+  <td><strong>Geomermaids parquetry</strong></td>
+  <td><strong>GeoParquet 2.0</strong></td>
+  <td><strong>Daily</strong></td>
+  <td><strong>Raw OSM schema, country + admin-region partitioned, 16 themes, typed columns promoted from tags, directly queryable over HTTPS — built on Geofabrik's daily regional PBFs.</strong></td>
+</tr>
+</tbody>
+</table>
+
+<p>These are complementary, not substitutes. Geofabrik does the hard, essential work of maintaining and publishing clean regional OSM in every standard GIS format — PBF for native OSM tooling, Shapefile and GeoPackage for classic desktop GIS, GeoJSON for the web. We pick up where they leave off: turning the daily PBF into cloud-native GeoParquet 2.0 with a consistent schema, typed columns, and Hilbert-sorted row groups so you can run SQL over HTTPS without a download step. Layercake does something similar with a slightly different focus (themes across contributors); Overture goes further by merging non-OSM corporate data; Daylight applies validation cleanup. Pick whichever combination fits the job.</p>
 
 <div class="cta" id="custom">
 <h2>Custom regions, schemas, or SLA-backed hosting</h2>
