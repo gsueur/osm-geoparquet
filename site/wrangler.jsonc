@@ -11,7 +11,7 @@
 // Or locally, from site/:
 //   npx wrangler deploy
 {
-  "name": "geoparquet-geomermaids",
+  "name": "osm-geoparquet",
   "compatibility_date": "2026-04-01",
   "assets": {
     "directory": "./public"
