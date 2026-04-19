@@ -42,12 +42,18 @@ from themes import THEMES, POST_FILTERS, Theme
 
 SCHEMA_VERSION = "0.1.0"
 
+# Set by main(); workers inherit it through fork. True = echo every subprocess
+# command + per-theme status; False = quiet, main prints one progress line
+# per completed state.
+VERBOSE = False
+
 
 # ---------- shell helpers ----------
 
 def run(cmd: list[str]) -> None:
-    print(f"    $ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    if VERBOSE:
+        print(f"    $ {' '.join(cmd)}")
+    subprocess.run(cmd, check=True, capture_output=not VERBOSE)
 
 def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path) -> None:
     run([
@@ -138,7 +144,8 @@ def write_theme_parquet(
     state_iso: str,
 ) -> int:
     if not jsonseq.exists() or jsonseq.stat().st_size == 0:
-        print(f"    [{theme.name}] empty jsonseq, skipping")
+        if VERBOSE:
+            print(f"    [{theme.name}] empty jsonseq, skipping")
         return 0
 
     con.execute("DROP VIEW IF EXISTS src")
@@ -163,7 +170,8 @@ def write_theme_parquet(
 
     count = con.execute(f"SELECT COUNT(*) FROM src WHERE {where}").fetchone()[0]
     if count == 0:
-        print(f"    [{theme.name}] 0 features after filter, skipping")
+        if VERBOSE:
+            print(f"    [{theme.name}] 0 features after filter, skipping")
         return 0
 
     typed_sql = ",\n            ".join(
@@ -201,8 +209,9 @@ def write_theme_parquet(
         )
     """, [country, state_name, state_iso])
 
-    size_mb = out_parquet.stat().st_size / (1024 * 1024)
-    print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0)")
+    if VERBOSE:
+        size_mb = out_parquet.stat().st_size / (1024 * 1024)
+        print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0)")
     return count
 
 # ---------- per-state orchestration ----------
@@ -214,7 +223,13 @@ def process_state(
     out_dir: Path,
     themes: list[Theme],
     keep_intermediate: bool,
+    verbose: bool = False,
 ) -> dict:
+    global VERBOSE
+    VERBOSE = verbose  # make subprocess echoing consistent in this worker
+
+    t_state = time.time()
+
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
 
@@ -228,17 +243,20 @@ def process_state(
     state_out_dir   = out_dir / f"country={country}" / f"state={state.iso}"
     state_out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n=== {state.iso} ({state.name}) ===")
+    if verbose:
+        print(f"\n=== {state.iso} ({state.name}) ===")
 
     write_state_polygon(state, state_poly_path)
 
     if not state_pbf.exists():
-        print(f"  [clip] {source_pbf.name} -> {state_pbf.name}")
+        if verbose:
+            print(f"  [clip] {source_pbf.name} -> {state_pbf.name}")
         t0 = time.time()
         osmium_extract(source_pbf, state_poly_path, state_pbf)
-        print(f"  [clip] done in {time.time()-t0:.1f}s "
-              f"({state_pbf.stat().st_size/(1024*1024):.1f} MB)")
-    else:
+        if verbose:
+            print(f"  [clip] done in {time.time()-t0:.1f}s "
+                  f"({state_pbf.stat().st_size/(1024*1024):.1f} MB)")
+    elif verbose:
         print(f"  [clip] reusing {state_pbf.name}")
 
     counts: dict[str, int] = {}
@@ -257,14 +275,19 @@ def process_state(
                 state_iso=state.iso,
             )
             counts[theme.name] = n
-            print(f"    [{theme.name}] {time.time()-t0:.1f}s total")
+            if verbose:
+                print(f"    [{theme.name}] {time.time()-t0:.1f}s total")
         except subprocess.CalledProcessError as e:
-            print(f"    [{theme.name}] FAILED: {e}")
+            # Failures are always loud, even in quiet mode.
+            print(f"    [{state.iso}/{theme.name}] FAILED: {e}")
             counts[theme.name] = -1
 
         if not keep_intermediate:
             theme_pbf.unlink(missing_ok=True)
             theme_jsonseq.unlink(missing_ok=True)
+
+    duration = round(time.time() - t_state, 1)
+    total_features = sum(c for c in counts.values() if c > 0)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -272,6 +295,8 @@ def process_state(
         "state_iso": state.iso,
         "state_name": state.name,
         "source_pbf": source_pbf.name,
+        "duration_s": duration,
+        "total_features": total_features,
         "themes": counts,
     }
     (state_out_dir / "_manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -305,7 +330,13 @@ def main() -> None:
                    help="Process states in parallel with N workers. "
                         "Mind CPU/disk I/O: osmium extract is already multithreaded. "
                         "Sweet spot is usually 2-3 on a laptop, 4-6 on a fat box.")
+    p.add_argument("--verbose", "-v", action="store_true",
+                   help="Echo every subprocess command and per-theme status. "
+                        "Default is quiet — one line per completed state.")
     args = p.parse_args()
+
+    global VERBOSE
+    VERBOSE = args.verbose
 
     all_states = load_states(args.states_geojson)
     if args.states:
@@ -340,18 +371,27 @@ def main() -> None:
         out_dir=args.out_dir,
         themes=themes,
         keep_intermediate=args.keep_intermediate,
+        verbose=args.verbose,
     )
+
+    total = len(states)
+    if args.workers > 1:
+        print(f"Workers:    {args.workers}")
+    print()
+
+    def report(i: int, m: dict) -> None:
+        print(f"[{i:3d}/{total}]  {m['state_iso']:7s} {m['state_name']:30.30s}  "
+              f"{m['total_features']:>11,} features  {m['duration_s']:>6.1f}s")
 
     t0 = time.time()
     if args.workers > 1:
-        print(f"Workers:    {args.workers}")
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futures = {ex.submit(process_state, state=s, **kwargs_common): s for s in states}
-            for f in as_completed(futures):
-                f.result()  # re-raise on worker failure
+            for i, f in enumerate(as_completed(futures), 1):
+                report(i, f.result())  # re-raise on worker failure
     else:
-        for state in states:
-            process_state(state=state, **kwargs_common)
+        for i, state in enumerate(states, 1):
+            report(i, process_state(state=state, **kwargs_common))
     print(f"\nDone in {time.time()-t0:.1f}s")
 
     if not args.keep_intermediate:
