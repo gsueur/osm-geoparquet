@@ -41,6 +41,8 @@ main { max-width: 780px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
 h1 { font-size: 2rem; margin: 0 0 .2rem; letter-spacing: -0.02em; }
 h1 .brand { color: var(--accent); }
 h2 { font-size: 1.25rem; margin: 2.5rem 0 .75rem; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 1.8rem 0 .4rem; letter-spacing: -0.005em; color: var(--muted); font-weight: 600; }
+h3 code { background: none; padding: 0; font-size: inherit; color: var(--fg); }
 p { margin: .8rem 0; }
 a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 a:hover { text-decoration-thickness: 2px; }
@@ -91,22 +93,76 @@ footer a { color: var(--muted); }
 </div>
 
 <h2>Try it now</h2>
-<p>DuckDB reads the hosted files directly via HTTP range requests. Only the columns and row groups your query touches get fetched.</p>
+<p>DuckDB reads the hosted files directly via HTTP range requests. No download — only the columns and row groups your query touches get fetched from Cloudflare's edge.</p>
 
+<h3>1 · Setup</h3>
+<p>Install extensions once per session. The <code>url()</code> macro keeps the snippets below readable.</p>
 <pre><code>INSTALL httpfs; LOAD httpfs;
 INSTALL spatial; LOAD spatial;
 
--- Count Rhode Island buildings
-SELECT COUNT(*)
-FROM read_parquet('https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet');
+CREATE OR REPLACE MACRO url(state, theme) AS
+  'https://parquetry.geomermaids.com/latest/country=' ||
+  split_part(state, '-', 1) || '/state=' || state || '/' || theme || '.parquet';</code></pre>
 
--- Buildings in a bounding box around downtown Providence
-SELECT COUNT(*)
-FROM read_parquet('https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet')
-WHERE ST_Intersects(geometry, ST_MakeEnvelope(-71.45, 41.80, -71.40, 41.85));</code></pre>
+<h3>2 · Count features in a bounding box</h3>
+<p>Downtown Manhattan, roughly Times Square to Central Park — no full file download, just the bbox-pruned row groups:</p>
+<pre><code>SELECT COUNT(*) AS buildings
+FROM read_parquet(url('US-NY', 'buildings'))
+WHERE ST_Intersects(geometry, ST_MakeEnvelope(-74.00, 40.74, -73.96, 40.77));</code></pre>
+
+<h3>3 · Filter + projection pushdown</h3>
+<p>Tall residential towers in Midtown, pulling only four columns:</p>
+<pre><code>SELECT name, building, levels, height
+FROM read_parquet(url('US-NY', 'buildings'))
+WHERE building = 'residential'
+  AND levels &gt; 30
+  AND ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.76, -73.95, 40.79))
+ORDER BY levels DESC
+LIMIT 10;</code></pre>
+
+<h3>4 · Cross-theme spatial join with <code>ST_Contains</code></h3>
+<p>Match each restaurant to the building it sits inside (Massachusetts):</p>
+<pre><code>SELECT b.name AS building, p.name AS restaurant, p.cuisine
+FROM read_parquet(url('US-MA', 'buildings')) b
+JOIN read_parquet(url('US-MA', 'pois')) p
+  ON ST_Contains(b.geometry, p.geometry)
+WHERE p.amenity = 'restaurant'
+  AND b.name IS NOT NULL
+LIMIT 10;</code></pre>
+
+<h3>5 · Nearest features with <code>ST_DWithin</code></h3>
+<p>Amenities within ~500m of a point, sorted by distance. Because rows are Hilbert-ordered, the row-group bbox filter trims almost everything before distance math runs:</p>
+<pre><code>WITH origin AS (SELECT ST_Point(-73.9857, 40.7484) AS pt)  -- Times Square
+SELECT p.amenity, p.name, ST_Distance(p.geometry, o.pt) AS dist
+FROM read_parquet(url('US-NY', 'pois')) p, origin o
+WHERE ST_DWithin(p.geometry, o.pt, 0.005)  -- ~500m in degrees
+ORDER BY dist
+LIMIT 15;</code></pre>
+
+<h3>6 · Aggregate across multiple states</h3>
+<p>Count POIs for a set of states in one query by passing a list of URLs:</p>
+<pre><code>SELECT state_iso, COUNT(*) AS pois
+FROM read_parquet([
+  url('US-NY', 'pois'),
+  url('US-MA', 'pois'),
+  url('US-CT', 'pois'),
+  url('US-RI', 'pois')
+])
+GROUP BY state_iso
+ORDER BY pois DESC;</code></pre>
+
+<h3>7 · Python / GeoPandas</h3>
+<p>Same data, same URL, idiomatic from Python:</p>
+<pre><code>import geopandas as gpd
+
+gdf = gpd.read_parquet(
+    "https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet"
+)
+print(f"{len(gdf):,} Rhode Island buildings")
+print(gdf[["building", "name", "height"]].head())</code></pre>
 
 <p>URL pattern:<br>
-<code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD&gt;/country=&lt;CC&gt;/state=&lt;ISO3166-2&gt;/&lt;theme&gt;.parquet</code></p>
+<code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO3166-2&gt;/&lt;theme&gt;.parquet</code></p>
 
 <p>Available snapshots: <a href="https://parquetry.geomermaids.com/snapshots.json">snapshots.json</a></p>
 
