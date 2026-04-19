@@ -6,7 +6,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
 authors = [
-    { name = "Guillaume Sueur" },
+    { name = "Guillaume Sueur", email = "hello@geomermaids.com" },
 ]
 dependencies = [
     "duckdb>=1.1.0",
