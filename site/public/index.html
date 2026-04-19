@@ -350,7 +350,7 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
 
 <h2>Inside each file</h2>
 
-<p>Every parquet is validator-clean GeoParquet 2.0 — spatial-query-optimized, metadata-complete, bloom-filtered. Pop the hood on <code>country=US/state=US-NY/buildings.parquet</code> for example, and <code>gpio inspect</code> / <code>gpio check</code> reports:</p>
+<p>Every parquet is validator-clean GeoParquet 2.0 — spatial-query-optimized, metadata-complete, bloom-filtered. Pop the hood on <code>country=US/state=US-NY/buildings.parquet</code> for example, and <a href="https://geoparquet.io/"><code>gpio</code></a>'s <code>inspect</code> / <code>check</code> commands report:</p>
 
 <pre><code>📄 country=US/state=US-NY/buildings.parquet          394 MB
 
@@ -375,7 +375,7 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <p>Every file in every theme in every region carries the same guarantees:</p>
 
 <ul>
-<li><strong>Native Parquet <code>GEOMETRY</code> logical type.</strong> Row-group statistics are per-geometry bboxes — engines prune without deserializing anything. No WKB-in-binary with sidecar metadata.</li>
+<li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Row-group statistics are proper per-geometry bboxes, so engines prune without deserializing anything.</li>
 <li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
 <li><strong>ZSTD compression</strong> on every column, including geometry.</li>
 <li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
