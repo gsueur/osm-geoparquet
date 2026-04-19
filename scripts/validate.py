@@ -38,6 +38,16 @@ from themes import THEMES  # noqa: E402
 BASE_COLUMNS = {"osm_id", "osm_type", "country", "state", "state_iso", "tags", "geometry"}
 EXPECTED_THEMES = [t.name for t in THEMES]
 
+# Cloudflare's default bot mitigation rejects urllib's generic UA with 403.
+# Use a browser-ish one so the validator sees what a real browser would.
+USER_AGENT = "geomermaids-validate/1.0 (+https://geoparquet.geomermaids.com/)"
+
+
+def _http_request(url: str, method: str = "GET") -> urllib.request.Request:
+    req = urllib.request.Request(url, method=method)
+    req.add_header("User-Agent", USER_AGENT)
+    return req
+
 
 # ---------- tiny test harness ----------
 
@@ -169,9 +179,8 @@ def check_local(out_dir: Path, geojson: Path) -> Suite:
 # ---------- remote checks ----------
 
 def http_head(url: str, timeout: float = 15.0) -> tuple[int, int | None]:
-    req = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(_http_request(url, method="HEAD"), timeout=timeout) as r:
             clen = r.headers.get("Content-Length")
             return r.status, int(clen) if clen else None
     except urllib.error.HTTPError as e:
@@ -186,7 +195,9 @@ def check_remote(base_url: str, sample: int) -> Suite:
 
     # Snapshots index
     try:
-        with urllib.request.urlopen(f"{base_url}/snapshots.json", timeout=10) as r:
+        with urllib.request.urlopen(
+            _http_request(f"{base_url}/snapshots.json"), timeout=10,
+        ) as r:
             manifest = json.load(r)
         snapshots = manifest.get("snapshots", [])
         if not snapshots:
