@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -233,9 +234,11 @@ def process_state(
     country: str,
     region: str,
     themes: list[Theme],
-    con: duckdb.DuckDBPyConnection,
     keep_intermediate: bool,
 ) -> dict:
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+
     state_work = work_dir / state.iso
     state_work.mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +322,10 @@ def main() -> None:
     p.add_argument("--themes",         nargs="*",
                    help="Subset of theme names. Default: all in themes.py.")
     p.add_argument("--keep-intermediate", action="store_true")
+    p.add_argument("--workers", type=int, default=1,
+                   help="Process states in parallel with N workers. "
+                        "Mind CPU/disk I/O: osmium extract is already multithreaded. "
+                        "Sweet spot is usually 2-3 on a laptop, 4-6 on a fat box.")
     args = p.parse_args()
 
     all_states = load_states(args.states_geojson)
@@ -348,22 +355,26 @@ def main() -> None:
     work_dir = args.out_dir / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    con = duckdb.connect()
-    con.execute("INSTALL spatial; LOAD spatial;")
+    kwargs_common = dict(
+        source_pbf=args.source_pbf,
+        work_dir=work_dir,
+        out_dir=args.out_dir,
+        country=args.country,
+        region=args.region,
+        themes=themes,
+        keep_intermediate=args.keep_intermediate,
+    )
 
     t0 = time.time()
-    for state in states:
-        process_state(
-            state=state,
-            source_pbf=args.source_pbf,
-            work_dir=work_dir,
-            out_dir=args.out_dir,
-            country=args.country,
-            region=args.region,
-            themes=themes,
-            con=con,
-            keep_intermediate=args.keep_intermediate,
-        )
+    if args.workers > 1:
+        print(f"Workers:    {args.workers}")
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
+            futures = {ex.submit(process_state, state=s, **kwargs_common): s for s in states}
+            for f in as_completed(futures):
+                f.result()  # re-raise on worker failure
+    else:
+        for state in states:
+            process_state(state=state, **kwargs_common)
     print(f"\nDone in {time.time()-t0:.1f}s")
 
     if not args.keep_intermediate:
