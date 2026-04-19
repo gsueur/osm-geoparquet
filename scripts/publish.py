@@ -40,6 +40,16 @@ Open Database License (ODbL) 1.0.
 Downstream users of these files MUST:
   1. Credit OpenStreetMap contributors in any derived product.
   2. If redistributing or publishing a derivative dataset, do so under ODbL.
+
+# Pipeline source
+
+The continental PBF extracts that feed this pipeline come from Geofabrik:
+  https://download.geofabrik.de/
+Geofabrik does not require attribution, but we're glad to credit them.
+
+This data is packaged and hosted by Geomermaids:
+  https://geoparquet.geomermaids.com/
+  contact: gsueur@geomermaids.com
 """
 
 
@@ -66,11 +76,9 @@ def write_remote_text(remote: str, name: str, text: str, *, dry_run: bool) -> No
 
 
 def ensure_attribution(remote: str, *, dry_run: bool) -> None:
-    files = sh_json(["rclone", "lsjson", remote, "--files-only"])
-    present = {e["Name"] for e in files}
-    if "ATTRIBUTION.txt" in present:
-        print("  [attribution] already present")
-        return
+    # Always (re)write so edits to ATTRIBUTION text propagate. It's tiny
+    # and rclone skips the upload via ETag match when the content is
+    # unchanged anyway.
     print("  [attribution] writing ATTRIBUTION.txt")
     write_remote_text(remote, "ATTRIBUTION.txt", ATTRIBUTION, dry_run=dry_run)
 
