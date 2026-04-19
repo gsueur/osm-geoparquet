@@ -124,16 +124,23 @@ def main() -> None:
     print(f"Dry-run:   {args.dry_run}")
     print()
 
-    print(f"[1/3] upload -> {dest}")
+    print(f"[1/4] upload -> {dest}")
     sh(["rclone", "copy", "--progress",
         "--exclude", "_work/**",
         f"{args.out_dir}/", dest],
        dry_run=args.dry_run)
 
-    print(f"\n[2/3] attribution")
+    latest = f"{args.remote}/latest/"
+    print(f"\n[2/4] sync latest/ -> {latest}")
+    sh(["rclone", "sync", "--progress",
+        "--exclude", "_work/**",
+        f"{args.out_dir}/", latest],
+       dry_run=args.dry_run)
+
+    print(f"\n[3/4] attribution")
     ensure_attribution(args.remote, dry_run=args.dry_run)
 
-    print(f"\n[3/3] snapshots.json")
+    print(f"\n[4/4] snapshots.json")
     if args.dry_run:
         print("  (skipped in --dry-run)")
     else:

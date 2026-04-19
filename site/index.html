@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>geomermaids · GeoParquet</title>
+<meta name="description" content="Cloud-native GeoParquet 2.0 extracts of OpenStreetMap, partitioned by country and region. Queryable directly from DuckDB over HTTPS.">
+<link rel="canonical" href="https://geoparquet.geomermaids.com/">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --accent: #0b6e4f;
+  --border: #e5e5e5;
+  --code-bg: #f6f6f4;
+  --code-fg: #1a1a1a;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a1a;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --accent: #4fd1a3;
+    --border: #2e2e2e;
+    --code-bg: #0f0f0f;
+    --code-fg: #e8e8e8;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+body {
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 780px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+h1 { font-size: 2rem; margin: 0 0 .2rem; letter-spacing: -0.02em; }
+h1 .brand { color: var(--accent); }
+h2 { font-size: 1.25rem; margin: 2.5rem 0 .75rem; letter-spacing: -0.01em; }
+p { margin: .8rem 0; }
+a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+.sub { color: var(--muted); margin: 0 0 1.5rem; font-size: 1rem; }
+.stats {
+  display: flex; flex-wrap: wrap; gap: 1.5rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 0;
+  margin: 1.5rem 0 2rem;
+}
+.stat strong { display: block; font-family: var(--mono); font-size: 1.4rem; letter-spacing: -0.02em; }
+.stat span { color: var(--muted); font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: .1em .3em; border-radius: 3px; }
+pre {
+  background: var(--code-bg); color: var(--code-fg);
+  padding: 1rem 1.1rem; border-radius: 6px; overflow-x: auto;
+  font-family: var(--mono); font-size: .875rem; line-height: 1.55;
+  border: 1px solid var(--border);
+}
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; margin: .5rem 0 1rem; }
+th, td { text-align: left; padding: .45rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+td code { font-size: .85em; }
+ul { padding-left: 1.3rem; }
+li { margin: .25rem 0; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
+.cta {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0;
+}
+.cta h2 { margin-top: 0; }
+footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
+footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1><span class="brand">geomermaids</span> · GeoParquet</h1>
+<p class="sub">Cloud-native GeoParquet 2.0 extracts of OpenStreetMap, partitioned by country and region, queryable directly over HTTPS. No downloads.</p>
+
+<div class="stats">
+  <div class="stat"><strong id="stat-features">—</strong><span>features</span></div>
+  <div class="stat"><strong id="stat-size">—</strong><span>latest snapshot</span></div>
+  <div class="stat"><strong id="stat-date">—</strong><span>last refresh</span></div>
+</div>
+
+<h2>Try it now</h2>
+<p>DuckDB reads the hosted files directly via HTTP range requests. Only the columns and row groups your query touches get fetched.</p>
+
+<pre><code>INSTALL httpfs; LOAD httpfs;
+INSTALL spatial; LOAD spatial;
+
+-- Count Rhode Island buildings
+SELECT COUNT(*)
+FROM read_parquet('https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet');
+
+-- Buildings in a bounding box around downtown Providence
+SELECT COUNT(*)
+FROM read_parquet('https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet')
+WHERE ST_Intersects(geometry, ST_MakeEnvelope(-71.45, 41.80, -71.40, 41.85));</code></pre>
+
+<p>URL pattern:<br>
+<code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD&gt;/country=&lt;CC&gt;/state=&lt;ISO3166-2&gt;/&lt;theme&gt;.parquet</code></p>
+
+<p>Available snapshots: <a href="https://parquetry.geomermaids.com/snapshots.json">snapshots.json</a></p>
+
+<h2>What's in each file</h2>
+<p>Every parquet has this base schema plus theme-specific typed columns promoted from OSM tags:</p>
+<pre><code>osm_id      BIGINT
+osm_type    VARCHAR    -- 'node' | 'way' | 'relation'
+country     VARCHAR    -- 'US', 'CA', 'MX'
+state       VARCHAR    -- e.g. 'New York', 'Ontario'
+state_iso   VARCHAR    -- e.g. 'US-NY', 'CA-ON'
+&lt;typed columns&gt;        -- per theme; see below
+tags        MAP&lt;VARCHAR, VARCHAR&gt;
+geometry    GEOMETRY   -- native Parquet logical type (GeoParquet 2.0)</code></pre>
+
+<h2>Themes</h2>
+<table>
+<thead><tr><th>theme</th><th>geometry</th><th>typed columns (excerpt)</th></tr></thead>
+<tbody>
+<tr><td><code>buildings</code></td><td>polygon</td><td>building, name, levels, height, addr_*</td></tr>
+<tr><td><code>roads</code></td><td>linestring</td><td>highway, ref, oneway, surface, maxspeed, lanes</td></tr>
+<tr><td><code>railways</code></td><td>point, linestring</td><td>railway, name, operator, gauge, electrified</td></tr>
+<tr><td><code>waterways</code></td><td>linestring</td><td>waterway, name, width, intermittent, tunnel</td></tr>
+<tr><td><code>water</code></td><td>polygon</td><td>water, natural, name, intermittent, salt</td></tr>
+<tr><td><code>landuse</code></td><td>polygon</td><td>landuse, name, operator</td></tr>
+<tr><td><code>natural_areas</code></td><td>polygon</td><td>natural, name, wetland</td></tr>
+<tr><td><code>natural_features</code></td><td>point</td><td>natural, name, ele, prominence</td></tr>
+<tr><td><code>places</code></td><td>point</td><td>place, name, population, admin_level, capital</td></tr>
+<tr><td><code>boundaries</code></td><td>polygon</td><td>boundary, admin_level, name, iso3166_*</td></tr>
+<tr><td><code>pois</code></td><td>point</td><td>amenity, shop, tourism, leisure, office, healthcare</td></tr>
+<tr><td><code>amenities_polygons</code></td><td>polygon</td><td>amenity, shop, tourism, leisure, brand</td></tr>
+<tr><td><code>power</code></td><td>point, linestring, polygon</td><td>power, name, voltage, frequency, operator</td></tr>
+<tr><td><code>aeroways</code></td><td>point, linestring, polygon</td><td>aeroway, name, iata, icao, ref, surface</td></tr>
+<tr><td><code>barriers</code></td><td>point, linestring</td><td>barrier, name, access, height, material</td></tr>
+<tr><td><code>public_transport</code></td><td>point</td><td>public_transport, highway, railway, name, operator</td></tr>
+</tbody>
+</table>
+
+<h2>Technical specs</h2>
+<ul>
+<li><strong>GeoParquet 2.0</strong> with the native Parquet <code>GEOMETRY</code> logical type (not WKB + sidecar metadata).</li>
+<li><strong>Hilbert-ordered</strong> rows for spatial clustering; row groups skip efficiently on bbox predicates.</li>
+<li><strong>ZSTD</strong> compression, <strong>50,000 rows</strong> per row group — tuned for HTTP range-request reads.</li>
+<li><strong>Typed columns</strong> promoted from the OSM <code>tags</code> map; full map still present for any unpromoted keys.</li>
+<li><strong>Hive partitioning</strong> by <code>country=</code> and <code>state=</code> so engines can prune entire regions from a query.</li>
+<li>Daily snapshots, immutable once published; <code>latest/</code> alias points at the most recent.</li>
+<li><a href="https://github.com/gsueur/osm-geoparquet">Open-source pipeline</a> (MIT).</li>
+</ul>
+
+<div class="cta">
+<h2>Custom regions, schemas, or SLA-backed hosting</h2>
+<p>The hosted snapshots here cover North America with a fixed theme catalog. For client-declared regions, custom schemas, per-customer cadence, or SLA guarantees on freshness + availability, get in touch.</p>
+<p><a href="mailto:hello@geomermaids.com?subject=Custom%20GeoParquet%20inquiry">hello@geomermaids.com</a></p>
+</div>
+
+<hr>
+
+<footer>
+<p>Data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, available under the <a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License (ODbL) 1.0</a>. Redistributed datasets must preserve attribution and license under ODbL.</p>
+<p>Pipeline source: <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a>. Feedback and issues welcome.</p>
+</footer>
+
+</main>
+
+<script>
+// Fetch the latest snapshot stats. Requires CORS on parquetry.geomermaids.com.
+// Fails silently (fallback dashes stay) if blocked.
+(async () => {
+  try {
+    const r = await fetch('https://parquetry.geomermaids.com/snapshots.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const latest = (j.snapshots || [])[0];
+    if (!latest) return;
+    const fmt = new Intl.NumberFormat('en-US');
+    // features count isn't in snapshots.json yet — we show object count for now
+    document.getElementById('stat-features').textContent = fmt.format(latest.objects) + ' files';
+    document.getElementById('stat-size').textContent = (latest.bytes / 1e9).toFixed(2) + ' GB';
+    document.getElementById('stat-date').textContent = latest.date;
+  } catch (_) {}
+})();
+</script>
+
+</body>
+</html>
