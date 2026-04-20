@@ -271,17 +271,19 @@ LIMIT 10;</code></pre>
 </div>
 
 <h3>5 · Nearest features to a point</h3>
-<p>Amenities within 500 m of Times Square, sorted by distance. <code>ST_Distance_Sphere</code> returns great-circle distances in metres for WGS 84 lon/lat geometries:</p>
+<p>Amenities within 500 m of Times Square, sorted by distance. Two predicates: a coarse degree-based bbox prefilter and an exact great-circle cutoff in metres:</p>
 <div class="code-block">
 <pre><code>WITH origin AS (SELECT ST_Point(-73.9857, 40.7484) AS pt)
 SELECT p.amenity, p.name,
        ST_Distance_Sphere(p.geometry, o.pt) AS dist_m
 FROM read_parquet(url('US-NY', 'pois')) p, origin o
-WHERE ST_Distance_Sphere(p.geometry, o.pt) &lt; 500
+WHERE ST_DWithin(p.geometry, o.pt, 0.01)             -- ~1 km bbox prefilter, planar degrees
+  AND ST_Distance_Sphere(p.geometry, o.pt) &lt; 500   -- exact cutoff, metres
 ORDER BY dist_m
 LIMIT 15;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
+<p><strong>Why both?</strong> <code>ST_DWithin</code> compares planar (degree) coordinates and is push-downable against the row-group bboxes stored in GeoParquet 2.0, so DuckDB can skip groups that don't overlap the search box before reading any data. <code>ST_Distance_Sphere</code> returns the exact great-circle distance in metres but isn't a bbox predicate — used alone, it forces a full scan. Pairing them gives you readable metre-based output <em>and</em> the cloud-native pruning that makes querying over HTTPS viable. The degree prefilter is deliberately loose (~1 km &gt; 500 m) so no in-range point gets dropped by the prefilter; the sphere check tightens it to the exact 500 m.</p>
 
 <h3>6 · Compare across states</h3>
 <p>Pass a list of URLs, group by state:</p>
