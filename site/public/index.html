@@ -130,6 +130,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
 .browse select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .browse-output { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: .75rem .9rem; }
 .browse-url { font-family: var(--mono); font-size: .85rem; word-break: break-all; color: var(--fg); display: block; margin-bottom: .7rem; }
+.browse-endpoint { font-size: .8rem; color: var(--muted); margin: -.4rem 0 .7rem; }
+.browse-endpoint code { background: none; padding: 0; color: var(--fg); }
 .browse-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .browse-actions button, .browse-actions a {
   display: inline-flex; align-items: center; gap: .35rem;
@@ -465,6 +467,7 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
   </div>
   <div class="browse-output">
     <code class="browse-url" id="br-url">—</code>
+    <div class="browse-endpoint" id="br-endpoint" hidden>via endpoint <code>s3.geomermaids.com</code> (path-style, anonymous reads)</div>
     <div class="browse-actions">
       <button id="br-copy" type="button" title="Copy URL to clipboard">Copy URL</button>
       <a id="br-open" href="#" target="_blank" rel="noopener" class="primary">Open in new tab ↗</a>
@@ -629,6 +632,7 @@ const $u = document.getElementById("br-url");
 const $o = document.getElementById("br-open");
 const $cp = document.getElementById("br-copy");
 const $ok = document.getElementById("br-copied");
+const $ep = document.getElementById("br-endpoint");
 
 function opt(v, label) { const o = document.createElement("option"); o.value = v; o.textContent = label; return o; }
 
@@ -646,9 +650,11 @@ function rebuild() {
   if (mode === "https") {
     $o.href = url;
     $o.hidden = false;
+    $ep.hidden = true;
   } else {
     $o.removeAttribute("href");
     $o.hidden = true;
+    $ep.hidden = false;
   }
 }
 $modes.forEach(m => m.addEventListener("change", rebuild));
