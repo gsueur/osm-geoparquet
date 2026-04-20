@@ -19,3 +19,7 @@ wheels/
 
 # Local-only notes
 /CLAUDE.md
+
+# Cloudflare Workers
+node_modules/
+.wrangler/

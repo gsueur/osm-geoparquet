@@ -1,0 +1,21 @@
+// Cloudflare Worker that exposes the `parquetry` R2 bucket as an
+// S3-compatible endpoint so DuckDB / any tool with httpfs can glob
+// with `s3://parquetry/...` wildcards.
+//
+// Cloudflare dashboard setup:
+//   Root directory: api/
+//   Custom domain:  s3.geomermaids.com  (add in Workers > Settings > Domains)
+//
+// Deploy (from api/):
+//   npx wrangler deploy
+{
+  "name": "geomermaids-s3-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-01",
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "parquetry"
+    }
+  ]
+}

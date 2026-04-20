@@ -179,7 +179,14 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 <p>New snapshots publish every 24 hours; each one is dated and immutable, so analysis you run today is reproducible next year against the same bytes. Europe, South America, and the rest of the world are on the roadmap — <a href="#custom">need a specific region sooner?</a></p>
 
 <h2>Try it now</h2>
-<p>Everything below runs against the live URL. <a href="https://duckdb.org/docs/installation/">Install DuckDB</a> (single binary, no daemon, free) and paste a snippet. Only the bytes your query actually needs get fetched from Cloudflare's edge.</p>
+<p>Everything below runs against the live URL. <a href="https://duckdb.org/docs/installation/">Install DuckDB</a> (single binary, no daemon, free) and paste a snippet. Only the bytes your query actually needs get fetched from Cloudflare's edge. Two ways to get at the data:</p>
+<ul>
+<li><strong>Direct access</strong> — you know the region and theme, you want that file. Plain HTTPS, zero setup.</li>
+<li><strong>Catalog-wide queries</strong> — you want "every airport in North America" or "all rail stations in Canada". S3-style wildcards across the whole catalog.</li>
+</ul>
+
+<h2>Direct access</h2>
+<p>One region, one theme, one URL. No credentials, no session state — DuckDB streams the bytes over HTTPS and pulls only the row groups your filter touches.</p>
 
 <h3>1 · Setup</h3>
 <p>Install extensions once per session. The <code>url()</code> macro keeps later snippets readable.</p>
@@ -246,6 +253,51 @@ gdf = gpd.read_parquet(
 )
 print(f"{len(gdf):,} Rhode Island buildings")
 print(gdf[["building", "name", "height"]].head())</code></pre>
+
+<h2>Catalog-wide queries</h2>
+<p>The direct-access examples above all name a specific file. That's perfect when you know the region and theme — but analysts often <em>don't</em>. They want "every airport in North America", "all rail stations in Canada", or "which state has the most wind turbines?". Answering those needs a wildcard across files, and a wildcard needs a directory listing — something plain HTTPS can't do.</p>
+<p>So we run a small read-only S3-compatible endpoint at <code>s3.geomermaids.com</code>, backed by the same bucket. It speaks just enough of the S3 API (<code>ListObjectsV2</code> + ranged <code>GetObject</code>) for DuckDB's <code>httpfs</code> to expand globs and stream byte ranges. No credentials, no signing — anonymous reads only.</p>
+
+<h3>1 · Setup</h3>
+<p>Point DuckDB at the S3 endpoint. The keys stay empty so <code>httpfs</code> issues unsigned requests. Run this block once per session:</p>
+<pre><code>INSTALL httpfs; LOAD httpfs;
+INSTALL spatial; LOAD spatial;
+
+SET s3_endpoint='s3.geomermaids.com';
+SET s3_url_style='path';
+SET s3_use_ssl=true;
+SET s3_access_key_id=''; SET s3_secret_access_key='';</code></pre>
+
+<h3>2 · Every aeroway feature in North America</h3>
+<p>One query, ~100 files. Parquet stores row counts in metadata, so DuckDB answers this without reading a single data page:</p>
+<pre><code>SELECT count(*) AS features
+FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet');</code></pre>
+
+<h3>3 · Top 10 states &amp; provinces for full-scale airports</h3>
+<p>Wildcard the path, group by <code>state_iso</code>. The column is inside every file as a literal — no path-parsing needed:</p>
+<pre><code>SELECT state_iso, count(*) AS aerodromes
+FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet')
+WHERE aeroway = 'aerodrome'
+GROUP BY state_iso
+ORDER BY aerodromes DESC
+LIMIT 10;</code></pre>
+
+<h3>4 · Partial wildcards — one country only</h3>
+<p>Pin any path segment to a literal and the glob prunes at list time. This one only fetches Canadian files:</p>
+<pre><code>SELECT state_iso, count(*) AS stations
+FROM read_parquet('s3://parquetry/latest/country=CA/state=*/public_transport.parquet')
+WHERE railway = 'station'
+GROUP BY state_iso
+ORDER BY stations DESC;</code></pre>
+
+<h3>5 · Wind turbines across the continent</h3>
+<p>The <code>power</code> theme is small, so a continent-wide scan is cheap. Group by country to see where wind is concentrated:</p>
+<pre><code>SELECT country, count(*) AS turbines
+FROM read_parquet('s3://parquetry/latest/country=*/state=*/power.parquet')
+WHERE power = 'generator'
+  AND tags['generator:source'] = 'wind'
+GROUP BY country
+ORDER BY turbines DESC;</code></pre>
 
 <h2>Themes</h2>
 <p>Each admin region is split into 16 thematic files, each with typed columns promoted from OSM tags:</p>
