@@ -203,10 +203,13 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 
 <h3>1 · Setup</h3>
 <p>Install extensions once per session. The <code>url()</code> macro keeps later snippets readable — it's optional, just a thin wrapper so the examples below don't repeat the full URL. Plain string URLs work equally well:</p>
+<div class="code-block">
 <pre><code>-- Without the macro, just pass the full URL directly:
 SELECT COUNT(*) FROM read_parquet(
   'https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet'
 );</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 <div class="code-block">
 <pre><code>INSTALL httpfs; LOAD httpfs;
 INSTALL spatial; LOAD spatial;
@@ -219,12 +222,16 @@ CREATE OR REPLACE MACRO url(state, theme) AS
 
 <h3>2 · How many buildings in a bounding box?</h3>
 <p>A rectangle around Midtown Manhattan. DuckDB fetches only the row groups that overlap the rectangle; the rest of the file is never transferred.</p>
+<div class="code-block">
 <pre><code>SELECT COUNT(*) AS buildings
 FROM read_parquet(url('US-NY', 'buildings'))
-WHERE ST_Intersects(geometry, ST_MakeEnvelope(-74.00, 40.74, -73.96, 40.77));</code></pre>
+WHERE ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>3 · Tallest residential towers in a neighborhood</h3>
 <p>Pulls four columns (not the whole 20-column file) and uses a spatial filter at the same time:</p>
+<div class="code-block">
 <pre><code>SELECT name, building, levels, height
 FROM read_parquet(url('US-NY', 'buildings'))
 WHERE building = 'residential'
@@ -232,9 +239,12 @@ WHERE building = 'residential'
   AND ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.76, -73.95, 40.79))
 ORDER BY levels DESC
 LIMIT 10;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>4 · Match restaurants to the buildings they sit inside</h3>
 <p>A spatial join between two theme files in Massachusetts, using <code>ST_Contains</code>:</p>
+<div class="code-block">
 <pre><code>SELECT b.name AS building, p.name AS restaurant, p.cuisine
 FROM read_parquet(url('US-MA', 'buildings')) b
 JOIN read_parquet(url('US-MA', 'pois')) p
@@ -242,18 +252,24 @@ JOIN read_parquet(url('US-MA', 'pois')) p
 WHERE p.amenity = 'restaurant'
   AND b.name IS NOT NULL
 LIMIT 10;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>5 · Nearest features to a point</h3>
 <p>Amenities within ~500 m of Times Square, sorted by distance:</p>
+<div class="code-block">
 <pre><code>WITH origin AS (SELECT ST_Point(-73.9857, 40.7484) AS pt)
 SELECT p.amenity, p.name, ST_Distance(p.geometry, o.pt) AS dist
 FROM read_parquet(url('US-NY', 'pois')) p, origin o
 WHERE ST_DWithin(p.geometry, o.pt, 0.005)
 ORDER BY dist
 LIMIT 15;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>6 · Compare across states</h3>
 <p>Pass a list of URLs, group by state:</p>
+<div class="code-block">
 <pre><code>SELECT state_iso, COUNT(*) AS pois
 FROM read_parquet([
   url('US-NY', 'pois'),
@@ -263,9 +279,12 @@ FROM read_parquet([
 ])
 GROUP BY state_iso
 ORDER BY pois DESC;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>7 · Same data from Python</h3>
 <p>If DuckDB isn't your thing, <a href="https://geopandas.org/">GeoPandas</a> works just as well:</p>
+<div class="code-block">
 <pre><code>import geopandas as gpd
 
 gdf = gpd.read_parquet(
@@ -273,6 +292,8 @@ gdf = gpd.read_parquet(
 )
 print(f"{len(gdf):,} Rhode Island buildings")
 print(gdf[["building", "name", "height"]].head())</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h2>Catalog-wide queries</h2>
 <p>The direct-access examples above all name a specific file. That's perfect when you know the region and theme — but analysts often <em>don't</em>. They want "every airport in North America", "all rail stations in Canada", or "which state has the most wind turbines?". Answering those needs a wildcard across files, and a wildcard needs a directory listing — something plain HTTPS can't do.</p>
@@ -293,34 +314,46 @@ SET s3_access_key_id=''; SET s3_secret_access_key='';</code></pre>
 
 <h3>2 · Every aeroway feature in North America</h3>
 <p>One query, ~100 files. Parquet stores row counts in metadata, so DuckDB answers this without reading a single data page:</p>
+<div class="code-block">
 <pre><code>SELECT count(*) AS features
 FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet');</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>3 · Top 10 states &amp; provinces for full-scale airports</h3>
 <p>Wildcard the path, group by <code>state_iso</code>. The column is inside every file as a literal — no path-parsing needed:</p>
+<div class="code-block">
 <pre><code>SELECT state_iso, count(*) AS aerodromes
 FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet')
 WHERE aeroway = 'aerodrome'
 GROUP BY state_iso
 ORDER BY aerodromes DESC
 LIMIT 10;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>4 · Partial wildcards — one country only</h3>
 <p>Pin any path segment to a literal and the glob prunes at list time. This one only fetches Canadian files:</p>
+<div class="code-block">
 <pre><code>SELECT state_iso, count(*) AS stations
 FROM read_parquet('s3://parquetry/latest/country=CA/state=*/public_transport.parquet')
 WHERE railway = 'station'
 GROUP BY state_iso
 ORDER BY stations DESC;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h3>5 · Wind turbines across the continent</h3>
 <p>The <code>power</code> theme is small, so a continent-wide scan is cheap. Group by country to see where wind is concentrated:</p>
+<div class="code-block">
 <pre><code>SELECT country, count(*) AS turbines
 FROM read_parquet('s3://parquetry/latest/country=*/state=*/power.parquet')
 WHERE power = 'generator'
   AND tags['generator:source'] = 'wind'
 GROUP BY country
 ORDER BY turbines DESC;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
 
 <h2>Themes</h2>
 <p>Each admin region is split into 16 thematic files, each with typed columns promoted from OSM tags:</p>
