@@ -344,6 +344,15 @@ https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.pa
 https://parquetry.geomermaids.com/snapshots.json</code></pre>
 <p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
 
+<h3>Retention</h3>
+<p>Snapshots age out on a tiered schedule so the archive stays bounded:</p>
+<ul>
+<li><strong>Last 14 days</strong> — every daily snapshot is kept.</li>
+<li><strong>15 days to 12 months</strong> — only the <strong>first day of each month</strong> is kept.</li>
+<li><strong>Older than 12 months</strong> — only <strong>December 31 of each year</strong> is kept, forever.</li>
+</ul>
+<p>Yearly anchors survive the monthly-pruning window, so Dec 31 snapshots are always reachable. The current set is listed in <a href="https://parquetry.geomermaids.com/snapshots.json"><code>snapshots.json</code></a>. Need a specific date kept indefinitely? <a href="#custom">Get in touch</a>.</p>
+
 <h2>Build a URL</h2>
 <p>Pick a region and theme; we'll assemble the URL for you.</p>
 <div class="browse">
