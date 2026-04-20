@@ -382,11 +382,20 @@ def process_state(
 # ---------- execution strategies ----------
 
 def _bulk_extract(source_pbf: Path, states: list[State],
-                  work_dir: Path, verbose: bool) -> None:
-    """Single-scan osmium extract producing one state PBF per input state.
+                  work_dir: Path, verbose: bool,
+                  batch_size: int = 25) -> None:
+    """Osmium extract producing one state PBF per input state.
 
-    If every expected state PBF already exists (e.g. a previous crashed run
-    with --keep-intermediate), skip the scan.
+    osmium's `complete_ways` strategy holds per-output bookkeeping in memory
+    for every polygon opened in the same invocation, so a single pass over
+    a 19 GB source with 100+ continental polygons can need 20+ GB of RAM.
+    We batch into groups of `batch_size` (default 25) — each batch is one
+    scan of the source PBF with bounded memory; the source is read once
+    per batch, not once per state, so total cost is still orders of
+    magnitude less than per-state extracts.
+
+    If every expected state PBF already exists (e.g. a previous run with
+    --keep-intermediate), the whole thing is skipped.
     """
     expected = {s.iso: work_dir / s.iso / f"{s.iso}.osm.pbf" for s in states}
 
@@ -403,23 +412,54 @@ def _bulk_extract(source_pbf: Path, states: list[State],
         write_state_polygon(s, poly)
         state_polys[s.iso] = poly
 
-    msg = (f"Bulk-extracting {len(state_polys)} state PBFs from "
-           f"{source_pbf.name} ({source_pbf.stat().st_size/1e9:.1f} GB) — "
-           f"single scan")
+    batches = [
+        dict(list(state_polys.items())[i:i + batch_size])
+        for i in range(0, len(state_polys), batch_size)
+    ]
+    n_batches = len(batches)
+    size_gb = source_pbf.stat().st_size / 1e9
+
+    def run_batches() -> None:
+        for i, batch in enumerate(batches, 1):
+            if verbose:
+                print(f"  batch {i}/{n_batches} ({len(batch)} states)")
+            osmium_extract_batch(source_pbf, batch, work_dir)
+
+    label = (f"Bulk-extracting {len(state_polys)} state PBFs from "
+             f"{source_pbf.name} ({size_gb:.1f} GB) — {n_batches} scans "
+             f"of {batch_size} states each")
 
     t0 = time.time()
     if verbose:
-        print(f"\n{msg}")
-        osmium_extract_batch(source_pbf, state_polys, work_dir)
+        print(f"\n{label}")
+        run_batches()
     else:
         from rich.console import Console
-        from rich.live import Live
-        from rich.spinner import Spinner
+        from rich.progress import (
+            Progress, SpinnerColumn, BarColumn, TextColumn,
+            MofNCompleteColumn, TimeElapsedColumn,
+        )
         console = Console()
-        spinner = Spinner("dots", text=msg, style="cyan")
-        with Live(spinner, console=console, refresh_per_second=10):
-            osmium_extract_batch(source_pbf, state_polys, work_dir)
-        console.print(f"[green]✓[/green] {msg} — done in {time.time()-t0:.1f}s")
+        with Progress(
+            SpinnerColumn(style="cyan"),
+            TextColumn("[cyan]{task.description}[/cyan]"),
+            BarColumn(bar_width=30),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"bulk-extract ({n_batches} scans × {batch_size} states)",
+                total=n_batches,
+            )
+            for i, batch in enumerate(batches, 1):
+                osmium_extract_batch(source_pbf, batch, work_dir)
+                progress.advance(task)
+        console.print(
+            f"[green]✓[/green] bulk-extract — "
+            f"{len(state_polys)} state PBFs in {n_batches} scans, "
+            f"{time.time()-t0:.1f}s total"
+        )
 
 
 def _run_verbose(states: list[State], kwargs_common: dict, workers: int) -> None:
@@ -543,6 +583,12 @@ def main() -> None:
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Echo every subprocess command and per-theme status. "
                         "Default is quiet — one line per completed state.")
+    p.add_argument("--extract-batch-size", type=int, default=25,
+                   help="States per osmium-extract invocation during bulk extract. "
+                        "Lower if memory-constrained (each output holds ~200 MB of "
+                        "per-polygon bookkeeping in complete_ways mode); higher if "
+                        "you have plenty of RAM and want fewer source-PBF scans. "
+                        "Default 25 (~5 GB RAM for continental-scale polygons).")
     args = p.parse_args()
 
     global VERBOSE
@@ -592,7 +638,8 @@ def main() -> None:
 
     # Stage 0: one scan of the source PBF produces per-state PBFs for every
     # requested state. Orders of magnitude faster than re-scanning per state.
-    _bulk_extract(args.source_pbf, states, work_dir, verbose=args.verbose)
+    _bulk_extract(args.source_pbf, states, work_dir,
+                  verbose=args.verbose, batch_size=args.extract_batch_size)
 
     # Stage 1: per-state theme processing. process_state now just reuses
     # the state_pbf that bulk extract already wrote.
