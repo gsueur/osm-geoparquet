@@ -19,6 +19,7 @@ wheels/
 
 # Local-only notes
 /CLAUDE.md
+/scripts/nightly.sh
 
 # Cloudflare Workers
 node_modules/
