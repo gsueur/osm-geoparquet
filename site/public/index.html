@@ -271,13 +271,14 @@ LIMIT 10;</code></pre>
 </div>
 
 <h3>5 · Nearest features to a point</h3>
-<p>Amenities within ~500 m of Times Square, sorted by distance:</p>
+<p>Amenities within 500 m of Times Square, sorted by distance. <code>ST_Distance_Sphere</code> returns great-circle distances in metres for WGS 84 lon/lat geometries:</p>
 <div class="code-block">
 <pre><code>WITH origin AS (SELECT ST_Point(-73.9857, 40.7484) AS pt)
-SELECT p.amenity, p.name, ST_Distance(p.geometry, o.pt) AS dist
+SELECT p.amenity, p.name,
+       ST_Distance_Sphere(p.geometry, o.pt) AS dist_m
 FROM read_parquet(url('US-NY', 'pois')) p, origin o
-WHERE ST_DWithin(p.geometry, o.pt, 0.005)
-ORDER BY dist
+WHERE ST_Distance_Sphere(p.geometry, o.pt) &lt; 500
+ORDER BY dist_m
 LIMIT 15;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
