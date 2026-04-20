@@ -96,11 +96,18 @@ def osmium_extract_batch(
         })
     config_path = work_dir / "_extract_config.json"
     config_path.write_text(json.dumps({"extracts": extracts}))
+    # Strategy "simple" is single-pass, O(file-size) memory (~1-2 GB).
+    # complete_ways would build a full node-location index across the source
+    # (~22 GB for North America) and OOM on any normal server. simple
+    # clips cross-boundary ways at the region edge — which is the semantics
+    # we actually want for per-region thematic files: an NY roads file
+    # should contain the NY portion of interstate highways, not the whole
+    # thing reaching into NJ.
     run([
         "osmium", "extract",
         "-c", str(config_path),
         "-d", str(work_dir),
-        "-s", "complete_ways",
+        "-s", "simple",
         "--overwrite",
         str(src_pbf),
     ])
@@ -583,12 +590,11 @@ def main() -> None:
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Echo every subprocess command and per-theme status. "
                         "Default is quiet — one line per completed state.")
-    p.add_argument("--extract-batch-size", type=int, default=25,
+    p.add_argument("--extract-batch-size", type=int, default=200,
                    help="States per osmium-extract invocation during bulk extract. "
-                        "Lower if memory-constrained (each output holds ~200 MB of "
-                        "per-polygon bookkeeping in complete_ways mode); higher if "
-                        "you have plenty of RAM and want fewer source-PBF scans. "
-                        "Default 25 (~5 GB RAM for continental-scale polygons).")
+                        "With strategy=simple memory is bounded (~1-2 GB regardless "
+                        "of polygon count), so this can be generous — default 200 "
+                        "means ~everything goes in a single source-PBF scan.")
     args = p.parse_args()
 
     global VERBOSE
