@@ -590,11 +590,14 @@ def main() -> None:
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Echo every subprocess command and per-theme status. "
                         "Default is quiet — one line per completed state.")
-    p.add_argument("--extract-batch-size", type=int, default=200,
+    p.add_argument("--extract-batch-size", type=int, default=5,
                    help="States per osmium-extract invocation during bulk extract. "
-                        "With strategy=simple memory is bounded (~1-2 GB regardless "
-                        "of polygon count), so this can be generous — default 200 "
-                        "means ~everything goes in a single source-PBF scan.")
+                        "Memory scales per-polygon (osmium holds membership state "
+                        "for every output simultaneously), so continental-scale "
+                        "polygons cap at ~5 per batch on a 32 GB box. For 101 "
+                        "states that's ~21 scans of the source PBF; still way "
+                        "faster than per-state extracts because each scan covers "
+                        "5 outputs. Raise if you have more RAM, lower if less.")
     args = p.parse_args()
 
     global VERBOSE
