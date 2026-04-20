@@ -141,6 +141,18 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
 .browse-actions .primary { background: var(--accent); color: white; border-color: var(--accent); }
 .browse-actions .primary:hover { filter: brightness(1.1); color: white; }
 .browse-copied { color: var(--accent); font-size: .82rem; align-self: center; }
+.browse .seg { display: flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--bg); }
+.browse .seg label { flex: 1; margin: 0; display: block; text-transform: none; letter-spacing: normal; color: var(--fg); }
+.browse .seg input { position: absolute; opacity: 0; pointer-events: none; }
+.browse .seg span {
+  display: block; text-align: center;
+  padding: .5rem .6rem; font-size: .95rem;
+  cursor: pointer; border-right: 1px solid var(--border);
+  color: var(--fg); background: var(--bg);
+}
+.browse .seg label:last-child span { border-right: none; }
+.browse .seg input:checked + span { background: var(--accent); color: white; border-color: var(--accent); }
+.browse .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .code-block { position: relative; }
 .code-block pre { padding-right: 4.5rem; }
@@ -432,6 +444,13 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
 <div class="browse">
   <div class="browse-inputs">
     <div>
+      <label>Access</label>
+      <div class="seg" role="radiogroup" aria-label="Access protocol">
+        <label><input type="radio" name="br-mode" value="https" checked><span>HTTPS</span></label>
+        <label><input type="radio" name="br-mode" value="s3"><span>S3</span></label>
+      </div>
+    </div>
+    <div>
       <label for="br-country">Country</label>
       <select id="br-country"></select>
     </div>
@@ -597,8 +616,12 @@ const THEMES = [
   "natural_features","places","boundaries","pois","amenities_polygons","power",
   "aeroways","barriers","public_transport"
 ];
-const BASE = "https://parquetry.geomermaids.com/latest";
+const BASES = {
+  https: "https://parquetry.geomermaids.com/latest",
+  s3: "s3://parquetry/latest"
+};
 
+const $modes = document.querySelectorAll('input[name="br-mode"]');
 const $c = document.getElementById("br-country");
 const $s = document.getElementById("br-state");
 const $t = document.getElementById("br-theme");
@@ -617,10 +640,18 @@ function refillStates() {
   (REGIONS[$c.value] || []).forEach(([iso, name]) => $s.appendChild(opt(iso, name)));
 }
 function rebuild() {
-  const url = `${BASE}/country=${$c.value}/state=${$s.value}/${$t.value}.parquet`;
+  const mode = (document.querySelector('input[name="br-mode"]:checked') || {}).value || "https";
+  const url = `${BASES[mode]}/country=${$c.value}/state=${$s.value}/${$t.value}.parquet`;
   $u.textContent = url;
-  $o.href = url;
+  if (mode === "https") {
+    $o.href = url;
+    $o.hidden = false;
+  } else {
+    $o.removeAttribute("href");
+    $o.hidden = true;
+  }
 }
+$modes.forEach(m => m.addEventListener("change", rebuild));
 $c.addEventListener("change", () => { refillStates(); rebuild(); });
 $s.addEventListener("change", rebuild);
 $t.addEventListener("change", rebuild);
