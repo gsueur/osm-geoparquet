@@ -224,9 +224,9 @@ def main() -> None:
     )
 
     latest = f"{args.remote}/latest/"
-    print(f"\n[2/4] sync latest/ -> {latest}")
+    print(f"\n[2/4] sync latest/ -> {latest}  (server-side copy from {date}/)")
     rclone_with_progress(
-        ["rclone", "sync", "--exclude", "_work/**", f"{args.out_dir}/", latest],
+        ["rclone", "sync", dest, latest],
         label="latest/",
         total_bytes=total_bytes,
         dry_run=args.dry_run,
