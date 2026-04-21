@@ -327,6 +327,14 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
 
+<h3>8 · Load into QGIS</h3>
+<p>Open a file visually in <a href="https://qgis.org/">QGIS</a> (3.28 LTR or newer — needs GDAL ≥ 3.5 with the Parquet driver). In <strong>Data Source Manager → Vector</strong>, paste the URL prefixed with <code>/vsicurl/</code> so GDAL streams it via HTTP range requests instead of downloading the whole file:</p>
+<div class="code-block">
+<pre><code>/vsicurl/https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
+<p>Only the row groups your viewport overlaps get fetched. For catalog-wide queries ("every airport in North America"), use DuckDB — QGIS loads one file at a time.</p>
+
 <h2>Catalog-wide queries</h2>
 <p>The direct-access examples above all name a specific file. That's perfect when you know the region and theme — but analysts often <em>don't</em>. They want "every airport in North America", "all rail stations in Canada", or "which state has the most wind turbines?". Answering those needs a wildcard across files, and a wildcard needs a directory listing — something plain HTTPS can't do.</p>
 <p>So we run a small read-only S3-compatible endpoint at <code>s3.geomermaids.com</code>, backed by the same bucket. It speaks just enough of the S3 API (<code>ListObjectsV2</code> + ranged <code>GetObject</code>) for DuckDB's <code>httpfs</code> to expand globs and stream byte ranges. No credentials, no signing — anonymous reads only.</p>
