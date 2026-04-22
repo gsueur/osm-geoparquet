@@ -143,12 +143,17 @@ def rclone_with_progress(cmd: list[str], *, label: str, total_bytes: int,
         progress.update(task, completed=progress.tasks[task].total)
 
 
-def write_remote_text(remote: str, name: str, text: str, *, dry_run: bool) -> None:
+def write_remote_text(remote: str, name: str, text: str, *,
+                      cache_control: str, dry_run: bool) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".tmp", delete=False) as f:
         f.write(text)
         local = f.name
     try:
-        sh(["rclone", "copyto", local, f"{remote}/{name}"], dry_run=dry_run)
+        sh([
+            "rclone", "copyto",
+            "--header-upload", f"Cache-Control: {cache_control}",
+            local, f"{remote}/{name}",
+        ], dry_run=dry_run)
     finally:
         Path(local).unlink(missing_ok=True)
 
@@ -158,7 +163,8 @@ def ensure_attribution(remote: str, *, dry_run: bool) -> None:
     # and rclone skips the upload via ETag match when the content is
     # unchanged anyway.
     print("  [attribution] writing ATTRIBUTION.txt")
-    write_remote_text(remote, "ATTRIBUTION.txt", ATTRIBUTION, dry_run=dry_run)
+    write_remote_text(remote, "ATTRIBUTION.txt", ATTRIBUTION,
+                      cache_control="public, max-age=300", dry_run=dry_run)
 
 
 def build_snapshot_manifest(remote: str) -> dict:
@@ -217,7 +223,14 @@ def main() -> None:
 
     print(f"[1/4] upload -> {dest}")
     rclone_with_progress(
-        ["rclone", "copy", "--exclude", "_work/**", f"{args.out_dir}/", dest],
+        [
+            "rclone", "copy", "--exclude", "_work/**",
+            # Dated snapshots never change — tell browsers and Cloudflare's
+            # edge cache they can pin the bytes for a year.
+            "--header-upload",
+            "Cache-Control: public, max-age=31536000, immutable",
+            f"{args.out_dir}/", dest,
+        ],
         label="upload",
         total_bytes=total_bytes,
         dry_run=args.dry_run,
@@ -226,7 +239,15 @@ def main() -> None:
     latest = f"{args.remote}/latest/"
     print(f"\n[2/4] sync latest/ -> {latest}  (server-side copy from {date}/)")
     rclone_with_progress(
-        ["rclone", "sync", dest, latest],
+        [
+            "rclone", "sync",
+            # latest/ is rewritten every night — don't let anything pin it
+            # as immutable. Short browser TTL, longer edge TTL with SWR so
+            # stale bytes can be served while we revalidate in the background.
+            "--header-upload",
+            "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
+            dest, latest,
+        ],
         label="latest/",
         total_bytes=total_bytes,
         dry_run=args.dry_run,
@@ -241,7 +262,8 @@ def main() -> None:
     else:
         manifest = build_snapshot_manifest(args.remote)
         write_remote_text(args.remote, "snapshots.json",
-                          json.dumps(manifest, indent=2), dry_run=False)
+                          json.dumps(manifest, indent=2),
+                          cache_control="public, max-age=300", dry_run=False)
         print(f"\nSnapshots on remote:")
         for s in manifest["snapshots"]:
             print(f"  {s['date']}  {s['objects']:>4} files  "

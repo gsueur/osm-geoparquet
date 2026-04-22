@@ -189,6 +189,16 @@ def http_head(url: str, timeout: float = 15.0) -> tuple[int, int | None]:
         return 0, None
 
 
+def http_head_headers(url: str, timeout: float = 15.0) -> tuple[int, dict[str, str]]:
+    try:
+        with urllib.request.urlopen(_http_request(url, method="HEAD"), timeout=timeout) as r:
+            return r.status, {k.lower(): v for k, v in r.headers.items()}
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+    except Exception:
+        return 0, {}
+
+
 def check_remote(base_url: str, sample: int) -> Suite:
     s = Suite(f"Remote checks — {base_url}")
     s.header()
@@ -241,11 +251,42 @@ def check_remote(base_url: str, sample: int) -> Suite:
     else:
         s.fail(f"{bad}/{checked} sampled URLs failed")
 
+    # Cache-Control headers set by publish.py
+    _check_cache_control(s, base_url, latest["date"])
+
     # Run the landing page's DuckDB examples
     _check_landing_page_queries(s, base_url)
 
     s.summary()
     return s
+
+
+def _check_cache_control(s: Suite, base_url: str, latest_date: str) -> None:
+    # publish.py sets three distinct policies. If a new rclone version
+    # ever silently stops forwarding --header-upload on server-side copy,
+    # these checks catch it (the `latest/` files would inherit `immutable`
+    # from the dated snapshot and get pinned forever at the edge).
+    sample = "country=US/state=US-NY/buildings.parquet"
+    cases = [
+        # url, must_contain, must_not_contain
+        (f"{base_url}/{latest_date}/{sample}", "immutable", None),
+        (f"{base_url}/latest/{sample}", "stale-while-revalidate", "immutable"),
+        (f"{base_url}/snapshots.json", "max-age=300", "immutable"),
+        (f"{base_url}/ATTRIBUTION.txt", "max-age=300", "immutable"),
+    ]
+    for url, want, forbid in cases:
+        label = url.replace(base_url, "")
+        status, headers = http_head_headers(url)
+        if status != 200:
+            s.fail(f"Cache-Control {label}: HEAD -> {status}")
+            continue
+        cc = headers.get("cache-control", "")
+        if want not in cc:
+            s.fail(f"Cache-Control {label}: missing {want!r} (got: {cc!r})")
+        elif forbid and forbid in cc:
+            s.fail(f"Cache-Control {label}: should not contain {forbid!r} (got: {cc!r})")
+        else:
+            s.ok(f"Cache-Control {label}: {cc}")
 
 
 def _check_landing_page_queries(s: Suite, base_url: str) -> None:
