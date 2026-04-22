@@ -59,6 +59,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 main { max-width: 820px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+.topnav { display: flex; justify-content: flex-end; margin-bottom: 1rem; font-size: .9rem; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .hero-logo { width: 96px; height: 96px; display: block; margin: 0 0 1rem; border-radius: 8px; }
 h1 { font-size: 2rem; margin: 0 0 .3rem; letter-spacing: -0.02em; }
 h1 .brand { color: var(--accent); }
@@ -180,6 +183,10 @@ footer a { color: var(--muted); }
 </head>
 <body>
 <main>
+
+<nav class="topnav">
+  <a href="https://www.geomermaids.com" rel="noopener">geomermaids.com&nbsp;↗</a>
+</nav>
 
 <picture>
   <source type="image/webp"
