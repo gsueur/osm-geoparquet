@@ -11,10 +11,21 @@ const BUCKET_NAME = "parquetry";
 
 export default {
   async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ...corsHeaders(),
+          "Access-Control-Allow-Headers": "*",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { Allow: "GET, HEAD", ...corsHeaders() },
+        headers: { Allow: "GET, HEAD, OPTIONS", ...corsHeaders() },
       });
     }
 
@@ -189,7 +200,7 @@ function computeRangeBounds(range, size) {
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, HEAD",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
     "Access-Control-Expose-Headers": "ETag, Content-Length, Content-Range, Accept-Ranges",
   };
 }
