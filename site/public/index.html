@@ -261,7 +261,7 @@ CREATE OR REPLACE MACRO url(state, theme) AS
 <div class="code-block">
 <pre><code>SELECT COUNT(*) AS buildings
 FROM read_parquet(url('US-NY', 'buildings'))
-WHERE ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
+WHERE st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
 
@@ -272,7 +272,7 @@ WHERE ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</c
 FROM read_parquet(url('US-NY', 'buildings'))
 WHERE building = 'residential'
   AND levels &gt; 30
-  AND ST_Intersects(geometry, ST_MakeEnvelope(-73.99, 40.76, -73.95, 40.79))
+  AND st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.76, -73.95, 40.79))
 ORDER BY levels DESC
 LIMIT 10;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
