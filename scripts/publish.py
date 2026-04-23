@@ -149,8 +149,12 @@ def write_remote_text(remote: str, name: str, text: str, *,
         f.write(text)
         local = f.name
     try:
+        # --ignore-times forces the PUT even when the content is unchanged
+        # (rclone would otherwise ETag-match and skip, which leaves the
+        # existing object's Cache-Control unchanged — exactly what bit
+        # ATTRIBUTION.txt on 2026-04-23).
         sh([
-            "rclone", "copyto",
+            "rclone", "copyto", "--ignore-times",
             "--header-upload", f"Cache-Control: {cache_control}",
             local, f"{remote}/{name}",
         ], dry_run=dry_run)
@@ -244,8 +248,16 @@ def main() -> None:
             # latest/ is rewritten every night — don't let anything pin it
             # as immutable. Short browser TTL, longer edge TTL with SWR so
             # stale bytes can be served while we revalidate in the background.
-            "--header-upload",
-            "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
+            #
+            # Use --metadata / --metadata-set (not --header-upload) because on
+            # server-side S3 CopyObject rclone only issues
+            # x-amz-metadata-directive=REPLACE when metadata is being set via
+            # the metadata system. With --header-upload alone, R2 inherits
+            # Cache-Control from the dated snapshot source — which means
+            # `immutable` leaks onto latest/ and the edge pins it forever.
+            "--metadata",
+            "--metadata-set",
+            "cache-control=public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
             dest, latest,
         ],
         label="latest/",
