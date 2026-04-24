@@ -241,24 +241,23 @@ def main() -> None:
     )
 
     latest = f"{args.remote}/latest/"
-    print(f"\n[2/4] sync latest/ -> {latest}  (server-side copy from {date}/)")
+    print(f"\n[2/4] sync latest/ -> {latest}  (re-upload from local)")
+    # We used to do this as a server-side copy from the dated snapshot
+    # (saves bandwidth), but our pinned rclone (v1.60.1) doesn't reliably
+    # emit x-amz-metadata-directive=REPLACE on CopyObject, so R2 inherits
+    # Cache-Control from the source — which means `immutable` leaks onto
+    # latest/ and the edge pins it forever. Re-uploading from local puts
+    # the right Cache-Control on each PUT directly; the ~5 min of extra
+    # bandwidth is worth the absence of this class of bug.
     rclone_with_progress(
         [
-            "rclone", "sync",
+            "rclone", "sync", "--exclude", "_work/**",
             # latest/ is rewritten every night — don't let anything pin it
             # as immutable. Short browser TTL, longer edge TTL with SWR so
             # stale bytes can be served while we revalidate in the background.
-            #
-            # Use --metadata / --metadata-set (not --header-upload) because on
-            # server-side S3 CopyObject rclone only issues
-            # x-amz-metadata-directive=REPLACE when metadata is being set via
-            # the metadata system. With --header-upload alone, R2 inherits
-            # Cache-Control from the dated snapshot source — which means
-            # `immutable` leaks onto latest/ and the edge pins it forever.
-            "--metadata",
-            "--metadata-set",
-            "cache-control=public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
-            dest, latest,
+            "--header-upload",
+            "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
+            f"{args.out_dir}/", latest,
         ],
         label="latest/",
         total_bytes=total_bytes,
