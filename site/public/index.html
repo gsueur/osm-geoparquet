@@ -227,6 +227,134 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 </ul>
 <p>New snapshots publish every 24 hours; each one is dated and immutable, so analysis you run today is reproducible next year against the same bytes. Europe, South America, and the rest of the world are on the roadmap — <a href="#custom">need a specific region sooner?</a></p>
 
+<h2>Themes</h2>
+<p>Each admin region is split into 16 thematic files, each with typed columns promoted from OSM tags:</p>
+<table>
+<thead><tr><th>theme</th><th>geometry</th><th>typed columns (excerpt)</th></tr></thead>
+<tbody>
+<tr><td><code>buildings</code></td><td>polygon</td><td>building, name, levels, height, addr_*</td></tr>
+<tr><td><code>roads</code></td><td>linestring</td><td>highway, ref, oneway, surface, maxspeed, lanes</td></tr>
+<tr><td><code>railways</code></td><td>point, linestring</td><td>railway, name, operator, gauge, electrified</td></tr>
+<tr><td><code>waterways</code></td><td>linestring</td><td>waterway, name, width, intermittent, tunnel</td></tr>
+<tr><td><code>water</code></td><td>polygon</td><td>water, natural, name, intermittent, salt</td></tr>
+<tr><td><code>landuse</code></td><td>polygon</td><td>landuse, name, operator</td></tr>
+<tr><td><code>natural_areas</code></td><td>polygon</td><td>natural, name, wetland</td></tr>
+<tr><td><code>natural_features</code></td><td>point</td><td>natural, name, ele, prominence</td></tr>
+<tr><td><code>places</code></td><td>point</td><td>place, name, population, admin_level, capital</td></tr>
+<tr><td><code>boundaries</code></td><td>polygon</td><td>boundary, admin_level, name, iso3166_*</td></tr>
+<tr><td><code>pois</code></td><td>point</td><td>amenity, shop, tourism, leisure, office, healthcare</td></tr>
+<tr><td><code>amenities_polygons</code></td><td>polygon</td><td>amenity, shop, tourism, leisure, brand</td></tr>
+<tr><td><code>power</code></td><td>point, linestring, polygon</td><td>power, name, voltage, frequency, operator</td></tr>
+<tr><td><code>aeroways</code></td><td>point, linestring, polygon</td><td>aeroway, name, iata, icao, ref, surface</td></tr>
+<tr><td><code>barriers</code></td><td>point, linestring</td><td>barrier, name, access, height, material</td></tr>
+<tr><td><code>public_transport</code></td><td>point</td><td>public_transport, highway, railway, name, operator</td></tr>
+</tbody>
+</table>
+
+<p>Every file also ships the full OSM <code>tags</code> as a <code>MAP&lt;VARCHAR, VARCHAR&gt;</code> — anything not promoted to a typed column is still there, just a <code>tags['key']</code> lookup away.</p>
+
+<h2>URL pattern</h2>
+<pre><code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
+<p>A few concrete examples:</p>
+<pre><code># Every building in New York State (latest snapshot)
+https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet
+
+# Ontario's entire road network
+https://parquetry.geomermaids.com/latest/country=CA/state=CA-ON/roads.parquet
+
+# Points of interest in Jalisco, Mexico
+https://parquetry.geomermaids.com/latest/country=MX/state=MX-JAL/pois.parquet
+
+# Pinned to a specific date — immutable, reproducible
+https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.parquet
+
+# Machine-readable index of every snapshot ever published
+https://parquetry.geomermaids.com/snapshots.json</code></pre>
+<p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
+
+<h3>Retention</h3>
+<p>Snapshots age out on a tiered schedule so the archive stays bounded:</p>
+<ul>
+<li><strong>Last 14 days</strong> — every daily snapshot is kept.</li>
+<li><strong>15 days to 12 months</strong> — only the <strong>first day of each month</strong> is kept.</li>
+<li><strong>Older than 12 months</strong> — only <strong>December 31 of each year</strong> is kept, forever.</li>
+</ul>
+<p>Yearly anchors survive the monthly-pruning window, so Dec 31 snapshots are always reachable. The current set is listed in <a href="https://parquetry.geomermaids.com/snapshots.json"><code>snapshots.json</code></a>. Need a specific date kept indefinitely? <a href="#custom">Get in touch</a>.</p>
+
+<h2>Build a URL</h2>
+<p>Pick a region and theme; we'll assemble the URL for you.</p>
+<div class="browse">
+  <div class="browse-inputs">
+    <div>
+      <label>Access</label>
+      <div class="seg" role="radiogroup" aria-label="Access protocol">
+        <label><input type="radio" name="br-mode" value="https" checked><span>HTTPS</span></label>
+        <label><input type="radio" name="br-mode" value="s3"><span>S3</span></label>
+      </div>
+    </div>
+    <div>
+      <label for="br-country">Country</label>
+      <select id="br-country"></select>
+    </div>
+    <div>
+      <label for="br-state">State / Province</label>
+      <select id="br-state"></select>
+    </div>
+    <div>
+      <label for="br-theme">Theme</label>
+      <select id="br-theme"></select>
+    </div>
+  </div>
+  <div class="browse-output">
+    <code class="browse-url" id="br-url">—</code>
+    <div class="browse-endpoint" id="br-endpoint" hidden>via endpoint <code>s3.geomermaids.com</code> (path-style, anonymous reads)</div>
+    <div class="browse-actions">
+      <button id="br-copy" type="button" title="Copy URL to clipboard">Copy URL</button>
+      <a id="br-open" href="#" target="_blank" rel="noopener" class="primary">Open in new tab ↗</a>
+      <span class="browse-copied" id="br-copied" hidden>✓ copied</span>
+    </div>
+  </div>
+</div>
+
+<h2>Inside each file</h2>
+
+<p>Every parquet is validator-clean GeoParquet 2.0 — spatial-query-optimized, metadata-complete, bloom-filtered. Pop the hood on <code>country=US/state=US-NY/buildings.parquet</code> for example, and <a href="https://geoparquet.io/"><code>gpio</code></a>'s <code>inspect</code> / <code>check</code> commands report:</p>
+
+<pre><code>📄 country=US/state=US-NY/buildings.parquet          394 MB
+
+Rows                   4,469,880
+Row groups             88   (avg 50,794 rows each, 4.5 MB compressed)
+Compression            ZSTD
+Parquet type           GEOMETRY   (native v2.0 logical type, not WKB)
+GeoParquet version     2.0.0
+CRS                    OGC:CRS84  (WGS 84, lng/lat)
+Geometry types         MultiPolygon
+Bbox                   [-79.76, 40.49, -71.86, 45.01]
+Bloom filters          16 columns, 1.0 MB total
+Spatial order          Hilbert   (consecutive/random ratio 0.00089 —
+                       "strongly spatially clustered")
+Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code></pre>
+
+<div class="callout">
+<p><strong>Wait, what's a bloom filter?</strong> A tiny probabilistic index (a few KB per column, per row group) that answers one question very fast: <em>"could this value be in this row group?"</em> If the filter says <em>no</em>, the query engine skips the whole group without opening it. If it says <em>maybe</em>, the engine reads the group and checks for real. No false negatives — a match is never missed.</p>
+<p>The win: a query like <code>WHERE name = 'Central Park'</code> across 4.5M New York buildings touches <strong>one row group out of 88</strong> instead of the whole 394 MB file. Same story for every typed column and for tag-key lookups.</p>
+</div>
+
+<p>Every file in every theme in every region carries the same guarantees:</p>
+
+<ul>
+<li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Row-group statistics are proper per-geometry bboxes, so engines prune without deserializing anything.</li>
+<li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
+<li><strong>ZSTD compression</strong> on every column, including geometry.</li>
+<li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
+<li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
+<li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>
+<li><strong>Dated, immutable snapshots</strong> plus a <code>latest/</code> alias. Pin a date for reproducibility; use <code>latest/</code> when you just want today's data.</li>
+<li><strong>29 of 29 <code>gpio check</code> validations pass</strong> on every file — zero warnings, zero cosmetic metadata drift.</li>
+<li><strong>Open-source pipeline.</strong> Built with <a href="https://osmcode.org/osmium-tool/">osmium-tool</a> + <a href="https://duckdb.org/">DuckDB</a>. Full source at <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a> (MIT) — every file here is reproducible from source.</li>
+</ul>
+
+
 <h2>Try it now</h2>
 <p>Everything below runs against the live URL. <a href="https://duckdb.org/docs/installation/">Install DuckDB</a> (single binary, no daemon, free) and paste a snippet. Only the bytes your query actually needs get fetched from Cloudflare's edge. Two ways to get at the data:</p>
 <ul>
@@ -431,132 +559,7 @@ ORDER BY turbines DESC;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
 
-<h2>Themes</h2>
-<p>Each admin region is split into 16 thematic files, each with typed columns promoted from OSM tags:</p>
-<table>
-<thead><tr><th>theme</th><th>geometry</th><th>typed columns (excerpt)</th></tr></thead>
-<tbody>
-<tr><td><code>buildings</code></td><td>polygon</td><td>building, name, levels, height, addr_*</td></tr>
-<tr><td><code>roads</code></td><td>linestring</td><td>highway, ref, oneway, surface, maxspeed, lanes</td></tr>
-<tr><td><code>railways</code></td><td>point, linestring</td><td>railway, name, operator, gauge, electrified</td></tr>
-<tr><td><code>waterways</code></td><td>linestring</td><td>waterway, name, width, intermittent, tunnel</td></tr>
-<tr><td><code>water</code></td><td>polygon</td><td>water, natural, name, intermittent, salt</td></tr>
-<tr><td><code>landuse</code></td><td>polygon</td><td>landuse, name, operator</td></tr>
-<tr><td><code>natural_areas</code></td><td>polygon</td><td>natural, name, wetland</td></tr>
-<tr><td><code>natural_features</code></td><td>point</td><td>natural, name, ele, prominence</td></tr>
-<tr><td><code>places</code></td><td>point</td><td>place, name, population, admin_level, capital</td></tr>
-<tr><td><code>boundaries</code></td><td>polygon</td><td>boundary, admin_level, name, iso3166_*</td></tr>
-<tr><td><code>pois</code></td><td>point</td><td>amenity, shop, tourism, leisure, office, healthcare</td></tr>
-<tr><td><code>amenities_polygons</code></td><td>polygon</td><td>amenity, shop, tourism, leisure, brand</td></tr>
-<tr><td><code>power</code></td><td>point, linestring, polygon</td><td>power, name, voltage, frequency, operator</td></tr>
-<tr><td><code>aeroways</code></td><td>point, linestring, polygon</td><td>aeroway, name, iata, icao, ref, surface</td></tr>
-<tr><td><code>barriers</code></td><td>point, linestring</td><td>barrier, name, access, height, material</td></tr>
-<tr><td><code>public_transport</code></td><td>point</td><td>public_transport, highway, railway, name, operator</td></tr>
-</tbody>
-</table>
 
-<p>Every file also ships the full OSM <code>tags</code> as a <code>MAP&lt;VARCHAR, VARCHAR&gt;</code> — anything not promoted to a typed column is still there, just a <code>tags['key']</code> lookup away.</p>
-
-<h2>URL pattern</h2>
-<pre><code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
-<p>A few concrete examples:</p>
-<pre><code># Every building in New York State (latest snapshot)
-https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet
-
-# Ontario's entire road network
-https://parquetry.geomermaids.com/latest/country=CA/state=CA-ON/roads.parquet
-
-# Points of interest in Jalisco, Mexico
-https://parquetry.geomermaids.com/latest/country=MX/state=MX-JAL/pois.parquet
-
-# Pinned to a specific date — immutable, reproducible
-https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.parquet
-
-# Machine-readable index of every snapshot ever published
-https://parquetry.geomermaids.com/snapshots.json</code></pre>
-<p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
-
-<h3>Retention</h3>
-<p>Snapshots age out on a tiered schedule so the archive stays bounded:</p>
-<ul>
-<li><strong>Last 14 days</strong> — every daily snapshot is kept.</li>
-<li><strong>15 days to 12 months</strong> — only the <strong>first day of each month</strong> is kept.</li>
-<li><strong>Older than 12 months</strong> — only <strong>December 31 of each year</strong> is kept, forever.</li>
-</ul>
-<p>Yearly anchors survive the monthly-pruning window, so Dec 31 snapshots are always reachable. The current set is listed in <a href="https://parquetry.geomermaids.com/snapshots.json"><code>snapshots.json</code></a>. Need a specific date kept indefinitely? <a href="#custom">Get in touch</a>.</p>
-
-<h2>Build a URL</h2>
-<p>Pick a region and theme; we'll assemble the URL for you.</p>
-<div class="browse">
-  <div class="browse-inputs">
-    <div>
-      <label>Access</label>
-      <div class="seg" role="radiogroup" aria-label="Access protocol">
-        <label><input type="radio" name="br-mode" value="https" checked><span>HTTPS</span></label>
-        <label><input type="radio" name="br-mode" value="s3"><span>S3</span></label>
-      </div>
-    </div>
-    <div>
-      <label for="br-country">Country</label>
-      <select id="br-country"></select>
-    </div>
-    <div>
-      <label for="br-state">State / Province</label>
-      <select id="br-state"></select>
-    </div>
-    <div>
-      <label for="br-theme">Theme</label>
-      <select id="br-theme"></select>
-    </div>
-  </div>
-  <div class="browse-output">
-    <code class="browse-url" id="br-url">—</code>
-    <div class="browse-endpoint" id="br-endpoint" hidden>via endpoint <code>s3.geomermaids.com</code> (path-style, anonymous reads)</div>
-    <div class="browse-actions">
-      <button id="br-copy" type="button" title="Copy URL to clipboard">Copy URL</button>
-      <a id="br-open" href="#" target="_blank" rel="noopener" class="primary">Open in new tab ↗</a>
-      <span class="browse-copied" id="br-copied" hidden>✓ copied</span>
-    </div>
-  </div>
-</div>
-
-<h2>Inside each file</h2>
-
-<p>Every parquet is validator-clean GeoParquet 2.0 — spatial-query-optimized, metadata-complete, bloom-filtered. Pop the hood on <code>country=US/state=US-NY/buildings.parquet</code> for example, and <a href="https://geoparquet.io/"><code>gpio</code></a>'s <code>inspect</code> / <code>check</code> commands report:</p>
-
-<pre><code>📄 country=US/state=US-NY/buildings.parquet          394 MB
-
-Rows                   4,469,880
-Row groups             88   (avg 50,794 rows each, 4.5 MB compressed)
-Compression            ZSTD
-Parquet type           GEOMETRY   (native v2.0 logical type, not WKB)
-GeoParquet version     2.0.0
-CRS                    OGC:CRS84  (WGS 84, lng/lat)
-Geometry types         MultiPolygon
-Bbox                   [-79.76, 40.49, -71.86, 45.01]
-Bloom filters          16 columns, 1.0 MB total
-Spatial order          Hilbert   (consecutive/random ratio 0.00089 —
-                       "strongly spatially clustered")
-Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code></pre>
-
-<div class="callout">
-<p><strong>Wait, what's a bloom filter?</strong> A tiny probabilistic index (a few KB per column, per row group) that answers one question very fast: <em>"could this value be in this row group?"</em> If the filter says <em>no</em>, the query engine skips the whole group without opening it. If it says <em>maybe</em>, the engine reads the group and checks for real. No false negatives — a match is never missed.</p>
-<p>The win: a query like <code>WHERE name = 'Central Park'</code> across 4.5M New York buildings touches <strong>one row group out of 88</strong> instead of the whole 394 MB file. Same story for every typed column and for tag-key lookups.</p>
-</div>
-
-<p>Every file in every theme in every region carries the same guarantees:</p>
-
-<ul>
-<li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Row-group statistics are proper per-geometry bboxes, so engines prune without deserializing anything.</li>
-<li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
-<li><strong>ZSTD compression</strong> on every column, including geometry.</li>
-<li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
-<li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
-<li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>
-<li><strong>Dated, immutable snapshots</strong> plus a <code>latest/</code> alias. Pin a date for reproducibility; use <code>latest/</code> when you just want today's data.</li>
-<li><strong>29 of 29 <code>gpio check</code> validations pass</strong> on every file — zero warnings, zero cosmetic metadata drift.</li>
-<li><strong>Open-source pipeline.</strong> Built with <a href="https://osmcode.org/osmium-tool/">osmium-tool</a> + <a href="https://duckdb.org/">DuckDB</a>. Full source at <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a> (MIT) — every file here is reproducible from source.</li>
-</ul>
 
 <h2>Where this fits in the OSM data ecosystem</h2>
 
