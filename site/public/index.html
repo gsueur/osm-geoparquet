@@ -245,6 +245,11 @@ footer a { color: var(--muted); }
 
 <p>Every file also ships the full OSM <code>tags</code> as a <code>MAP&lt;VARCHAR, VARCHAR&gt;</code> — anything not promoted to a typed column is still there, just a <code>tags['key']</code> lookup away.</p>
 
+<h2>Browse it like a directory</h2>
+<p>Open <a href="https://parquetry.geomermaids.com/">our File Explorer</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
+
+
+
 <h2>URL pattern</h2>
 <pre><code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
 <p>A few concrete examples:</p>
@@ -263,9 +268,6 @@ https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.pa
 # Machine-readable index of every snapshot ever published
 https://parquetry.geomermaids.com/snapshots.json</code></pre>
 <p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
-
-<h3>Browse it like a directory</h3>
-<p>Open <a href="https://parquetry.geomermaids.com/">parquetry.geomermaids.com</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
 
 <h3>Retention</h3>
 <p>Snapshots age out on a tiered schedule so the archive stays bounded:</p>
