@@ -25,7 +25,7 @@ Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opend
 
 - Python ≥ 3.12
 - [`osmium-tool`](https://osmcode.org/osmium-tool/) (`apt install osmium-tool` or `brew install osmium-tool`)
-- Python deps: `uv sync`
+- Python deps: `uv sync --project scripts` (project metadata lives under `scripts/` so Cloudflare Pages doesn't auto-detect a Python build at the repo root)
 
 ## Output layout
 
