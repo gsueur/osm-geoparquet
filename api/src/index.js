@@ -147,12 +147,20 @@ async function handleObject(key, request, env) {
   }
 
   const rangeHeader = request.headers.get("range");
+  const ifNoneMatch = request.headers.get("if-none-match");
   const getOpts = {};
   const parsedRange = rangeHeader ? parseRange(rangeHeader) : undefined;
   if (parsedRange) getOpts.range = parsedRange;
+  if (ifNoneMatch) getOpts.onlyIf = { etagDoesNotMatch: ifNoneMatch };
 
   const object = await env.BUCKET.get(key, getOpts);
   if (!object) return new Response("Not Found", { status: 404, headers: corsHeaders() });
+
+  // R2 returns a metadata-only object (body === null) when onlyIf fails
+  // — the client's cached etag still matches. Turn that into 304.
+  if (object.body === null) {
+    return new Response(null, { status: 304, headers: objectHeaders(object) });
+  }
 
   const headers = objectHeaders(object);
   headers.set("Accept-Ranges", "bytes");
