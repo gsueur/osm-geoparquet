@@ -264,6 +264,9 @@ https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.pa
 https://parquetry.geomermaids.com/snapshots.json</code></pre>
 <p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
 
+<h3>Browse it like a directory</h3>
+<p>Open <a href="https://parquetry.geomermaids.com/">parquetry.geomermaids.com</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
+
 <h3>Retention</h3>
 <p>Snapshots age out on a tiered schedule so the archive stays bounded:</p>
 <ul>
