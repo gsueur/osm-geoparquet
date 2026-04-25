@@ -356,10 +356,12 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 
 
 <h2>Try it now</h2>
-<p>Everything below runs against the live URL. <a href="https://duckdb.org/docs/installation/">Install DuckDB</a> (single binary, no daemon, free) and paste a snippet. Only the bytes your query actually needs get fetched from Cloudflare's edge. Two ways to get at the data:</p>
+<div class="callout">
+<p><strong>New to DuckDB ?</strong> Discover our <a href="https://www.geomermaids.com/cookbook/reading/" target="_blank">cookbooks</a> for a gentle introduction to the engine and state of the art queries for GeoParquet v2.0.</p>
+</div>
 <ul>
 <li><strong>Direct access</strong> — you know the region and theme, you want that file. Plain HTTPS, zero setup.</li>
-<li><strong>Catalog-wide queries</strong> — you want "every airport in North America" or "all rail stations in Canada". S3-style wildcards across the whole catalog.</li>
+<li><strong><a href="#catalog-wide-queries">Catalog-wide queries</a></strong> — you want "every airport in North America" or "all rail stations in Canada". S3-style wildcards across the whole catalog.</li>
 </ul>
 
 <h2>Direct access</h2>
@@ -470,36 +472,8 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
 </div>
 <p>Only the row groups your viewport overlaps get fetched. For catalog-wide queries ("every airport in North America"), use DuckDB — QGIS loads one file at a time.</p>
 
-<h2 id="pushdown">Spatial pushdown: what engages row-group pruning today</h2>
-<p>Every file in this catalog is <strong>GeoParquet 2.0</strong> with per-row-group <code>geo_bbox</code> statistics embedded in the Parquet Geometry logical type. In principle, a client can use those stats to skip row groups that do not overlap a query envelope. In practice, DuckDB's support in April 2026 is uneven — here is what I measured on this catalog's NY files.</p>
-<div class="code-block">
-<pre><code>-- Verify stats are present: each row shows a distinct per-row-group bbox
-SELECT row_group_id, geo_bbox
-FROM parquet_metadata(url('US-NY', 'buildings'))
-WHERE path_in_schema = 'geometry'
-LIMIT 3;</code></pre>
-<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
-</div>
-<p>Same cold spatial query, varying by file (geometry type) and function:</p>
-<table>
-<thead><tr><th>File</th><th>Predicate</th><th>Bytes</th><th>GETs</th><th>Cold time</th></tr></thead>
-<tbody>
-<tr><td>pois (Point)</td><td><code>st_intersects_extent(geometry, env)</code></td><td><strong>2.2 MiB</strong></td><td>5</td><td>0.9 s</td></tr>
-<tr><td>pois (Point)</td><td><code>ST_DWithin(geometry, pt, 0.01)</code></td><td><strong>2.2 MiB</strong></td><td>5</td><td>1.3 s</td></tr>
-<tr><td>buildings (MultiPolygon, 413 MB)</td><td><code>ST_Intersects(geometry, env)</code></td><td>345 MiB</td><td>89</td><td>69 s</td></tr>
-<tr><td>buildings (MultiPolygon, 413 MB)</td><td><code>st_intersects_extent(geometry, env)</code></td><td>345 MiB</td><td>89</td><td>65 s</td></tr>
-<tr><td>buildings (MultiPolygon, 413 MB)</td><td><code>st_intersects_extent(geometry, <em>out-of-range</em> env)</code></td><td><strong>256 KiB</strong></td><td>1</td><td>0.5 s</td></tr>
-</tbody>
-</table>
-<p>Takeaways, as of DuckDB 1.5.2 on this catalog:</p>
-<ul>
-<li><strong>Point-geometry files</strong> (<code>pois</code>, <code>aeroways</code>, <code>places</code>, …): spatial pushdown works for <code>st_intersects_extent</code> and <code>ST_DWithin</code>. Selective queries fetch kilobytes, not megabytes.</li>
-<li><strong>MultiPolygon-geometry files</strong> (<code>buildings</code>, <code>water</code>, <code>boundary</code>, <code>land_use</code>): spatial pushdown for selective in-range queries does not yet engage — the planner cannot skip a row group whose MultiPolygon bbox merely overlaps the query. Out-of-range queries still prune the whole file, which is the clean proof the stats themselves are usable; the gap is purely planner-side.</li>
-<li><strong><code>ST_Intersects(geometry, envelope)</code></strong> is not a push-down predicate today on any geometry type. Prefer <code>st_intersects_extent</code> as the cheap pre-filter; pair it with <code>ST_Intersects</code> only when bbox-level overlap is not precise enough.</li>
-</ul>
-<p>If you hit the MultiPolygon gap on a query that must ship today: pre-filter by an attribute (<code>state_iso</code>, <code>addr_postcode</code>, H3 cell) to narrow the search, or load the file once and cache it locally. The gap is a DuckDB planner evolution, not a file limitation — the stats are in place for the day it closes. For deeper detail on the reading side, see the <a href="https://geomermaids.com/cookbook/reading">Reading at scale cookbook</a>.</p>
 
-<h2>Catalog-wide queries</h2>
+<h2 id="catalog-wide-queries">Catalog-wide queries</h2>
 <p>The direct-access examples above all name a specific file. That's perfect when you know the region and theme — but analysts often <em>don't</em>. They want "every airport in North America", "all rail stations in Canada", or "which state has the most wind turbines?". Answering those needs a wildcard across files, and a wildcard needs a directory listing — something plain HTTPS can't do.</p>
 <p>So we run a small read-only S3-compatible endpoint at <code>s3.geomermaids.com</code>, backed by the same bucket. It speaks just enough of the S3 API (<code>ListObjectsV2</code> + ranged <code>GetObject</code>) for DuckDB's <code>httpfs</code> to expand globs and stream byte ranges. No credentials, no signing — anonymous reads only.</p>
 
