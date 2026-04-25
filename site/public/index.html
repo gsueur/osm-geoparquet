@@ -208,15 +208,7 @@ Free daily snapshots of OpenStreetMap data for North America, packaged so you ca
 
 <h2>What is this?</h2>
 
-<p><strong>OpenStreetMap (OSM)</strong> is the world's free, collaborative map — think of it as Wikipedia for cartography and geopatial data. It has every road, building, park, restaurant, subway stop, and hiking trail that anyone has bothered to map. All of it free to use.</p>
-
-<p>The hard part has always been <strong>getting OSM into a form you can analyze</strong>. The raw data is a single giant file (more than 2TB uncompressed for the whole planet according to <a href='https://wiki.openstreetmap.org/wiki/Planet.osm'>the OSM Wiki</a>), in a specialised format, not designed for the kind of queries you'd run in SQL or pandas.</p>
-
 <p>This site publishes that same OSM data in <strong>GeoParquet 2.0</strong> — a modern, open, columnar file format — split by country, by state/province/region, and by <em>theme</em> (buildings, roads, water, etc.). Every file is small enough to use on a laptop, and the format is <strong>cloud-native</strong>: your query engine can read just the columns and rows it needs over HTTP, without downloading the whole file.</p>
-
-<div class="callout">
-<p><strong>Bottom line:</strong> if you want to answer a question like "how many coffee shops are within 500 metres of Times Square?" or "what's the total building footprint of New Jersey?", you can do it in <strong>one SQL query</strong> against a URL. You never store the data locally unless you want to.</p>
-</div>
 
 <h2>Coverage</h2>
 <p>Currently spans three countries — <strong>98 admin regions × 16 themes = 1,568 files</strong> per daily snapshot, roughly 15 GB altogether:</p>
