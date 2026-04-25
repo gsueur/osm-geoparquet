@@ -1,0 +1,34 @@
+// Cloudflare Worker fronting the `parquetry` R2 bucket with a
+// browseable directory listing UI + raw object reads (Range-aware).
+//
+// Sibling Worker to api/ (geomermaids-s3-api). They share the same R2
+// bucket but live on different hostnames so each can claim its own
+// custom domain on the Workers Free plan (1 per Worker).
+//
+//   parquetry.geomermaids.com  →  this Worker (browse + downloads)
+//   s3.geomermaids.com         →  api/ Worker (S3-compatible LIST/GET)
+//
+// Browser hits → HTML directory listing (Accept: text/html).
+// curl / DuckDB-httpfs / rclone / anything else → raw bytes or 404,
+// byte-identical to what R2's public custom domain used to return.
+//
+// Cloudflare dashboard setup:
+//   Root directory:  files/
+//   Custom domain:   parquetry.geomermaids.com  (Workers > Settings > Domains)
+//                    Detach the R2 public custom-domain binding for
+//                    this hostname first; Cloudflare won't bind the
+//                    same hostname to both R2 and a Worker.
+//
+// Deploy (from files/):
+//   npx wrangler deploy
+{
+  "name": "geomermaids-files",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-01",
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "parquetry"
+    }
+  ]
+}
