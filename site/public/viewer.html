@@ -433,11 +433,19 @@
         // overlaps the viewport.
         where = `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
         if (simplify) {
-          // ST_Simplify to half-pixel tolerance, scaled by viewport.
+          // Sub-pixel simplification, scaled by viewport — but capped
+          // hard so it can never exceed ~1 m at the equator. At wide
+          // zooms (whole-state view) half a pixel is 50-100 m, which
+          // is bigger than most buildings; ST_Simplify with that
+          // tolerance collapses them to NULL and our parser skips
+          // them, making features visibly disappear when stage 2
+          // replaces stage 1. With the cap, simplify only ever
+          // removes truly invisible micro-detail.
+          const MAX_TOLERANCE_DEG = 0.00001; // ~1 m at the equator
           const mapEl = document.getElementById('map');
           const widthPx = mapEl.clientWidth || window.innerWidth;
           const degPerPx = (e - w) / Math.max(widthPx, 1);
-          const tolerance = degPerPx * 0.5;
+          const tolerance = Math.min(degPerPx * 0.5, MAX_TOLERANCE_DEG);
           if (Number.isFinite(tolerance) && tolerance > 0) {
             geomExpr = `ST_Simplify(geometry, ${tolerance})`;
           }
