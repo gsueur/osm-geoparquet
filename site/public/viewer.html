@@ -249,6 +249,14 @@
   let viewportTimer = null;
   let lastFeatures = [];
   let pendingAutoLoadUrl = null;
+  // Refresh gate: only fire viewport refreshes after a real user
+  // interaction. Programmatic camera moves (FlyToInterpolator after
+  // inspectFile, page-load fit) emit onViewStateChange events that
+  // would otherwise trigger stage 1 / stage 2 right after the initial
+  // unbounded query — wiping the just-painted full feature set with a
+  // 1500-row subset before stage 2 catches up. Cleared by loadFile,
+  // set by a mousedown / wheel / touchstart listener on the map.
+  let userInteractionSeen = false;
 
   const basemapLayer = () => new TileLayer({
     id: 'basemap',
@@ -627,6 +635,10 @@
     const myToken = queryToken;
     currentUrl = url;
     hasFullFile = false;
+    // Re-arm the user-interaction gate. Without this, loading a second
+    // file in the same session would skip the gate (already true from
+    // the previous file) and refresh during the new file's fly-to.
+    userInteractionSeen = false;
     // Wire up the direct-download link to the file we're loading. Server
     // sends Content-Disposition: attachment via the Worker's R2 metadata
     // pass-through, so the `download` attribute + same-origin isn't
@@ -688,6 +700,10 @@
       console.log('scheduleViewportRefresh: skipping, hasFullFile is true');
       return;
     }
+    if (!userInteractionSeen) {
+      console.log('scheduleViewportRefresh: skipping, no user interaction yet');
+      return;
+    }
     console.log('scheduleViewportRefresh: timer set', { interactionState });
     clearTimeout(viewportTimer);
     viewportTimer = setTimeout(refreshViewport, VIEWPORT_DEBOUNCE_MS);
@@ -745,6 +761,19 @@
       console.error(e);
       setStatus('Viewport query failed: ' + (e.message || e), true);
     }
+  }
+
+  // ---------- User-interaction detection -----------------------------------
+
+  // Real interactions only — captured at the source (mouse / wheel / touch)
+  // so the FlyToInterpolator's synthetic onViewStateChange events can't
+  // flip the gate and trigger a wipe-and-replace right after load.
+  {
+    const mapEl = document.getElementById('map');
+    const markInteracted = () => { userInteractionSeen = true; };
+    ['mousedown', 'wheel', 'touchstart', 'keydown'].forEach((evt) => {
+      mapEl.addEventListener(evt, markInteracted, { capture: true, passive: true });
+    });
   }
 
   // ---------- Wire up controls ---------------------------------------------
