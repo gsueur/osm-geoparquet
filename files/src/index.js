@@ -41,14 +41,49 @@ export default {
   },
 };
 
-async function renderListing(prefix, env) {
-  const list = await env.BUCKET.list({
-    prefix,
-    delimiter: "/",
-    limit: 1000,
-  });
+// R2's delimiter-list scans up to `limit` (max 1000) underlying objects
+// per call, then groups by delimiter. With ~1635 objects under each
+// dated snapshot at the bucket root, a single 1000-limit call only
+// surfaces the first dated dir and truncates — silently dropping the
+// other 7 from the rendered listing. Paginate via cursor so we cover
+// every prefix at this level.
+//
+// Cap pages as a safety net: 50 × 1000 = 50K objects scanned per render,
+// well above the bucket root's ~13K and any deeper level (countries,
+// states, themes are all O(10s)). The 60s page cache amortizes the cost.
+const MAX_LIST_PAGES = 50;
 
-  const folders = (list.delimitedPrefixes || [])
+async function listAllAtPrefix(env, prefix) {
+  const objects = [];
+  const prefixSet = new Set();
+  let cursor;
+  let pages = 0;
+  let lastTruncated = false;
+  while (true) {
+    const r = await env.BUCKET.list({
+      prefix,
+      delimiter: "/",
+      limit: 1000,
+      cursor,
+    });
+    for (const o of r.objects) objects.push(o);
+    for (const p of r.delimitedPrefixes || []) prefixSet.add(p);
+    pages++;
+    lastTruncated = r.truncated;
+    if (!r.truncated || pages >= MAX_LIST_PAGES) break;
+    cursor = r.cursor;
+  }
+  return {
+    objects,
+    delimitedPrefixes: [...prefixSet],
+    truncated: lastTruncated && pages >= MAX_LIST_PAGES,
+  };
+}
+
+async function renderListing(prefix, env) {
+  const list = await listAllAtPrefix(env, prefix);
+
+  const folders = list.delimitedPrefixes
     .map((p) => p.slice(prefix.length))
     .sort(folderCompare);
   const files = list.objects
