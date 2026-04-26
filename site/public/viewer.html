@@ -96,6 +96,21 @@
   }
   .toolbar .btn-link:hover { background: var(--accent); color: white; }
   .toolbar .btn-link[hidden] { display: none; }
+  .toolbar .counter {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--muted);
+    white-space: nowrap;
+    padding: .2rem .5rem;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+  }
+  .toolbar .counter.partial {
+    color: var(--accent);
+    border-color: var(--accent);
+    border-style: solid;
+  }
+  .toolbar .counter[hidden] { display: none; }
 
   #map { flex: 1; position: relative; }
 
@@ -139,6 +154,7 @@
   <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/latest/...">
   <button id="load" disabled>Load</button>
   <a id="download" class="btn-link" download hidden>Download</a>
+  <span id="counter" class="counter" hidden></span>
 </div>
 
 <div id="map">
@@ -176,6 +192,23 @@
   const urlEl = document.getElementById('url');
   const loadBtn = document.getElementById('load');
   const downloadEl = document.getElementById('download');
+  const counterEl = document.getElementById('counter');
+
+  function setCounter(shown, total) {
+    if (shown == null || total == null) {
+      counterEl.hidden = true;
+      return;
+    }
+    const partial = shown < total;
+    counterEl.hidden = false;
+    counterEl.classList.toggle('partial', partial);
+    counterEl.textContent = partial
+      ? `${shown.toLocaleString()} / ${total.toLocaleString()} — zoom in for more`
+      : `${shown.toLocaleString()} features`;
+    counterEl.title = partial
+      ? `Capped at ${MAX_FEATURES.toLocaleString()} features per query. Zoom or pan to load other areas.`
+      : 'All features in the file are loaded.';
+  }
 
   function setStatus(msg, isErr = false) {
     statusEl.className = 'status' + (isErr ? ' err' : '');
@@ -257,6 +290,8 @@
     controller: true,
     views: new MapView({ repeat: true }),
     layers: [basemapLayer()],
+    getCursor: ({ isDragging, isHovering }) =>
+      isDragging ? 'grabbing' : (isHovering ? 'pointer' : 'grab'),
     onLoad: () => {
       // Deck's GL device + first render are ready. Programmatic camera
       // moves before this point are silently dropped (the controller
@@ -475,6 +510,7 @@
       rerender();
 
       const shown = features.length;
+      setCounter(shown, total);
       setStatus(hasFullFile
         ? `Showing all ${shown.toLocaleString()} features.`
         : `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} — pan/zoom to load other areas.`);
@@ -502,6 +538,7 @@
       lastFeatures = features;
       rerender();
       const shown = features.length;
+      setCounter(shown, totalCount);
       setStatus(shown >= MAX_FEATURES
         ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
         : `Showing ${shown.toLocaleString()} features in viewport.`);
