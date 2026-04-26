@@ -145,13 +145,13 @@ function renderListingHtml(prefix, folders, files, truncated) {
     const parent =
       segments.length === 1 ? "/" : "/" + segments.slice(0, -1).join("/") + "/";
     rows.push(
-      `<tr><td><a href="${escapeHtml(parent)}">..</a></td><td></td><td></td></tr>`,
+      `<tr><td><a href="${escapeHtml(parent)}">..</a></td><td></td><td></td><td></td></tr>`,
     );
   }
   for (const f of folders) {
     const href = "/" + prefix + f;
     rows.push(
-      `<tr><td><a href="${escapeHtml(href)}">${escapeHtml(f)}</a></td><td></td><td></td></tr>`,
+      `<tr><td><a href="${escapeHtml(href)}">${escapeHtml(f)}</a></td><td></td><td></td><td></td></tr>`,
     );
   }
   for (const f of files) {
@@ -159,14 +159,15 @@ function renderListingHtml(prefix, folders, files, truncated) {
     // Absolute https URL — the viewer takes ?url=<absolute>, and we're
     // hostname-agnostic so reconstruct from the request origin via window.
     const absUrl = "https://parquetry.geomermaids.com" + href;
-    const viewLink = f.name.endsWith(".parquet")
-      ? ` <a class="view" href="${escapeHtml(VIEWER_BASE + "?url=" + encodeURIComponent(absUrl))}" title="Preview on a map" target="_blank" rel="noopener">view</a>`
+    const viewCell = f.name.endsWith(".parquet")
+      ? `<a class="view" href="${escapeHtml(VIEWER_BASE + "?url=" + encodeURIComponent(absUrl))}" title="Preview on a map" target="_blank" rel="noopener">view</a>`
       : "";
     rows.push(
       `<tr>` +
-        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a>${viewLink}</td>` +
+        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a></td>` +
         `<td class="num">${formatBytes(f.size)}</td>` +
         `<td class="num">${f.modified.toISOString().slice(0, 19).replace("T", " ")}Z</td>` +
+        `<td class="action">${viewCell}</td>` +
         `</tr>`,
     );
   }
@@ -189,7 +190,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `<nav class="crumbs">${crumbs.join(" / ")}</nav>` +
     `</header>` +
     `<table>` +
-    `<thead><tr><th>Name</th><th class="num">Size</th><th class="num">Modified (UTC)</th></tr></thead>` +
+    `<thead><tr><th>Name</th><th class="num">Size</th><th class="num">Modified (UTC)</th><th class="action"></th></tr></thead>` +
     `<tbody>${rows.join("")}</tbody>` +
     `</table>` +
     truncNote +
@@ -219,12 +220,12 @@ const LISTING_CSS = `
   th, td { padding: .25rem .5rem; text-align: left; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
   th { font-weight: 600; opacity: .7; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.action, th.action { text-align: right; white-space: nowrap; width: 1%; }
   a { color: #0a7cff; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .note { opacity: .7; margin-top: 1rem; }
   a.view {
-    margin-left: .5rem;
-    padding: 0 .35rem;
+    padding: 0 .5rem;
     font-size: .78rem;
     border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
     border-radius: 3px;
