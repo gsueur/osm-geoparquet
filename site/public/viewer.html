@@ -338,18 +338,14 @@
     if (bbox) {
       const [w, s, e, n] = bbox;
       if ([w, s, e, n].every(Number.isFinite) && e > w && n > s) {
-        // Explicit bbox-overlap predicate over ST_X/Y extents. This is
-        // independent of st_intersects_extent's pushdown semantics and
-        // works on both the WKB-encoded and native GEOMETRY logical
-        // types. Slightly slower than the dedicated push-down predicate
-        // but guaranteed to actually filter — which st_intersects_extent
-        // was apparently not doing on this DuckDB-WASM build, leaving
-        // every viewport refresh with the same Hilbert prefix as the
-        // initial load (which is why empty zones stayed empty).
-        where = `WHERE ST_XMax(geometry) >= ${w}
-                   AND ST_XMin(geometry) <= ${e}
-                   AND ST_YMax(geometry) >= ${s}
-                   AND ST_YMin(geometry) <= ${n}`;
+        // st_intersects_extent is DuckDB spatial's purpose-built
+        // bbox-overlap predicate — it pushes down to GeoParquet 2.0's
+        // per-row-group bbox statistics, so we only fetch (and decode)
+        // row groups whose bbox actually overlaps the viewport. With
+        // Hilbert-clustered files that's typically <10% of bytes, vs.
+        // the whole file we were pulling with the explicit ST_XMin/Max
+        // form.
+        where = `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
       } else {
         console.warn('fetchFeatures: invalid bbox, querying without filter', bbox);
       }
