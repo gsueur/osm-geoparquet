@@ -711,25 +711,24 @@
 
   async function refreshViewport() {
     if (!currentUrl || hasFullFile) return;
-    // Cancel whatever DuckDB is still chewing on. Without this,
-    // pan/zoom queues up stage 1+2 from the previous gesture in the
-    // worker; on a buildings.parquet that's many seconds of compute
-    // per query, and they pile up faster than they finish — the UI
-    // looks frozen because the worker is saturated.
-    try { await conn.cancelSent(); } catch (_) {}
+    // No cancelSent() here. Earlier we cancelled the in-flight query
+    // on every refresh, but that meant any small nudge during the
+    // 20-30 s stage-2 wait killed stage 2 — the user kept seeing only
+    // stage 1's 5000-row preview ("hangs at 1500"). The queryToken
+    // check below ensures stale results don't render; the worst we
+    // pay for letting old queries drain is some extra worker CPU.
     queryToken++;
     const myToken = queryToken;
     const bbox = viewportBbox();
     console.log('refreshViewport: firing, bbox =', bbox, 'viewState =', viewState);
     setStatus('Loading viewport (preview)…');
     try {
-      // Stage 1: tiny, no-frills query so something paints fast. No
-      // simplify (just emit raw geometry — saves spatial-extension CPU)
-      // and no labels (the tags MAP column is the biggest column in
-      // most theme files; skipping it cuts I/O and ZSTD work massively).
-      // 1500 rows is plenty to give a sense of the area while stage 2
-      // catches up.
-      const STAGE1_LIMIT = 1500;
+      // Stage 1: keep it modest so something paints fast. No simplify
+      // (saves spatial-extension CPU) and no labels (the tags MAP
+      // column is often >50% of file bytes; skipping it cuts I/O and
+      // ZSTD work). 5000 is dense enough to look like real coverage
+      // even if stage 2 is slow.
+      const STAGE1_LIMIT = 5000;
       const t0 = performance.now();
       const quick = await fetchFeatures(currentUrl, bbox, {
         limit: STAGE1_LIMIT,
