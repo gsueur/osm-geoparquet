@@ -307,14 +307,11 @@
     onViewStateChange: ({ viewState: vs, interactionState }) => {
       viewState = vs;
       deckInstance.setProps({ viewState: vs });
-      // Only schedule a refresh once the user is done interacting. Firing
-      // during continuous pan/zoom resets the debounce timer indefinitely
-      // and burns DB queries on intermediate states.
-      const idle = !interactionState ||
-        (!interactionState.isDragging && !interactionState.isPanning &&
-         !interactionState.isRotating && !interactionState.isZooming &&
-         !interactionState.inTransition);
-      if (idle) scheduleViewportRefresh();
+      // Always schedule — the 300ms debounce coalesces rapid-fire events
+      // (mousewheel zoom, drag-pan) into a single refresh after the user
+      // settles. Earlier interactionState gating was too strict and
+      // suppressed legitimate refreshes on wheel zoom.
+      scheduleViewportRefresh(interactionState);
     },
     onClick: () => { tooltipEl.style.display = 'none'; },
     onHover: ({ object, x, y }) => {
@@ -403,10 +400,16 @@
   // ---------- Viewport / bbox helpers --------------------------------------
 
   function viewportBbox() {
+    // Use the map element's actual rendered size — deckInstance.width /
+    // .height aren't public and were always undefined, falling through
+    // to window dimensions which over-fetched (toolbar ate ~60px).
+    const mapEl = document.getElementById('map');
+    const width = mapEl.clientWidth || window.innerWidth;
+    const height = mapEl.clientHeight || window.innerHeight;
     const vp = new WebMercatorViewport({
       ...viewState,
-      width: deckInstance.width || window.innerWidth,
-      height: deckInstance.height || window.innerHeight,
+      width,
+      height,
     });
     const b = vp.getBounds(); // [w, s, e, n]
     return [b[0], b[1], b[2], b[3]];
@@ -528,12 +531,16 @@
     }
   }
 
-  function scheduleViewportRefresh() {
-    if (!currentUrl) return;
+  function scheduleViewportRefresh(interactionState) {
+    if (!currentUrl) {
+      console.log('scheduleViewportRefresh: no currentUrl');
+      return;
+    }
     if (hasFullFile) {
       console.log('scheduleViewportRefresh: skipping, hasFullFile is true');
       return;
     }
+    console.log('scheduleViewportRefresh: timer set', { interactionState });
     clearTimeout(viewportTimer);
     viewportTimer = setTimeout(refreshViewport, VIEWPORT_DEBOUNCE_MS);
   }
@@ -543,10 +550,11 @@
     queryToken++;
     const myToken = queryToken;
     const bbox = viewportBbox();
-    console.log('refreshViewport: querying bbox', bbox);
+    console.log('refreshViewport: firing, bbox =', bbox, 'viewState =', viewState);
     setStatus('Loading viewport…');
     try {
       const features = await fetchFeatures(currentUrl, bbox);
+      console.log('refreshViewport: got', features.length, 'features');
       if (myToken !== queryToken) return;
       lastFeatures = features;
       rerender();
