@@ -215,6 +215,7 @@
   let queryToken = 0;            // monotonic; lets stale responses be ignored
   let viewportTimer = null;
   let lastFeatures = [];
+  let pendingAutoLoadUrl = null;
 
   const basemapLayer = () => new TileLayer({
     id: 'basemap',
@@ -246,6 +247,7 @@
     });
   }
 
+  let deckReady = false;
   const deckInstance = new Deck({
     parent: document.getElementById('map'),
     // Controlled viewState (not initialViewState) — required so programmatic
@@ -255,6 +257,18 @@
     controller: true,
     views: new MapView({ repeat: true }),
     layers: [basemapLayer()],
+    onLoad: () => {
+      // Deck's GL device + first render are ready. Programmatic camera
+      // moves before this point are silently dropped (the controller
+      // hasn't bound to props yet), which is why auto-load worked when
+      // the user clicked Load — by then deck was warm.
+      deckReady = true;
+      if (pendingAutoLoadUrl) {
+        const u = pendingAutoLoadUrl;
+        pendingAutoLoadUrl = null;
+        loadFile(u);
+      }
+    },
     onViewStateChange: ({ viewState: vs }) => {
       viewState = vs;
       deckInstance.setProps({ viewState: vs });
@@ -515,8 +529,19 @@
   loadBtn.addEventListener('click', triggerLoad);
   urlEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') triggerLoad(); });
 
-  // Auto-load whatever's in the URL bar (default or ?url=).
-  if (urlEl.value) triggerLoad();
+  // Auto-load whatever's in the URL bar (default or ?url=). If deck has
+  // already finished its first render (rare given init order), fire now;
+  // otherwise stash the URL for the onLoad callback to pick up.
+  if (urlEl.value) {
+    const u = urlEl.value.trim();
+    if (u) {
+      const next = new URL(location.href);
+      next.searchParams.set('url', u);
+      history.replaceState(null, '', next);
+      if (deckReady) loadFile(u);
+      else pendingAutoLoadUrl = u;
+    }
+  }
 </script>
 </body>
 </html>
