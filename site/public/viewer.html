@@ -280,6 +280,19 @@
     });
   }
 
+  // Throttle progressive rerenders to one per animation frame. Without
+  // this the streaming-fetch loop fires rerender on every batch, which
+  // can land 10+ deck.gl re-layouts per frame on dense files.
+  let rafScheduled = false;
+  function scheduleRender() {
+    if (rafScheduled) return;
+    rafScheduled = true;
+    requestAnimationFrame(() => {
+      rafScheduled = false;
+      rerender();
+    });
+  }
+
   let deckReady = false;
   const deckInstance = new Deck({
     parent: document.getElementById('map'),
@@ -333,7 +346,7 @@
     return u.replace(/'/g, "''");
   }
 
-  async function fetchFeatures(url, bbox) {
+  async function fetchFeatures(url, bbox, { onProgress, shouldContinue } = {}) {
     let where = '';
     let geomExpr = 'geometry';
     if (bbox) {
@@ -346,10 +359,9 @@
         // ST_Simplify to half-pixel tolerance: vertices closer than
         // half a screen pixel collapse, which slashes the volume of
         // coordinate text ST_AsGeoJSON has to emit and JSON.parse has
-        // to read. Tolerance is in degrees (CRS units). Computed from
-        // the viewport's degree-per-pixel ratio so it scales with zoom
-        // — no over-simplification when zoomed in, no useless detail
-        // when zoomed out.
+        // to read. Tolerance is in degrees (CRS units), scaled by the
+        // viewport's degree-per-pixel — no over-simplification when
+        // zoomed in, no useless detail when zoomed out.
         const mapEl = document.getElementById('map');
         const widthPx = mapEl.clientWidth || window.innerWidth;
         const degPerPx = (e - w) / Math.max(widthPx, 1);
@@ -370,14 +382,29 @@
       LIMIT ${MAX_FEATURES}
     `;
     console.log('fetchFeatures SQL:', sql.replace(/\s+/g, ' ').trim());
-    const rows = (await conn.query(sql)).toArray();
-    return rows.map(r => ({
-      type: 'Feature',
-      // DuckDB returns ST_AsGeoJSON as a JSON-typed value; depending on the
-      // binding this surfaces as a string or as an already-parsed object.
-      geometry: typeof r.geom === 'string' ? JSON.parse(r.geom) : r.geom,
-      properties: { label: r.label || '' },
-    }));
+
+    // Stream record batches as DuckDB-WASM produces them. For big files
+    // (MA buildings) DuckDB needs a few seconds to fetch + decompress
+    // the matching row groups; emitting partial results per batch lets
+    // the map fill in progressively instead of staying empty until the
+    // whole query returns.
+    const stream = await conn.send(sql);
+    const features = [];
+    for await (const batch of stream) {
+      if (shouldContinue && !shouldContinue()) break;
+      for (const r of batch.toArray()) {
+        features.push({
+          type: 'Feature',
+          // DuckDB returns ST_AsGeoJSON as a JSON-typed value; the binding
+          // surfaces it as a string or already-parsed object depending on
+          // build.
+          geometry: typeof r.geom === 'string' ? JSON.parse(r.geom) : r.geom,
+          properties: { label: r.label || '' },
+        });
+      }
+      if (onProgress) onProgress(features);
+    }
+    return features;
   }
 
   async function inspectFile(url) {
@@ -532,7 +559,16 @@
       setStatus(`File has ${total.toLocaleString()} ${gk} features. Loading…`);
 
       // Initial query — first MAX features in row order (Hilbert-clustered).
-      const features = await fetchFeatures(url, null);
+      const features = await fetchFeatures(url, null, {
+        shouldContinue: () => myToken === queryToken,
+        onProgress: (partial) => {
+          if (myToken !== queryToken) return;
+          lastFeatures = partial;
+          scheduleRender();
+          setCounter(partial.length, total);
+          setStatus(`Loading… ${partial.length.toLocaleString()} of ${total.toLocaleString()} so far`);
+        },
+      });
       if (myToken !== queryToken) return;
       lastFeatures = features;
       hasFullFile = features.length < MAX_FEATURES;
@@ -578,7 +614,16 @@
     console.log('refreshViewport: firing, bbox =', bbox, 'viewState =', viewState);
     setStatus('Loading viewport…');
     try {
-      const features = await fetchFeatures(currentUrl, bbox);
+      const features = await fetchFeatures(currentUrl, bbox, {
+        shouldContinue: () => myToken === queryToken,
+        onProgress: (partial) => {
+          if (myToken !== queryToken) return;
+          lastFeatures = partial;
+          scheduleRender();
+          setCounter(partial.length, totalCount);
+          setStatus(`Loading viewport… ${partial.length.toLocaleString()} so far`);
+        },
+      });
       console.log('refreshViewport: got', features.length, 'features');
       if (myToken !== queryToken) return;
       lastFeatures = features;
