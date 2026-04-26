@@ -740,22 +740,31 @@
       // Stage 2: full LIMIT, with simplify, still no labels (tooltips
       // off until the user explicitly opts in — the I/O cost isn't
       // worth it for a quick visual check).
-      const t1 = performance.now();
-      const features = await fetchFeatures(currentUrl, bbox, {
-        limit: MAX_FEATURES,
-        simplify: true,
-        withLabels: false,
-        shouldContinue: () => myToken === queryToken,
-      });
-      console.log(`refreshViewport: stage 2 (${features.length} features) in ${Math.round(performance.now() - t1)}ms`);
-      if (myToken !== queryToken) return;
-      lastFeatures = features;
-      rerender();
-      const shown = features.length;
-      setCounter(shown, totalCount);
-      setStatus(shown >= MAX_FEATURES
-        ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
-        : `Showing ${shown.toLocaleString()} features in viewport.`);
+      try {
+        const t1 = performance.now();
+        const features = await fetchFeatures(currentUrl, bbox, {
+          limit: MAX_FEATURES,
+          simplify: true,
+          withLabels: false,
+          shouldContinue: () => myToken === queryToken,
+        });
+        console.log(`refreshViewport: stage 2 (${features.length} features) in ${Math.round(performance.now() - t1)}ms`);
+        if (myToken !== queryToken) return;
+        lastFeatures = features;
+        rerender();
+        const shown = features.length;
+        setCounter(shown, totalCount);
+        setStatus(shown >= MAX_FEATURES
+          ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
+          : `Showing ${shown.toLocaleString()} features in viewport.`);
+      } catch (e2) {
+        // Keep stage 1's preview visible — better a 1500-row sketch
+        // than a blank map. Common stage-2 failure modes are OOM in the
+        // worker on the biggest files and ST_Simplify edge cases.
+        if (myToken !== queryToken) return;
+        console.error('refreshViewport: stage 2 failed, keeping preview:', e2);
+        setStatus(`Preview only (${quick.length.toLocaleString()}) — full detail failed: ${e2.message || e2}`, true);
+      }
     } catch (e) {
       if (myToken !== queryToken) return;
       console.error(e);
