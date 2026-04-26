@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>parquet viewer · geomermaids</title>
+<link rel="canonical" href="https://geoparquet.geomermaids.com/viewer.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="description" content="Quick map preview of any GeoParquet file from parquetry.geomermaids.com — paste a URL, see what's inside.">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --accent: #d2553a;
+    --border: #e5e5e5;
+    --code-bg: #f6f6f4;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414;
+      --fg: #e8e8e8;
+      --muted: #9a9a9a;
+      --accent: #f08a6e;
+      --border: #2e2e2e;
+      --code-bg: #0f0f0f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    display: flex;
+    flex-direction: column;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    padding: .65rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-wrap: wrap;
+  }
+  .toolbar h1 {
+    font-size: .95rem;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+  }
+  .toolbar h1 a { color: inherit; text-decoration: none; }
+  .toolbar h1 a:hover { color: var(--accent); }
+  .toolbar input[type=url] {
+    flex: 1;
+    min-width: 220px;
+    padding: .42rem .6rem;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: .82rem;
+  }
+  .toolbar input:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .toolbar button {
+    padding: .42rem 1rem;
+    background: var(--accent);
+    color: white;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: .88rem;
+    white-space: nowrap;
+  }
+  .toolbar button:hover { filter: brightness(1.08); }
+  .toolbar button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+
+  #map { flex: 1; position: relative; }
+
+  .status {
+    position: absolute;
+    bottom: .9rem;
+    left: .9rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .45rem .7rem;
+    font-size: .82rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    max-width: 380px;
+    pointer-events: none;
+  }
+  .status.err { color: var(--accent); }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .3rem .55rem;
+    font-size: .8rem;
+    font-family: var(--mono);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 10;
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1><a href="/">geomermaids</a> &middot; viewer</h1>
+  <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/latest/...">
+  <button id="load" disabled>Load</button>
+</div>
+
+<div id="map">
+  <div class="status" id="status">Initialising DuckDB-WASM&hellip;</div>
+  <div class="tooltip" id="tooltip" style="display: none"></div>
+</div>
+
+<script type="module">
+  // Single-file GeoParquet viewer.
+  //
+  // Uses DuckDB-WASM + httpfs to read a parquet from parquetry.geomermaids.com
+  // via HTTP Range requests (no full download), filters to the visible viewport
+  // on pan/zoom, and renders with deck.gl. Capped at MAX_FEATURES per query so
+  // the GPU stays smooth on large states.
+
+  import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+
+  // deck.gl ships a single-script UMD bundle — load it as a global.
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/deck.gl@9.3.1/dist.min.js';
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+  const { Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer } = window.deck;
+
+  const DEFAULT_URL = 'https://parquetry.geomermaids.com/latest/country=US/state=US-DC/buildings.parquet';
+  const MAX_FEATURES = 50000;
+  const VIEWPORT_DEBOUNCE_MS = 300;
+  const ACCENT = [210, 85, 58];
+
+  const statusEl = document.getElementById('status');
+  const tooltipEl = document.getElementById('tooltip');
+  const urlEl = document.getElementById('url');
+  const loadBtn = document.getElementById('load');
+
+  function setStatus(msg, isErr = false) {
+    statusEl.className = 'status' + (isErr ? ' err' : '');
+    statusEl.textContent = msg;
+  }
+
+  // ---------- DuckDB-WASM bootstrap ----------------------------------------
+
+  setStatus('Initialising DuckDB-WASM…');
+  const bundles = duckdb.getJsDelivrBundles();
+  const bundle = await duckdb.selectBundle(bundles);
+  const workerUrl = URL.createObjectURL(
+    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+  );
+  const worker = new Worker(workerUrl);
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  URL.revokeObjectURL(workerUrl);
+  const conn = await db.connect();
+  // INSTALL is a no-op when the extension is already bundled; LOAD is what
+  // matters. Spatial isn't bundled in standard releases, so install fetches
+  // it from extensions.duckdb.org (CORS-friendly).
+  await conn.query('INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;');
+
+  loadBtn.disabled = false;
+
+  // ---------- Map setup ----------------------------------------------------
+
+  let viewState = {
+    longitude: -98, latitude: 39, zoom: 3.5,
+    pitch: 0, bearing: 0,
+  };
+  let geomKind = 'point';        // 'point' | 'line' | 'polygon'
+  let totalCount = 0;
+  let hasFullFile = false;       // true when initial query returned < MAX
+  let currentUrl = null;
+  let queryToken = 0;            // monotonic; lets stale responses be ignored
+  let viewportTimer = null;
+  let lastFeatures = [];
+
+  const basemapLayer = () => new TileLayer({
+    id: 'basemap',
+    data: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    minZoom: 0, maxZoom: 19, tileSize: 256,
+    renderSubLayers: ({ tile, ...props }) => {
+      const [[w, s], [e, n]] = tile.boundingBox;
+      return new BitmapLayer(props, { data: null, image: props.data, bounds: [w, s, e, n] });
+    },
+  });
+
+  const featureLayer = (features) => new GeoJsonLayer({
+    id: 'features',
+    data: { type: 'FeatureCollection', features },
+    pickable: true,
+    stroked: true,
+    filled: geomKind === 'polygon',
+    pointRadiusMinPixels: 3,
+    pointRadiusMaxPixels: 7,
+    lineWidthMinPixels: geomKind === 'line' ? 2 : 1,
+    getFillColor: [...ACCENT, 110],
+    getLineColor: [...ACCENT, 230],
+  });
+
+  function rerender() {
+    deckInstance.setProps({
+      viewState,
+      layers: [basemapLayer(), featureLayer(lastFeatures)],
+    });
+  }
+
+  const deckInstance = new Deck({
+    parent: document.getElementById('map'),
+    initialViewState: viewState,
+    controller: true,
+    views: new MapView({ repeat: true }),
+    layers: [basemapLayer()],
+    onViewStateChange: ({ viewState: vs }) => {
+      viewState = vs;
+      deckInstance.setProps({ viewState: vs });
+      scheduleViewportRefresh();
+    },
+    onClick: () => { tooltipEl.style.display = 'none'; },
+    onHover: ({ object, x, y }) => {
+      if (object && object.properties && object.properties.label) {
+        tooltipEl.style.left = (x + 12) + 'px';
+        tooltipEl.style.top = (y + 12) + 'px';
+        tooltipEl.textContent = object.properties.label;
+        tooltipEl.style.display = 'block';
+      } else {
+        tooltipEl.style.display = 'none';
+      }
+    },
+  });
+
+  // ---------- Query helpers ------------------------------------------------
+
+  function escUrl(u) {
+    // Embed the URL safely inside a single-quoted SQL literal.
+    return u.replace(/'/g, "''");
+  }
+
+  async function fetchFeatures(url, bbox) {
+    const where = bbox
+      ? `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${bbox[0]}, ${bbox[1]}, ${bbox[2]}, ${bbox[3]}))`
+      : '';
+    const sql = `
+      SELECT
+        ST_AsGeoJSON(geometry) AS geom,
+        COALESCE(tags['name'], tags['ref'], '') AS label
+      FROM read_parquet('${escUrl(url)}')
+      ${where}
+      LIMIT ${MAX_FEATURES}
+    `;
+    const rows = (await conn.query(sql)).toArray();
+    return rows.map(r => ({
+      type: 'Feature',
+      // DuckDB returns ST_AsGeoJSON as a JSON-typed value; depending on the
+      // binding this surfaces as a string or as an already-parsed object.
+      geometry: typeof r.geom === 'string' ? JSON.parse(r.geom) : r.geom,
+      properties: { label: r.label || '' },
+    }));
+  }
+
+  async function inspectFile(url) {
+    // Total row count (parquet metadata) + geometry kind from one row.
+    const meta = (await conn.query(`
+      SELECT
+        (SELECT count(*) FROM read_parquet('${escUrl(url)}')) AS total,
+        (SELECT ST_GeometryType(geometry) FROM read_parquet('${escUrl(url)}') LIMIT 1) AS gt
+    `)).toArray()[0];
+    const total = Number(meta.total);
+    const gt = String(meta.gt || '').toUpperCase();
+    let kind = 'point';
+    if (gt.includes('POLYGON')) kind = 'polygon';
+    else if (gt.includes('LINE')) kind = 'line';
+    return { total, geomKind: kind };
+  }
+
+  // ---------- Viewport / bbox helpers --------------------------------------
+
+  function viewportBbox() {
+    const vp = new WebMercatorViewport({
+      ...viewState,
+      width: deckInstance.width || window.innerWidth,
+      height: deckInstance.height || window.innerHeight,
+    });
+    const b = vp.getBounds(); // [[w, s], [e, n]]
+    return [b[0][0], b[0][1], b[1][0], b[1][1]];
+  }
+
+  function bboxFromFeatures(features) {
+    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+    for (const f of features) {
+      walkCoords(f.geometry, (x, y) => {
+        if (x < minx) minx = x;
+        if (y < miny) miny = y;
+        if (x > maxx) maxx = x;
+        if (y > maxy) maxy = y;
+      });
+    }
+    return isFinite(minx) ? [minx, miny, maxx, maxy] : null;
+  }
+
+  function walkCoords(g, cb) {
+    if (!g) return;
+    const t = g.type;
+    if (t === 'Point') return cb(g.coordinates[0], g.coordinates[1]);
+    if (t === 'LineString' || t === 'MultiPoint') {
+      for (const c of g.coordinates) cb(c[0], c[1]);
+      return;
+    }
+    if (t === 'Polygon' || t === 'MultiLineString') {
+      for (const r of g.coordinates) for (const c of r) cb(c[0], c[1]);
+      return;
+    }
+    if (t === 'MultiPolygon') {
+      for (const p of g.coordinates) for (const r of p) for (const c of r) cb(c[0], c[1]);
+      return;
+    }
+    if (t === 'GeometryCollection') {
+      for (const sub of g.geometries) walkCoords(sub, cb);
+    }
+  }
+
+  function fitToBbox(bbox) {
+    const [w, s, e, n] = bbox;
+    if (e <= w || n <= s) return;
+    const width = deckInstance.width || window.innerWidth;
+    const height = (deckInstance.height || window.innerHeight) - 60;
+    const tmp = new WebMercatorViewport({ width, height, longitude: 0, latitude: 0, zoom: 0 });
+    const fitted = tmp.fitBounds([[w, s], [e, n]], { padding: 40 });
+    viewState = {
+      longitude: fitted.longitude,
+      latitude: fitted.latitude,
+      zoom: Math.max(0, Math.min(fitted.zoom, 18)),
+      pitch: 0, bearing: 0,
+    };
+  }
+
+  // ---------- Load + viewport workflow -------------------------------------
+
+  async function loadFile(url) {
+    queryToken++;
+    const myToken = queryToken;
+    currentUrl = url;
+    hasFullFile = false;
+    setStatus('Inspecting file…');
+
+    try {
+      const { total, geomKind: gk } = await inspectFile(url);
+      if (myToken !== queryToken) return;
+      totalCount = total;
+      geomKind = gk;
+      setStatus(`File has ${total.toLocaleString()} ${gk} features. Loading…`);
+
+      // Initial query — first MAX features in row order (Hilbert-clustered).
+      const features = await fetchFeatures(url, null);
+      if (myToken !== queryToken) return;
+      lastFeatures = features;
+      hasFullFile = features.length < MAX_FEATURES;
+
+      const bbox = bboxFromFeatures(features);
+      if (bbox) fitToBbox(bbox);
+      rerender();
+
+      const shown = features.length;
+      setStatus(hasFullFile
+        ? `Showing all ${shown.toLocaleString()} features.`
+        : `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} — pan/zoom to load other areas.`);
+    } catch (e) {
+      if (myToken !== queryToken) return;
+      console.error(e);
+      setStatus('Failed: ' + (e.message || e), true);
+    }
+  }
+
+  function scheduleViewportRefresh() {
+    if (!currentUrl || hasFullFile) return;
+    clearTimeout(viewportTimer);
+    viewportTimer = setTimeout(refreshViewport, VIEWPORT_DEBOUNCE_MS);
+  }
+
+  async function refreshViewport() {
+    if (!currentUrl || hasFullFile) return;
+    queryToken++;
+    const myToken = queryToken;
+    setStatus('Loading viewport…');
+    try {
+      const features = await fetchFeatures(currentUrl, viewportBbox());
+      if (myToken !== queryToken) return;
+      lastFeatures = features;
+      rerender();
+      const shown = features.length;
+      setStatus(shown >= MAX_FEATURES
+        ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
+        : `Showing ${shown.toLocaleString()} features in viewport.`);
+    } catch (e) {
+      if (myToken !== queryToken) return;
+      console.error(e);
+      setStatus('Viewport query failed: ' + (e.message || e), true);
+    }
+  }
+
+  // ---------- Wire up controls ---------------------------------------------
+
+  const params = new URLSearchParams(location.search);
+  urlEl.value = params.get('url') || DEFAULT_URL;
+
+  function triggerLoad() {
+    const u = urlEl.value.trim();
+    if (!u) return;
+    const next = new URL(location.href);
+    next.searchParams.set('url', u);
+    history.replaceState(null, '', next);
+    loadFile(u);
+  }
+
+  loadBtn.addEventListener('click', triggerLoad);
+  urlEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') triggerLoad(); });
+
+  // Auto-load whatever's in the URL bar (default or ?url=).
+  if (urlEl.value) triggerLoad();
+</script>
+</body>
+</html>
