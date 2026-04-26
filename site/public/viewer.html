@@ -164,7 +164,7 @@
     s.onerror = reject;
     document.head.appendChild(s);
   });
-  const { Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer } = window.deck;
+  const { Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer, FlyToInterpolator } = window.deck;
 
   const DEFAULT_URL = 'https://parquetry.geomermaids.com/latest/country=US/state=US-DC/buildings.parquet';
   const MAX_FEATURES = 50000;
@@ -390,19 +390,32 @@
     }
   }
 
-  function fitToBbox(bbox) {
+  function fitToBbox(bbox, { animate = true } = {}) {
     const [w, s, e, n] = bbox;
-    if (e <= w || n <= s) return;
-    const width = deckInstance.width || window.innerWidth;
-    const height = (deckInstance.height || window.innerHeight) - 60;
+    if (!(e > w) || !(n > s)) {
+      console.warn('fitToBbox: invalid bbox', bbox);
+      return;
+    }
+    const mapEl = document.getElementById('map');
+    const width = mapEl.clientWidth || window.innerWidth;
+    const height = mapEl.clientHeight || window.innerHeight;
     const tmp = new WebMercatorViewport({ width, height, longitude: 0, latitude: 0, zoom: 0 });
     const fitted = tmp.fitBounds([[w, s], [e, n]], { padding: 40 });
-    viewState = {
+    const next = {
       longitude: fitted.longitude,
       latitude: fitted.latitude,
       zoom: Math.max(0, Math.min(fitted.zoom, 18)),
       pitch: 0, bearing: 0,
     };
+    if (animate) {
+      next.transitionDuration = 600;
+      next.transitionInterpolator = new FlyToInterpolator();
+    }
+    console.log('fitToBbox', { bbox, width, height, next });
+    viewState = next;
+    // Push immediately — don't wait for the next rerender. The transition
+    // interpolator nudges the controller out of any stale internal state.
+    deckInstance.setProps({ viewState });
   }
 
   // ---------- Load + viewport workflow -------------------------------------
@@ -427,12 +440,11 @@
       totalCount = total;
       geomKind = gk;
 
+      console.log('inspectFile result', { total, geomKind: gk, datasetBbox });
+
       // Fit to the full dataset extent before any data lands so the user
       // sees the right region while the feature query is still in flight.
-      if (datasetBbox) {
-        fitToBbox(datasetBbox);
-        deckInstance.setProps({ viewState });
-      }
+      if (datasetBbox) fitToBbox(datasetBbox);
       setStatus(`File has ${total.toLocaleString()} ${gk} features. Loading…`);
 
       // Initial query — first MAX features in row order (Hilbert-clustered).
