@@ -773,16 +773,42 @@
           ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
           : `Showing ${shown.toLocaleString()} features in viewport.`);
       } catch (e2) {
-        // Keep stage 1's preview visible — better a 1500-row sketch
-        // than a blank map. Common stage-2 failure modes are OOM in the
-        // worker on the biggest files and ST_Simplify edge cases.
         if (myToken !== queryToken) return;
-        console.error('refreshViewport: stage 2 failed, keeping preview:', e2);
-        setStatus(`Preview only (${quick.length.toLocaleString()}) — full detail failed: ${e2.message || e2}`, true);
+        console.error('refreshViewport: stage 2 failed, retrying without simplify:', e2);
+        // Retry without ST_Simplify — it's the most likely cause of
+        // a stage-2 failure on the GEOMETRY logical type. Fall through
+        // to keeping the preview if even the unsimplified path errors.
+        try {
+          const features = await fetchFeatures(currentUrl, bbox, {
+            limit: MAX_FEATURES,
+            simplify: false,
+            withLabels: false,
+            shouldContinue: () => myToken === queryToken,
+          });
+          if (myToken !== queryToken) return;
+          lastFeatures = features;
+          rerender();
+          setCounter(features.length, totalCount);
+          setStatus(`Showing ${features.length.toLocaleString()} features (no simplify).`);
+        } catch (e3) {
+          if (myToken !== queryToken) return;
+          console.error('refreshViewport: stage 2 retry also failed:', e3);
+          setStatus(`Preview only (${quick.length.toLocaleString()}) — full detail failed: ${e3.message || e3}`, true);
+        }
       }
     } catch (e) {
       if (myToken !== queryToken) return;
-      console.error(e);
+      // Surface the most useful debug info on the console so the next
+      // "still erroring" can name a SQL/spec mismatch instead of just
+      // pointing at the catch block.
+      console.error('refreshViewport failed:', {
+        message: e.message,
+        stack: e.stack,
+        url: currentUrl,
+        bbox,
+        viewState,
+        error: e,
+      });
       setStatus('Viewport query failed: ' + (e.message || e), true);
     }
   }
