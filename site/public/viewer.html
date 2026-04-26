@@ -307,8 +307,8 @@
       width: deckInstance.width || window.innerWidth,
       height: deckInstance.height || window.innerHeight,
     });
-    const b = vp.getBounds(); // [[w, s], [e, n]]
-    return [b[0][0], b[0][1], b[1][0], b[1][1]];
+    const b = vp.getBounds(); // [w, s, e, n]
+    return [b[0], b[1], b[2], b[3]];
   }
 
   function bboxFromFeatures(features) {
