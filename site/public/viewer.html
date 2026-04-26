@@ -304,10 +304,17 @@
         loadFile(u);
       }
     },
-    onViewStateChange: ({ viewState: vs }) => {
+    onViewStateChange: ({ viewState: vs, interactionState }) => {
       viewState = vs;
       deckInstance.setProps({ viewState: vs });
-      scheduleViewportRefresh();
+      // Only schedule a refresh once the user is done interacting. Firing
+      // during continuous pan/zoom resets the debounce timer indefinitely
+      // and burns DB queries on intermediate states.
+      const idle = !interactionState ||
+        (!interactionState.isDragging && !interactionState.isPanning &&
+         !interactionState.isRotating && !interactionState.isZooming &&
+         !interactionState.inTransition);
+      if (idle) scheduleViewportRefresh();
     },
     onClick: () => { tooltipEl.style.display = 'none'; },
     onHover: ({ object, x, y }) => {
@@ -450,21 +457,21 @@
     const height = mapEl.clientHeight || window.innerHeight;
     const tmp = new WebMercatorViewport({ width, height, longitude: 0, latitude: 0, zoom: 0 });
     const fitted = tmp.fitBounds([[w, s], [e, n]], { padding: 40 });
-    const next = {
+    // Keep local viewState clean (no transition props). Otherwise rerender()
+    // would re-pass them and either retrigger the transition or feed
+    // WebMercatorViewport bogus extras when computing viewportBbox().
+    const clean = {
       longitude: fitted.longitude,
       latitude: fitted.latitude,
       zoom: Math.max(0, Math.min(fitted.zoom, 18)),
       pitch: 0, bearing: 0,
     };
-    if (animate) {
-      next.transitionDuration = 600;
-      next.transitionInterpolator = new FlyToInterpolator();
-    }
-    console.log('fitToBbox', { bbox, width, height, next });
-    viewState = next;
-    // Push immediately — don't wait for the next rerender. The transition
-    // interpolator nudges the controller out of any stale internal state.
-    deckInstance.setProps({ viewState });
+    viewState = clean;
+    const wireVS = animate
+      ? { ...clean, transitionDuration: 600, transitionInterpolator: new FlyToInterpolator() }
+      : clean;
+    console.log('fitToBbox', { bbox, width, height, viewState });
+    deckInstance.setProps({ viewState: wireVS });
   }
 
   // ---------- Load + viewport workflow -------------------------------------
@@ -522,7 +529,11 @@
   }
 
   function scheduleViewportRefresh() {
-    if (!currentUrl || hasFullFile) return;
+    if (!currentUrl) return;
+    if (hasFullFile) {
+      console.log('scheduleViewportRefresh: skipping, hasFullFile is true');
+      return;
+    }
     clearTimeout(viewportTimer);
     viewportTimer = setTimeout(refreshViewport, VIEWPORT_DEBOUNCE_MS);
   }
@@ -531,9 +542,11 @@
     if (!currentUrl || hasFullFile) return;
     queryToken++;
     const myToken = queryToken;
+    const bbox = viewportBbox();
+    console.log('refreshViewport: querying bbox', bbox);
     setStatus('Loading viewport…');
     try {
-      const features = await fetchFeatures(currentUrl, viewportBbox());
+      const features = await fetchFeatures(currentUrl, bbox);
       if (myToken !== queryToken) return;
       lastFeatures = features;
       rerender();
