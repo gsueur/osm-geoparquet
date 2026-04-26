@@ -711,6 +711,12 @@
 
   async function refreshViewport() {
     if (!currentUrl || hasFullFile) return;
+    // Cancel whatever DuckDB is still chewing on. Without this,
+    // pan/zoom queues up stage 1+2 from the previous gesture in the
+    // worker; on a buildings.parquet that's many seconds of compute
+    // per query, and they pile up faster than they finish — the UI
+    // looks frozen because the worker is saturated.
+    try { await conn.cancelSent(); } catch (_) {}
     queryToken++;
     const myToken = queryToken;
     const bbox = viewportBbox();
@@ -723,9 +729,10 @@
       // most theme files; skipping it cuts I/O and ZSTD work massively).
       // 1500 rows is plenty to give a sense of the area while stage 2
       // catches up.
+      const STAGE1_LIMIT = 1500;
       const t0 = performance.now();
       const quick = await fetchFeatures(currentUrl, bbox, {
-        limit: 1500,
+        limit: STAGE1_LIMIT,
         simplify: false,
         withLabels: false,
         shouldContinue: () => myToken === queryToken,
@@ -735,6 +742,15 @@
       lastFeatures = quick;
       rerender();
       setCounter(quick.length, totalCount);
+
+      // Skip stage 2 entirely when stage 1 didn't fill its LIMIT —
+      // there's nothing more to fetch for this viewport, and running
+      // stage 2 just to confirm wastes a multi-second query on the
+      // worker (the hang the user kept hitting).
+      if (quick.length < STAGE1_LIMIT) {
+        setStatus(`Showing ${quick.length.toLocaleString()} features in viewport.`);
+        return;
+      }
       setStatus(`Preview ready (${quick.length.toLocaleString()}). Loading full detail…`);
 
       // Stage 2: full LIMIT, with simplify, still no labels (tooltips
