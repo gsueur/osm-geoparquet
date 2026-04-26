@@ -191,7 +191,10 @@ async function handleObject(key, request, env) {
   if (request.method === "HEAD") {
     const head = await env.BUCKET.head(key);
     if (!head) return new Response("Not Found", { status: 404, headers: corsHeaders() });
-    return new Response(null, { status: 200, headers: objectHeaders(head) });
+    const headers = objectHeaders(head);
+    headers.set("Accept-Ranges", "bytes");
+    headers.set("Content-Length", head.size.toString());
+    return new Response(null, { status: 200, headers });
   }
 
   const rangeHeader = request.headers.get("range");
