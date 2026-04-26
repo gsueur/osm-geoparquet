@@ -248,7 +248,10 @@
 
   const deckInstance = new Deck({
     parent: document.getElementById('map'),
-    initialViewState: viewState,
+    // Controlled viewState (not initialViewState) — required so programmatic
+    // setProps({viewState}) actually moves the camera. With initialViewState
+    // deck.gl owns the viewport internally and ignores later viewState props.
+    viewState,
     controller: true,
     views: new MapView({ repeat: true }),
     layers: [basemapLayer()],
@@ -300,25 +303,29 @@
   }
 
   async function inspectFile(url) {
-    // Total row count, geometry kind, and full dataset extent. The min/max
-    // over ST_X/Y bounds reads only per-row-group bbox statistics in
-    // GeoParquet 2.0 — no full scan.
+    // Total row count, geometry kind, and full dataset extent in one scan.
+    // ST_Extent_Agg returns a BOX_2D struct, which surfaces in JS with
+    // {min_x, min_y, max_x, max_y} (or numeric-indexed fields, depending
+    // on Arrow encoding) — read defensively.
     const meta = (await conn.query(`
       SELECT
-        (SELECT count(*) FROM read_parquet('${escUrl(url)}')) AS total,
-        (SELECT ST_GeometryType(geometry) FROM read_parquet('${escUrl(url)}') LIMIT 1) AS gt,
-        (SELECT min(ST_XMin(geometry)) FROM read_parquet('${escUrl(url)}')) AS xmin,
-        (SELECT min(ST_YMin(geometry)) FROM read_parquet('${escUrl(url)}')) AS ymin,
-        (SELECT max(ST_XMax(geometry)) FROM read_parquet('${escUrl(url)}')) AS xmax,
-        (SELECT max(ST_YMax(geometry)) FROM read_parquet('${escUrl(url)}')) AS ymax
+        count(*) AS total,
+        any_value(ST_GeometryType(geometry)) AS gt,
+        ST_Extent_Agg(geometry) AS extent
+      FROM read_parquet('${escUrl(url)}')
     `)).toArray()[0];
     const total = Number(meta.total);
     const gt = String(meta.gt || '').toUpperCase();
     let kind = 'point';
     if (gt.includes('POLYGON')) kind = 'polygon';
     else if (gt.includes('LINE')) kind = 'line';
-    const bbox = [meta.xmin, meta.ymin, meta.xmax, meta.ymax].map(Number);
-    const validBbox = bbox.every(Number.isFinite) && bbox[2] > bbox[0] && bbox[3] > bbox[1];
+    const ext = meta.extent || {};
+    const xmin = Number(ext.min_x ?? ext['min_x'] ?? ext[0]);
+    const ymin = Number(ext.min_y ?? ext['min_y'] ?? ext[1]);
+    const xmax = Number(ext.max_x ?? ext['max_x'] ?? ext[2]);
+    const ymax = Number(ext.max_y ?? ext['max_y'] ?? ext[3]);
+    const bbox = [xmin, ymin, xmax, ymax];
+    const validBbox = bbox.every(Number.isFinite) && xmax > xmin && ymax > ymin;
     return { total, geomKind: kind, bbox: validBbox ? bbox : null };
   }
 
