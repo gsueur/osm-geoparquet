@@ -303,30 +303,45 @@
   }
 
   async function inspectFile(url) {
-    // Total row count, geometry kind, and full dataset extent in one scan.
-    // ST_Extent_Agg returns a BOX_2D struct, which surfaces in JS with
-    // {min_x, min_y, max_x, max_y} (or numeric-indexed fields, depending
-    // on Arrow encoding) — read defensively.
+    // count(*) + a one-row geometry-type probe. Fast — count(*) on parquet
+    // pulls from row-group metadata, not a full scan.
     const meta = (await conn.query(`
       SELECT
-        count(*) AS total,
-        any_value(ST_GeometryType(geometry)) AS gt,
-        ST_Extent_Agg(geometry) AS extent
-      FROM read_parquet('${escUrl(url)}')
+        (SELECT count(*) FROM read_parquet('${escUrl(url)}')) AS total,
+        (SELECT ST_GeometryType(geometry) FROM read_parquet('${escUrl(url)}') LIMIT 1) AS gt
     `)).toArray()[0];
     const total = Number(meta.total);
     const gt = String(meta.gt || '').toUpperCase();
     let kind = 'point';
     if (gt.includes('POLYGON')) kind = 'polygon';
     else if (gt.includes('LINE')) kind = 'line';
-    const ext = meta.extent || {};
-    const xmin = Number(ext.min_x ?? ext['min_x'] ?? ext[0]);
-    const ymin = Number(ext.min_y ?? ext['min_y'] ?? ext[1]);
-    const xmax = Number(ext.max_x ?? ext['max_x'] ?? ext[2]);
-    const ymax = Number(ext.max_y ?? ext['max_y'] ?? ext[3]);
-    const bbox = [xmin, ymin, xmax, ymax];
-    const validBbox = bbox.every(Number.isFinite) && xmax > xmin && ymax > ymin;
-    return { total, geomKind: kind, bbox: validBbox ? bbox : null };
+
+    // Pull the dataset bbox from the parquet file's GeoParquet `geo`
+    // metadata. This is a JSON blob in the parquet footer kv-metadata —
+    // no scan, no spatial-function eval over the data column. The
+    // GeoParquet 2.0 spec defines columns[<col>].bbox as [xmin, ymin,
+    // xmax, ymax] in the column's CRS (always WGS84 for our files).
+    let bbox = null;
+    try {
+      const md = (await conn.query(`
+        SELECT value FROM parquet_kv_metadata('${escUrl(url)}') WHERE key = 'geo'
+      `)).toArray()[0];
+      if (md && md.value) {
+        // Arrow returns BLOB columns as Uint8Array — decode to UTF-8.
+        const raw = typeof md.value === 'string'
+          ? md.value
+          : new TextDecoder().decode(md.value);
+        const geo = JSON.parse(raw);
+        const col = geo.columns?.[geo.primary_column || 'geometry'];
+        const b = col?.bbox;
+        if (Array.isArray(b) && b.length >= 4 && b.every(Number.isFinite)) {
+          bbox = [b[0], b[1], b[2], b[3]];
+        }
+      }
+    } catch (e) {
+      console.warn('geo metadata read failed; falling back to feature bbox:', e);
+    }
+    return { total, geomKind: kind, bbox };
   }
 
   // ---------- Viewport / bbox helpers --------------------------------------
