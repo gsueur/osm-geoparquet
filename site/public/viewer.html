@@ -83,6 +83,19 @@
   }
   .toolbar button:hover { filter: brightness(1.08); }
   .toolbar button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+  .toolbar .btn-link {
+    padding: .42rem 1rem;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    font-family: var(--sans);
+    font-size: .88rem;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .toolbar .btn-link:hover { background: var(--accent); color: white; }
+  .toolbar .btn-link[hidden] { display: none; }
 
   #map { flex: 1; position: relative; }
 
@@ -125,6 +138,7 @@
   <h1><a href="/">geomermaids</a> &middot; viewer</h1>
   <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/latest/...">
   <button id="load" disabled>Load</button>
+  <a id="download" class="btn-link" download hidden>Download</a>
 </div>
 
 <div id="map">
@@ -161,6 +175,7 @@
   const tooltipEl = document.getElementById('tooltip');
   const urlEl = document.getElementById('url');
   const loadBtn = document.getElementById('load');
+  const downloadEl = document.getElementById('download');
 
   function setStatus(msg, isErr = false) {
     statusEl.className = 'status' + (isErr ? ' err' : '');
@@ -375,6 +390,13 @@
     const myToken = queryToken;
     currentUrl = url;
     hasFullFile = false;
+    // Wire up the direct-download link to the file we're loading. Server
+    // sends Content-Disposition: attachment via the Worker's R2 metadata
+    // pass-through, so the `download` attribute + same-origin isn't
+    // required — the browser saves the file as-is.
+    downloadEl.href = url;
+    downloadEl.setAttribute('download', url.split('/').pop() || 'data.parquet');
+    downloadEl.hidden = false;
     setStatus('Inspecting file…');
 
     try {
