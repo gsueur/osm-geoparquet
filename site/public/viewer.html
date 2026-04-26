@@ -183,7 +183,7 @@
   const { Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer, FlyToInterpolator } = window.deck;
 
   const DEFAULT_URL = 'https://parquetry.geomermaids.com/latest/country=US/state=US-DC/buildings.parquet';
-  const MAX_FEATURES = 50000;
+  const MAX_FEATURES = 20000;
   const VIEWPORT_DEBOUNCE_MS = 300;
   const ACCENT = [210, 85, 58];
 
@@ -335,24 +335,35 @@
 
   async function fetchFeatures(url, bbox) {
     let where = '';
+    let geomExpr = 'geometry';
     if (bbox) {
       const [w, s, e, n] = bbox;
       if ([w, s, e, n].every(Number.isFinite) && e > w && n > s) {
-        // st_intersects_extent is DuckDB spatial's purpose-built
-        // bbox-overlap predicate — it pushes down to GeoParquet 2.0's
-        // per-row-group bbox statistics, so we only fetch (and decode)
-        // row groups whose bbox actually overlaps the viewport. With
-        // Hilbert-clustered files that's typically <10% of bytes, vs.
-        // the whole file we were pulling with the explicit ST_XMin/Max
-        // form.
+        // st_intersects_extent pushes down to GeoParquet 2.0's per-row-
+        // group bbox stats, so we only fetch row groups whose bbox
+        // overlaps the viewport.
         where = `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
+        // ST_Simplify to half-pixel tolerance: vertices closer than
+        // half a screen pixel collapse, which slashes the volume of
+        // coordinate text ST_AsGeoJSON has to emit and JSON.parse has
+        // to read. Tolerance is in degrees (CRS units). Computed from
+        // the viewport's degree-per-pixel ratio so it scales with zoom
+        // — no over-simplification when zoomed in, no useless detail
+        // when zoomed out.
+        const mapEl = document.getElementById('map');
+        const widthPx = mapEl.clientWidth || window.innerWidth;
+        const degPerPx = (e - w) / Math.max(widthPx, 1);
+        const tolerance = degPerPx * 0.5;
+        if (Number.isFinite(tolerance) && tolerance > 0) {
+          geomExpr = `ST_Simplify(geometry, ${tolerance})`;
+        }
       } else {
         console.warn('fetchFeatures: invalid bbox, querying without filter', bbox);
       }
     }
     const sql = `
       SELECT
-        ST_AsGeoJSON(geometry) AS geom,
+        ST_AsGeoJSON(${geomExpr}) AS geom,
         COALESCE(tags['name'], tags['ref'], '') AS label
       FROM read_parquet('${escUrl(url)}')
       ${where}
