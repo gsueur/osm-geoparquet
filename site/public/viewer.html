@@ -285,18 +285,26 @@
   }
 
   async function inspectFile(url) {
-    // Total row count (parquet metadata) + geometry kind from one row.
+    // Total row count, geometry kind, and full dataset extent. The min/max
+    // over ST_X/Y bounds reads only per-row-group bbox statistics in
+    // GeoParquet 2.0 — no full scan.
     const meta = (await conn.query(`
       SELECT
         (SELECT count(*) FROM read_parquet('${escUrl(url)}')) AS total,
-        (SELECT ST_GeometryType(geometry) FROM read_parquet('${escUrl(url)}') LIMIT 1) AS gt
+        (SELECT ST_GeometryType(geometry) FROM read_parquet('${escUrl(url)}') LIMIT 1) AS gt,
+        (SELECT min(ST_XMin(geometry)) FROM read_parquet('${escUrl(url)}')) AS xmin,
+        (SELECT min(ST_YMin(geometry)) FROM read_parquet('${escUrl(url)}')) AS ymin,
+        (SELECT max(ST_XMax(geometry)) FROM read_parquet('${escUrl(url)}')) AS xmax,
+        (SELECT max(ST_YMax(geometry)) FROM read_parquet('${escUrl(url)}')) AS ymax
     `)).toArray()[0];
     const total = Number(meta.total);
     const gt = String(meta.gt || '').toUpperCase();
     let kind = 'point';
     if (gt.includes('POLYGON')) kind = 'polygon';
     else if (gt.includes('LINE')) kind = 'line';
-    return { total, geomKind: kind };
+    const bbox = [meta.xmin, meta.ymin, meta.xmax, meta.ymax].map(Number);
+    const validBbox = bbox.every(Number.isFinite) && bbox[2] > bbox[0] && bbox[3] > bbox[1];
+    return { total, geomKind: kind, bbox: validBbox ? bbox : null };
   }
 
   // ---------- Viewport / bbox helpers --------------------------------------
@@ -370,10 +378,17 @@
     setStatus('Inspecting file…');
 
     try {
-      const { total, geomKind: gk } = await inspectFile(url);
+      const { total, geomKind: gk, bbox: datasetBbox } = await inspectFile(url);
       if (myToken !== queryToken) return;
       totalCount = total;
       geomKind = gk;
+
+      // Fit to the full dataset extent before any data lands so the user
+      // sees the right region while the feature query is still in flight.
+      if (datasetBbox) {
+        fitToBbox(datasetBbox);
+        deckInstance.setProps({ viewState });
+      }
       setStatus(`File has ${total.toLocaleString()} ${gk} features. Loading…`);
 
       // Initial query — first MAX features in row order (Hilbert-clustered).
@@ -382,8 +397,11 @@
       lastFeatures = features;
       hasFullFile = features.length < MAX_FEATURES;
 
-      const bbox = bboxFromFeatures(features);
-      if (bbox) fitToBbox(bbox);
+      // Fall back to feature-derived bbox if metadata didn't give us one.
+      if (!datasetBbox) {
+        const bbox = bboxFromFeatures(features);
+        if (bbox) fitToBbox(bbox);
+      }
       rerender();
 
       const shown = features.length;
