@@ -246,7 +246,10 @@ footer a { color: var(--muted); }
 <p>Every file also ships the full OSM <code>tags</code> as a <code>MAP&lt;VARCHAR, VARCHAR&gt;</code> — anything not promoted to a typed column is still there, just a <code>tags['key']</code> lookup away.</p>
 
 <h2>Browse it like a directory</h2>
-<p>Open <a href="https://parquetry.geomermaids.com/">our File Explorer</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
+<p>Open <a href="https://parquetry.geomermaids.com/">our File Explorer</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it, or hit the adjacent <em>view</em> link to preview it on a map. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
+
+<h2>Preview a file on a map</h2>
+<p>Don't want to write SQL just to see what a file contains? The <a href="/viewer.html">map viewer</a> opens any GeoParquet from the bucket directly in your browser — DuckDB-WASM streams just the row groups your viewport overlaps, deck.gl renders them on a basemap. Paste a URL or click <em>view</em> from the File Explorer; pan and zoom to load other areas. Useful for spot-checking shape, density, and admin-region coverage before committing to a download.</p>
 
 
 
@@ -308,6 +311,7 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
     <div class="browse-actions">
       <button id="br-copy" type="button" title="Copy URL to clipboard">Copy URL</button>
       <a id="br-open" href="#" target="_blank" rel="noopener" class="primary">Open in new tab ↗</a>
+      <a id="br-view" href="#" target="_blank" rel="noopener" title="Preview on a map">View on map ↗</a>
       <span class="browse-copied" id="br-copied" hidden>✓ copied</span>
     </div>
   </div>
@@ -651,6 +655,7 @@ const $o = document.getElementById("br-open");
 const $cp = document.getElementById("br-copy");
 const $ok = document.getElementById("br-copied");
 const $ep = document.getElementById("br-endpoint");
+const $vw = document.getElementById("br-view");
 
 function opt(v, label) { const o = document.createElement("option"); o.value = v; o.textContent = label; return o; }
 
@@ -669,10 +674,15 @@ function rebuild() {
     $o.href = url;
     $o.hidden = false;
     $ep.hidden = true;
+    // Viewer only handles HTTPS URLs (DuckDB-WASM has no S3 endpoint setup).
+    $vw.href = "/viewer.html?url=" + encodeURIComponent(url);
+    $vw.hidden = false;
   } else {
     $o.removeAttribute("href");
     $o.hidden = true;
     $ep.hidden = false;
+    $vw.removeAttribute("href");
+    $vw.hidden = true;
   }
 }
 $modes.forEach(m => m.addEventListener("change", rebuild));

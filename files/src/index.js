@@ -108,6 +108,10 @@ async function renderListing(prefix, env) {
 
 const SITE_TITLE = "North America daily OSM GeoParquet v2.0 files";
 const SITE_SUBTITLE = "Hilbert-sorted, Hive-partitioned by state and theme. Updated nightly.";
+// Public host of the deck.gl-based parquet viewer. Lives on the website
+// (Cloudflare Pages), not this Worker — kept as a constant so the listing
+// can link "view" next to each .parquet entry.
+const VIEWER_BASE = "https://geoparquet.geomermaids.com/viewer.html";
 
 // Sort folders so the most-useful entries surface first:
 //   latest/         → top (most-used)
@@ -152,9 +156,15 @@ function renderListingHtml(prefix, folders, files, truncated) {
   }
   for (const f of files) {
     const href = "/" + prefix + f.name;
+    // Absolute https URL — the viewer takes ?url=<absolute>, and we're
+    // hostname-agnostic so reconstruct from the request origin via window.
+    const absUrl = "https://parquetry.geomermaids.com" + href;
+    const viewLink = f.name.endsWith(".parquet")
+      ? ` <a class="view" href="${escapeHtml(VIEWER_BASE + "?url=" + encodeURIComponent(absUrl))}" title="Preview on a map" target="_blank" rel="noopener">view</a>`
+      : "";
     rows.push(
       `<tr>` +
-        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a></td>` +
+        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a>${viewLink}</td>` +
         `<td class="num">${formatBytes(f.size)}</td>` +
         `<td class="num">${f.modified.toISOString().slice(0, 19).replace("T", " ")}Z</td>` +
         `</tr>`,
@@ -187,7 +197,8 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
     `<a href="/ATTRIBUTION.txt">attribution</a> &middot; ` +
     `<a href="/snapshots.json">snapshots.json</a> &middot; ` +
-    `<a href="https://s3.geomermaids.com">s3 api</a>` +
+    `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
+    `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
     `</footer>` +
     `</body></html>`
   );
@@ -211,6 +222,16 @@ const LISTING_CSS = `
   a { color: #0a7cff; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .note { opacity: .7; margin-top: 1rem; }
+  a.view {
+    margin-left: .5rem;
+    padding: 0 .35rem;
+    font-size: .78rem;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 3px;
+    color: color-mix(in srgb, currentColor 55%, transparent);
+    text-decoration: none;
+  }
+  a.view:hover { color: #0a7cff; border-color: #0a7cff; text-decoration: none; }
   footer { margin-top: 2rem; font-size: .85rem; opacity: .6; }
   footer a { color: inherit; }
 `;
