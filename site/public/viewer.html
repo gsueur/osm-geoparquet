@@ -966,18 +966,14 @@
     try {
       // Stage 1: keep it modest so something paints fast. Always
       // simplify — on dense polygon files, ST_AsWKB without simplify
-      // emits so much vertex bulk that the worker effectively hangs
-      // on the materialization step (empty-message onMessage errors
-      // and 60+ s waits, even with row-group pushdown). With simplify
-      // capped at ~1 m, the visual loss is sub-pixel even at city
-      // zoom; coverage feels identical, query feels instant.
-      // Skip labels (tags MAP column is often >50% of file bytes).
+      // emits so much vertex bulk that the worker effectively hangs.
+      // Labels included so hover tooltips work on the preview.
       const STAGE1_LIMIT = 5000;
       const t0 = performance.now();
       const quick = await fetchFeatures(currentUrl, bbox, {
         limit: STAGE1_LIMIT,
         simplify: true,
-        withLabels: false,
+        withLabels: true,
         shouldContinue: () => myToken === queryToken,
       });
       const quickRows = dataRowCount(quick);
@@ -997,15 +993,13 @@
       }
       setStatus(`Preview ready (${quickRows.toLocaleString()}). Loading full detail…`);
 
-      // Stage 2: full LIMIT, with simplify, still no labels (tooltips
-      // off until the user explicitly opts in — the I/O cost isn't
-      // worth it for a quick visual check).
+      // Stage 2: full LIMIT, with simplify, with labels for hover.
       try {
         const t1 = performance.now();
         const data = await fetchFeatures(currentUrl, bbox, {
           limit: MAX_FEATURES,
           simplify: true,
-          withLabels: false,
+          withLabels: true,
           shouldContinue: () => myToken === queryToken,
         });
         const shown = dataRowCount(data);
