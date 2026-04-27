@@ -960,16 +960,19 @@
     }, 1000);
 
     try {
-      // Stage 1: keep it modest so something paints fast. No simplify
-      // (saves spatial-extension CPU) and no labels (the tags MAP
-      // column is often >50% of file bytes; skipping it cuts I/O and
-      // ZSTD work). 5000 is dense enough to look like real coverage
-      // even if stage 2 is slow.
+      // Stage 1: keep it modest so something paints fast. Always
+      // simplify — on dense polygon files, ST_AsWKB without simplify
+      // emits so much vertex bulk that the worker effectively hangs
+      // on the materialization step (empty-message onMessage errors
+      // and 60+ s waits, even with row-group pushdown). With simplify
+      // capped at ~1 m, the visual loss is sub-pixel even at city
+      // zoom; coverage feels identical, query feels instant.
+      // Skip labels (tags MAP column is often >50% of file bytes).
       const STAGE1_LIMIT = 5000;
       const t0 = performance.now();
       const quick = await fetchFeatures(currentUrl, bbox, {
         limit: STAGE1_LIMIT,
-        simplify: false,
+        simplify: true,
         withLabels: false,
         shouldContinue: () => myToken === queryToken,
       });
@@ -1012,25 +1015,11 @@
           : `Showing ${shown.toLocaleString()} features in viewport.`);
       } catch (e2) {
         if (myToken !== queryToken) return;
-        console.error('refreshViewport: stage 2 failed, retrying without simplify:', e2);
-        try {
-          const data = await fetchFeatures(currentUrl, bbox, {
-            limit: MAX_FEATURES,
-            simplify: false,
-            withLabels: false,
-            shouldContinue: () => myToken === queryToken,
-          });
-          if (myToken !== queryToken) return;
-          lastFeatures = data;
-          rerender();
-          const shown = dataRowCount(data);
-          setCounter(shown, totalCount);
-          setStatus(`Showing ${shown.toLocaleString()} features (no simplify).`);
-        } catch (e3) {
-          if (myToken !== queryToken) return;
-          console.error('refreshViewport: stage 2 retry also failed:', e3);
-          setStatus(`Preview only (${quickRows.toLocaleString()}) — full detail failed: ${e3.message || e3}`, true);
-        }
+        // No "retry without simplify" path — simplify is the thing
+        // making these queries terminate at all on dense polygons.
+        // Falling back to no-simplify just hangs the worker again.
+        console.error('refreshViewport: stage 2 failed:', e2);
+        setStatus(`Preview only (${quickRows.toLocaleString()}) — full detail failed: ${e2.message || e2}`, true);
       }
     } catch (e) {
       if (myToken !== queryToken) return;
