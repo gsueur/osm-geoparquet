@@ -145,6 +145,34 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  .loading {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .9rem 1.3rem;
+    font-size: .9rem;
+    font-family: var(--sans);
+    color: var(--fg);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    pointer-events: none;
+  }
+  .loading[hidden] { display: none; }
+  .loading .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -160,6 +188,10 @@
 <div id="map">
   <div class="status" id="status">Initialising DuckDB-WASM&hellip;</div>
   <div class="tooltip" id="tooltip" style="display: none"></div>
+  <div class="loading" id="loading" hidden>
+    <div class="spinner"></div>
+    <span id="loading-text">Loading…</span>
+  </div>
 </div>
 
 <script type="module">
@@ -196,6 +228,16 @@
   const loadBtn = document.getElementById('load');
   const downloadEl = document.getElementById('download');
   const counterEl = document.getElementById('counter');
+  const loadingEl = document.getElementById('loading');
+  const loadingTextEl = document.getElementById('loading-text');
+
+  function showLoading(text) {
+    loadingTextEl.textContent = text || 'Loading…';
+    loadingEl.hidden = false;
+  }
+  function hideLoading() {
+    loadingEl.hidden = true;
+  }
 
   function setCounter(shown, total) {
     if (shown == null || total == null) {
@@ -938,6 +980,7 @@
     downloadEl.setAttribute('download', url.split('/').pop() || 'data.parquet');
     downloadEl.hidden = false;
     setStatus('Inspecting file…');
+    showLoading('Inspecting file…');
 
     try {
       const { total, geomKind: gk, bbox: datasetBbox } = await inspectFile(url);
@@ -950,7 +993,9 @@
       // Fit to the full dataset extent before any data lands so the user
       // sees the right region while the feature query is still in flight.
       if (datasetBbox) fitToBbox(datasetBbox);
-      setStatus(`File has ${total.toLocaleString()} ${gk} features. Loading…`);
+      const loadMsg = `Loading ${total.toLocaleString()} ${gk} features…`;
+      setStatus(loadMsg);
+      showLoading(loadMsg);
 
       // Initial query — first MAX features in row order (Hilbert-clustered).
       // Labels included here because the file may fit entirely in the
@@ -984,6 +1029,8 @@
       if (myToken !== queryToken) return;
       console.error(e);
       setStatus('Failed: ' + (e.message || e), true);
+    } finally {
+      hideLoading();
     }
   }
 
@@ -1029,6 +1076,7 @@
     lastFeatures = [];
     rerender();
     setStatus('Loading viewport…');
+    showLoading('Loading viewport…');
 
     // Heartbeat so a slow cold-cache fetch (row groups not yet in the
     // DuckDB-WASM buffer cache, 10-60 s on big files) reads as
@@ -1037,7 +1085,9 @@
     const heartbeat = setInterval(() => {
       if (myToken !== queryToken) { clearInterval(heartbeat); return; }
       const secs = Math.round((performance.now() - refreshStart) / 1000);
-      setStatus(`Loading viewport… ${secs}s`);
+      const msg = `Loading viewport… ${secs}s`;
+      setStatus(msg);
+      showLoading(msg);
     }, 1000);
 
     try {
@@ -1074,6 +1124,7 @@
       setStatus('Viewport query failed: ' + (e.message || e), true);
     } finally {
       clearInterval(heartbeat);
+      hideLoading();
     }
   }
 
