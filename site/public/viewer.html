@@ -931,19 +931,18 @@
 
   async function refreshViewport() {
     if (!currentUrl || hasFullFile) return;
-    // Only cancel if a query is actually in flight. cancelSent on an
-    // idle connection produces an empty-message onMessage error that
-    // breaks the very next send. The userInteractionSeen gate ensures
-    // any cancel here is in response to real user input.
+    // Bump the token BEFORE cancelling. The in-flight query's await
+    // will throw "query was canceled" the moment cancelSent lands —
+    // if we incremented after, that throw would catch with myToken
+    // === queryToken (still the old value) and surface as a real
+    // error instead of a silent stale-token early-return.
+    queryToken++;
+    const myToken = queryToken;
     if (inFlightCount > 0) {
       try { await conn.cancelSent(); } catch (_) {}
       // Give the worker a tick to settle before issuing the next send.
-      // Without this small breathing room the next send sometimes still
-      // catches the worker mid-cancel and rejects.
       await new Promise((r) => setTimeout(r, 50));
     }
-    queryToken++;
-    const myToken = queryToken;
     const bbox = viewportBbox();
     console.log('refreshViewport: firing, bbox =', bbox, 'viewState =', viewState);
 
@@ -1020,6 +1019,7 @@
           : `Showing ${shown.toLocaleString()} features in viewport.`);
       } catch (e2) {
         if (myToken !== queryToken) return;
+        if (isCancellation(e2)) return;
         // No "retry without simplify" path — simplify is the thing
         // making these queries terminate at all on dense polygons.
         // Falling back to no-simplify just hangs the worker again.
@@ -1028,9 +1028,7 @@
       }
     } catch (e) {
       if (myToken !== queryToken) return;
-      // Surface the most useful debug info on the console so the next
-      // "still erroring" can name a SQL/spec mismatch instead of just
-      // pointing at the catch block.
+      if (isCancellation(e)) return;
       console.error('refreshViewport failed:', {
         message: e.message,
         stack: e.stack,
@@ -1043,6 +1041,15 @@
     } finally {
       clearInterval(heartbeat);
     }
+  }
+
+  // DuckDB-WASM throws "query was canceled" through onMessage when we
+  // call conn.cancelSent. That's a control-flow signal, not an error
+  // to surface to the user.
+  function isCancellation(e) {
+    if (!e) return false;
+    const msg = String(e.message || e);
+    return msg.includes('query was canceled') || msg.includes('query was cancelled');
   }
 
   // ---------- User-interaction detection -----------------------------------
