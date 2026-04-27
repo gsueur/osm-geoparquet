@@ -1030,94 +1030,41 @@
     rerender();
     setStatus('Loading viewport…');
 
-    // Tile the viewport bbox into a 5x5 grid (25 tiles, LIMIT 1000
-    // per tile = 25 K total, same overall budget as before). The
-    // first tile decompresses the row groups for this area; the
-    // remaining 24 reuse the cache and return in <1 s each on warm
-    // connections. The user sees coverage fill in tile-by-tile from
-    // the viewport center outward — way better perceived
-    // responsiveness than waiting for one big LIMIT 25000 to
-    // materialise all at once.
-    const GRID = 5;
-    const TILE_LIMIT = 1000;
-    const PER_TILE_TIMEOUT_MS = 60_000;
-    const tiles = sortByDistanceFromCenter(tileBbox(bbox, GRID), bbox);
-
-    const acc = (geomKind === 'polygon')
-      ? newPolygonAccumulator()
-      : { features: [], rowCount: 0 };
-
-    // Heartbeat so a slow first tile (cold-cache row group fetch
-    // can be 10-30 s) reads as progress, not a hang.
+    // Heartbeat so a slow cold-cache fetch (row groups not yet in the
+    // DuckDB-WASM buffer cache, 10-60 s on big files) reads as
+    // progress, not a hang.
     const refreshStart = performance.now();
-    let currentTileStart = refreshStart;
-    let completedTiles = 0;
     const heartbeat = setInterval(() => {
       if (myToken !== queryToken) { clearInterval(heartbeat); return; }
-      const total = Math.round((performance.now() - refreshStart) / 1000);
-      const tileSecs = Math.round((performance.now() - currentTileStart) / 1000);
-      const shown = dataRowCount(lastFeatures);
-      setStatus(`Loading… tile ${completedTiles + 1}/${tiles.length} (${tileSecs}s) · ${shown.toLocaleString()} features · ${total}s total`);
+      const secs = Math.round((performance.now() - refreshStart) / 1000);
+      setStatus(`Loading viewport… ${secs}s`);
     }, 1000);
 
     try {
-      for (const tile of tiles) {
-        if (myToken !== queryToken) return;
-        let tileResult;
-        currentTileStart = performance.now();
-        try {
-          // Race the query against a hard timeout. A genuinely stuck
-          // tile (DuckDB-WASM worker race, broken connection) won't
-          // hold up the other 24 — its slot is just left blank.
-          tileResult = await Promise.race([
-            fetchFeatures(currentUrl, tile, {
-              limit: TILE_LIMIT,
-              simplify: true,
-              withLabels: true,
-              // Tolerance scales with the WHOLE viewport, not the
-              // 1/25th tile — so all 25 tiles produce features at
-              // the same on-screen vertex density as the initial
-              // load did at the dataset bbox.
-              simplifyReferenceBbox: bbox,
-              shouldContinue: () => myToken === queryToken,
-            }),
-            new Promise((_, reject) => setTimeout(
-              () => reject(new Error('tile timed out after ' + PER_TILE_TIMEOUT_MS + 'ms')),
-              PER_TILE_TIMEOUT_MS,
-            )),
-          ]);
-        } catch (e) {
-          if (myToken !== queryToken) return;
-          if (isCancellation(e)) return;
-          const tileMs = Math.round(performance.now() - currentTileStart);
-          console.error(`tile ${completedTiles + 1}/${tiles.length} failed after ${tileMs}ms:`, e.message || e);
-          continue;
-        }
-        const tileMs = Math.round(performance.now() - currentTileStart);
-        console.log(`tile ${completedTiles + 1}/${tiles.length} -> ${dataRowCount(tileResult)} rows in ${tileMs}ms`);
-        if (myToken !== queryToken) return;
-
-        if (geomKind === 'polygon') {
-          acc.add(tileResult);
-          lastFeatures = acc.snapshot();
-        } else {
-          if (Array.isArray(tileResult)) {
-            for (const f of tileResult) acc.features.push(f);
-            acc.rowCount += tileResult.rowCount || tileResult.length;
-          }
-          lastFeatures = acc.features;
-          lastFeatures.rowCount = acc.rowCount;
-        }
-        completedTiles++;
-        scheduleRender();
-        const shown = dataRowCount(lastFeatures);
-        setCounter(shown, totalCount);
-        setStatus(`Loading… ${completedTiles}/${tiles.length} tiles, ${shown.toLocaleString()} features`);
-      }
-      const elapsed = Math.round(performance.now() - t0);
-      const finalShown = dataRowCount(lastFeatures);
-      console.log(`refreshViewport: tiled ${tiles.length} tiles, ${finalShown} features in ${elapsed}ms`);
-      setStatus(`Showing ${finalShown.toLocaleString()} features in viewport.`);
+      // Single query for the whole viewport. We tried tiling it into
+      // 25 sub-queries for progressive fill, but on a cold cache the
+      // first tile pays nearly the full I/O cost (it cold-fetches
+      // the row groups for that area) and gives back only 1/25th of
+      // the data — net-net the same wall time with extra plumbing.
+      // Once row groups are in the buffer cache, this query returns
+      // in well under a second.
+      const t0 = performance.now();
+      const data = await fetchFeatures(currentUrl, bbox, {
+        limit: MAX_FEATURES,
+        simplify: true,
+        withLabels: true,
+        simplifyReferenceBbox: bbox,
+        shouldContinue: () => myToken === queryToken,
+      });
+      const shown = dataRowCount(data);
+      console.log(`refreshViewport: ${shown} rows in ${Math.round(performance.now() - t0)}ms`);
+      if (myToken !== queryToken) return;
+      lastFeatures = data;
+      rerender();
+      setCounter(shown, totalCount);
+      setStatus(shown >= MAX_FEATURES
+        ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
+        : `Showing ${shown.toLocaleString()} features in viewport.`);
     } catch (e) {
       if (myToken !== queryToken) return;
       if (isCancellation(e)) return;
@@ -1125,6 +1072,8 @@
         message: e.message, stack: e.stack, url: currentUrl, bbox, viewState, error: e,
       });
       setStatus('Viewport query failed: ' + (e.message || e), true);
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
