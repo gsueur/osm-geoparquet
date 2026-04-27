@@ -180,7 +180,10 @@
     s.onerror = reject;
     document.head.appendChild(s);
   });
-  const { Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer, FlyToInterpolator } = window.deck;
+  const {
+    Deck, MapView, WebMercatorViewport, TileLayer, BitmapLayer, GeoJsonLayer,
+    SolidPolygonLayer, PathLayer, FlyToInterpolator,
+  } = window.deck;
 
   const DEFAULT_URL = 'https://parquetry.geomermaids.com/latest/country=US/state=US-DC/buildings.parquet';
   const MAX_FEATURES = 25000;
@@ -268,24 +271,72 @@
     },
   });
 
-  const featureLayer = (features) => new GeoJsonLayer({
-    id: 'features',
-    data: { type: 'FeatureCollection', features },
-    pickable: true,
-    stroked: true,
-    filled: geomKind === 'polygon',
-    pointRadiusMinPixels: 3,
-    pointRadiusMaxPixels: 7,
-    lineWidthMinPixels: geomKind === 'line' ? 2 : 1,
-    getFillColor: [...ACCENT, 110],
-    getLineColor: [...ACCENT, 230],
-  });
+  // Build the data layer(s) for whatever lastFeatures currently holds:
+  //   binary: { positions, startIndices, length } -> SolidPolygonLayer +
+  //           PathLayer (fill + outline; one shared binary buffer)
+  //   array of GeoJSON features                  -> single GeoJsonLayer
+  //   empty array                                -> nothing rendered
+  function buildDataLayers(data) {
+    if (!data) return [];
+    if (data.binary) {
+      const polyData = {
+        length: data.length,
+        startIndices: data.startIndices,
+        attributes: { getPolygon: { value: data.positions, size: 2 } },
+      };
+      const lineData = {
+        length: data.length,
+        startIndices: data.startIndices,
+        attributes: { getPath: { value: data.positions, size: 2 } },
+      };
+      return [
+        new SolidPolygonLayer({
+          id: 'features-fill',
+          data: polyData,
+          _normalize: false,
+          _windingOrder: 'CCW',
+          pickable: true,
+          filled: true,
+          getFillColor: [...ACCENT, 110],
+        }),
+        new PathLayer({
+          id: 'features-stroke',
+          data: lineData,
+          _pathType: 'open',
+          pickable: false,
+          widthMinPixels: 1,
+          getColor: [...ACCENT, 230],
+        }),
+      ];
+    }
+    if (Array.isArray(data) && data.length > 0) {
+      return [new GeoJsonLayer({
+        id: 'features',
+        data: { type: 'FeatureCollection', features: data },
+        pickable: true,
+        stroked: true,
+        filled: false,
+        pointRadiusMinPixels: 3,
+        pointRadiusMaxPixels: 7,
+        lineWidthMinPixels: geomKind === 'line' ? 2 : 1,
+        getFillColor: [...ACCENT, 110],
+        getLineColor: [...ACCENT, 230],
+      })];
+    }
+    return [];
+  }
 
   function rerender() {
     deckInstance.setProps({
       viewState,
-      layers: [basemapLayer(), featureLayer(lastFeatures)],
+      layers: [basemapLayer(), ...buildDataLayers(lastFeatures)],
     });
+  }
+
+  function dataRowCount(data) {
+    if (!data) return 0;
+    if (data.binary) return data.rowCount;
+    return data.rowCount ?? data.length ?? 0;
   }
 
   // Throttle progressive rerenders to one per animation frame. Without
@@ -335,11 +386,22 @@
       scheduleViewportRefresh(interactionState);
     },
     onClick: () => { tooltipEl.style.display = 'none'; },
-    onHover: ({ object, x, y }) => {
+    onHover: ({ object, index, x, y }) => {
+      // Two paths: GeoJsonLayer hover gives a Feature in `object`;
+      // SolidPolygonLayer (binary mode) hover gives an `index` into
+      // the binary length, which we map back to the input row via
+      // polyToRow → labels.
+      let label = '';
       if (object && object.properties && object.properties.label) {
+        label = object.properties.label;
+      } else if (lastFeatures && lastFeatures.binary && index >= 0) {
+        const rowIdx = lastFeatures.polyToRow[index];
+        if (rowIdx != null) label = lastFeatures.labels[rowIdx] || '';
+      }
+      if (label) {
         tooltipEl.style.left = (x + 12) + 'px';
         tooltipEl.style.top = (y + 12) + 'px';
-        tooltipEl.textContent = object.properties.label;
+        tooltipEl.textContent = label;
         tooltipEl.style.display = 'block';
       } else {
         tooltipEl.style.display = 'none';
@@ -354,13 +416,11 @@
     return u.replace(/'/g, "''");
   }
 
-  // Tiny WKB → GeoJSON-geometry parser, just enough for the OSM types we
-  // emit: Point, LineString, Polygon, MultiPoint, MultiLineString,
-  // MultiPolygon, GeometryCollection. ST_AsWKB on the server is much
-  // faster than ST_AsGeoJSON (binary doubles vs. text formatting) and
-  // produces a smaller payload, so this swap pulls a meaningful chunk
-  // out of the per-feature serialisation cost. 2D only — OSM doesn't
-  // tag Z values and DuckDB drops them through round-trips anyway.
+  // Tiny WKB → GeoJSON-geometry parser for point/line themes (the
+  // simple, low-volume cases). For polygon themes we use a separate
+  // wkbToPolygonRings path that writes directly into typed arrays for
+  // deck.gl's binary attribute API — no GeoJSON Feature objects, no
+  // per-coordinate JS array allocations. 2D only.
   function parseWKB(buf) {
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let pos = 0;
@@ -424,6 +484,115 @@
     return readGeom();
   }
 
+  // Polygon-only WKB walker — emits the outer ring of each Polygon /
+  // MultiPolygon part directly into a flat coords push-array.
+  // Holes are skipped (drawn as part of the outer ring; building
+  // viewers don't show inner courtyards as separate cutouts and the
+  // visual loss is acceptable for the speed gain).
+  // Returns the number of polygon parts pushed (1 for Polygon, N for
+  // MultiPolygon, 0 for non-polygon types or parse failures).
+  function pushPolygonsFromWKB(buf, coordsOut, startIndicesOut) {
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let pos = 0;
+    const le = view.getUint8(pos) === 1; pos += 1;
+    const type = view.getUint32(pos, le); pos += 4;
+    const base = type & 0xff;
+
+    const skipRing = () => {
+      const n = view.getUint32(pos, le); pos += 4;
+      pos += n * 16;
+    };
+    const pushOuterRing = () => {
+      const n = view.getUint32(pos, le); pos += 4;
+      for (let k = 0; k < n; k++) {
+        coordsOut.push(view.getFloat64(pos, le));     pos += 8;
+        coordsOut.push(view.getFloat64(pos, le));     pos += 8;
+      }
+      startIndicesOut.push(coordsOut.length / 2);
+    };
+    const consumePolygon = () => {
+      const numRings = view.getUint32(pos, le); pos += 4;
+      if (numRings === 0) return false;
+      pushOuterRing();
+      for (let k = 1; k < numRings; k++) skipRing();
+      return true;
+    };
+
+    if (base === 3) return consumePolygon() ? 1 : 0;
+    if (base === 6) {
+      const numPolys = view.getUint32(pos, le); pos += 4;
+      let pushed = 0;
+      for (let i = 0; i < numPolys; i++) {
+        pos += 5; // sub-WKB header (endian + type)
+        if (consumePolygon()) pushed++;
+      }
+      return pushed;
+    }
+    return 0;
+  }
+
+  // Build deck.gl-binary-API polygon data from raw {wkb,label} rows.
+  // - positions: Float64Array of [x,y,...] for every outer-ring vertex
+  // - startIndices: Uint32Array marking the start (in vertices) of
+  //   each polygon part — length = polygons + 1
+  // - polyToRow: maps output polygon index → input row index, used by
+  //   the hover handler to find the right label
+  // - labels: parallel to input rows, indexed by polyToRow[i]
+  function buildPolygonBinary(rows) {
+    const coords = [];
+    const startIndices = [0];
+    const polyToRow = [];
+    const labels = new Array(rows.length);
+    let parseErrors = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      labels[i] = r.label || '';
+      if (!r.wkb) continue;
+      let pushed = 0;
+      try {
+        pushed = pushPolygonsFromWKB(r.wkb, coords, startIndices);
+      } catch (e) {
+        parseErrors++;
+        if (parseErrors <= 3) console.warn('polygon WKB parse failed:', e);
+      }
+      for (let p = 0; p < pushed; p++) polyToRow.push(i);
+    }
+    if (parseErrors > 0) console.warn(`polygon WKB parse errors: ${parseErrors}`);
+    return {
+      binary: true,
+      positions: new Float64Array(coords),
+      startIndices: new Uint32Array(startIndices),
+      length: startIndices.length - 1,
+      polyToRow,
+      labels,
+      rowCount: rows.length,
+    };
+  }
+
+  // Same source rows, GeoJSON Feature[] output — used for point and
+  // line themes where the volume is much lower and the binary path
+  // wouldn't pay back the extra layer-juggling.
+  function buildGeoJsonFeatures(rows) {
+    const features = [];
+    let parseErrors = 0;
+    for (const r of rows) {
+      if (!r.wkb) continue;
+      try {
+        features.push({
+          type: 'Feature',
+          geometry: parseWKB(r.wkb),
+          properties: { label: r.label || '' },
+        });
+      } catch (e) {
+        parseErrors++;
+        if (parseErrors <= 3) console.warn('WKB parse failed:', e);
+      }
+    }
+    if (parseErrors > 0) console.warn(`WKB parse errors: ${parseErrors}`);
+    features.rowCount = rows.length;
+    return features;
+  }
+
   async function fetchFeatures(url, bbox, opts = {}) {
     const {
       limit = MAX_FEATURES,
@@ -484,26 +653,19 @@
     // compatibility — when streaming actually lands, this loop benefits
     // automatically without callers changing.
     const stream = await conn.send(sql);
-    const features = [];
-    let parseErrors = 0;
+    const rows = [];
     for await (const batch of stream) {
       if (shouldContinue && !shouldContinue()) break;
-      for (const r of batch.toArray()) {
-        if (!r.wkb) continue;
-        try {
-          features.push({
-            type: 'Feature',
-            geometry: parseWKB(r.wkb),
-            properties: { label: r.label || '' },
-          });
-        } catch (e) {
-          parseErrors++;
-          if (parseErrors <= 3) console.warn('WKB parse failed:', e, r.wkb);
-        }
-      }
+      for (const r of batch.toArray()) rows.push(r);
     }
-    if (parseErrors > 0) console.warn(`WKB parse errors: ${parseErrors}`);
-    return features;
+    // Polygon themes use deck.gl's binary attribute API — coords and
+    // start-indices go in as typed arrays, no per-feature JS object
+    // allocation. Point/line themes stay on the GeoJsonLayer path
+    // since their volume is low and the binary tradeoffs aren't
+    // worth the extra layer plumbing.
+    return geomKind === 'polygon'
+      ? buildPolygonBinary(rows)
+      : buildGeoJsonFeatures(rows);
   }
 
   async function inspectFile(url) {
@@ -577,6 +739,27 @@
       });
     }
     return isFinite(minx) ? [minx, miny, maxx, maxy] : null;
+  }
+
+  function bboxFromBinary(d) {
+    if (!d || !d.positions) return null;
+    const p = d.positions;
+    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+    for (let i = 0; i < p.length; i += 2) {
+      const x = p[i], y = p[i + 1];
+      if (x < minx) minx = x;
+      if (y < miny) miny = y;
+      if (x > maxx) maxx = x;
+      if (y > maxy) maxy = y;
+    }
+    return isFinite(minx) ? [minx, miny, maxx, maxy] : null;
+  }
+
+  function bboxFromData(d) {
+    if (!d) return null;
+    if (d.binary) return bboxFromBinary(d);
+    if (Array.isArray(d) && d.length > 0) return bboxFromFeatures(d);
+    return null;
   }
 
   function walkCoords(g, cb) {
@@ -664,22 +847,22 @@
       // Initial query — first MAX features in row order (Hilbert-clustered).
       // Labels included here because the file may fit entirely in the
       // initial query; if it does, hover tooltips work without a refetch.
-      const features = await fetchFeatures(url, null, {
+      const data = await fetchFeatures(url, null, {
         withLabels: true,
         shouldContinue: () => myToken === queryToken,
       });
       if (myToken !== queryToken) return;
-      lastFeatures = features;
-      hasFullFile = features.length < MAX_FEATURES;
+      lastFeatures = data;
+      const shown = dataRowCount(data);
+      hasFullFile = shown < MAX_FEATURES;
 
-      // Fall back to feature-derived bbox if metadata didn't give us one.
+      // Fall back to data-derived bbox if metadata didn't give us one.
       if (!datasetBbox) {
-        const bbox = bboxFromFeatures(features);
+        const bbox = bboxFromData(data);
         if (bbox) fitToBbox(bbox);
       }
       rerender();
 
-      const shown = features.length;
       setCounter(shown, total);
       setStatus(hasFullFile
         ? `Showing all ${shown.toLocaleString()} features.`
@@ -736,38 +919,39 @@
         withLabels: false,
         shouldContinue: () => myToken === queryToken,
       });
-      console.log(`refreshViewport: stage 1 (${quick.length} features) in ${Math.round(performance.now() - t0)}ms`);
+      const quickRows = dataRowCount(quick);
+      console.log(`refreshViewport: stage 1 (${quickRows} rows) in ${Math.round(performance.now() - t0)}ms`);
       if (myToken !== queryToken) return;
       lastFeatures = quick;
       rerender();
-      setCounter(quick.length, totalCount);
+      setCounter(quickRows, totalCount);
 
       // Skip stage 2 entirely when stage 1 didn't fill its LIMIT —
       // there's nothing more to fetch for this viewport, and running
       // stage 2 just to confirm wastes a multi-second query on the
       // worker (the hang the user kept hitting).
-      if (quick.length < STAGE1_LIMIT) {
-        setStatus(`Showing ${quick.length.toLocaleString()} features in viewport.`);
+      if (quickRows < STAGE1_LIMIT) {
+        setStatus(`Showing ${quickRows.toLocaleString()} features in viewport.`);
         return;
       }
-      setStatus(`Preview ready (${quick.length.toLocaleString()}). Loading full detail…`);
+      setStatus(`Preview ready (${quickRows.toLocaleString()}). Loading full detail…`);
 
       // Stage 2: full LIMIT, with simplify, still no labels (tooltips
       // off until the user explicitly opts in — the I/O cost isn't
       // worth it for a quick visual check).
       try {
         const t1 = performance.now();
-        const features = await fetchFeatures(currentUrl, bbox, {
+        const data = await fetchFeatures(currentUrl, bbox, {
           limit: MAX_FEATURES,
           simplify: true,
           withLabels: false,
           shouldContinue: () => myToken === queryToken,
         });
-        console.log(`refreshViewport: stage 2 (${features.length} features) in ${Math.round(performance.now() - t1)}ms`);
+        const shown = dataRowCount(data);
+        console.log(`refreshViewport: stage 2 (${shown} rows) in ${Math.round(performance.now() - t1)}ms`);
         if (myToken !== queryToken) return;
-        lastFeatures = features;
+        lastFeatures = data;
         rerender();
-        const shown = features.length;
         setCounter(shown, totalCount);
         setStatus(shown >= MAX_FEATURES
           ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
@@ -775,25 +959,23 @@
       } catch (e2) {
         if (myToken !== queryToken) return;
         console.error('refreshViewport: stage 2 failed, retrying without simplify:', e2);
-        // Retry without ST_Simplify — it's the most likely cause of
-        // a stage-2 failure on the GEOMETRY logical type. Fall through
-        // to keeping the preview if even the unsimplified path errors.
         try {
-          const features = await fetchFeatures(currentUrl, bbox, {
+          const data = await fetchFeatures(currentUrl, bbox, {
             limit: MAX_FEATURES,
             simplify: false,
             withLabels: false,
             shouldContinue: () => myToken === queryToken,
           });
           if (myToken !== queryToken) return;
-          lastFeatures = features;
+          lastFeatures = data;
           rerender();
-          setCounter(features.length, totalCount);
-          setStatus(`Showing ${features.length.toLocaleString()} features (no simplify).`);
+          const shown = dataRowCount(data);
+          setCounter(shown, totalCount);
+          setStatus(`Showing ${shown.toLocaleString()} features (no simplify).`);
         } catch (e3) {
           if (myToken !== queryToken) return;
           console.error('refreshViewport: stage 2 retry also failed:', e3);
-          setStatus(`Preview only (${quick.length.toLocaleString()}) — full detail failed: ${e3.message || e3}`, true);
+          setStatus(`Preview only (${quickRows.toLocaleString()}) — full detail failed: ${e3.message || e3}`, true);
         }
       }
     } catch (e) {
