@@ -598,9 +598,11 @@
     return features;
   }
 
-  // Tolerance in degrees: <=1m at the equator. Bigger collapses small
-  // buildings to NULL on the new GEOMETRY logical type.
-  const MAX_SIMPLIFY_TOLERANCE_DEG = 0.00001;
+  // Cap at ~5 m (0.00005 deg). Average OSM buildings are 10-30 m, so
+  // a 5 m tolerance trims a vertex or two off complex shapes but
+  // never collapses a whole building to NULL. Anything larger and
+  // sub-5-m buildings start vanishing.
+  const MAX_SIMPLIFY_TOLERANCE_DEG = 0.00005;
 
   function simplifyToleranceFor(bbox) {
     const [w, , e] = bbox;
@@ -608,7 +610,10 @@
     const mapEl = document.getElementById('map');
     const widthPx = mapEl.clientWidth || window.innerWidth;
     const degPerPx = (e - w) / Math.max(widthPx, 1);
-    return Math.min(degPerPx * 0.5, MAX_SIMPLIFY_TOLERANCE_DEG);
+    // One full screen pixel — anything finer than that is invisible
+    // at the current zoom anyway, so dropping it costs nothing
+    // visually and saves real bytes through ST_AsWKB.
+    return Math.min(degPerPx, MAX_SIMPLIFY_TOLERANCE_DEG);
   }
 
   async function fetchFeatures(url, bbox, opts = {}) {
