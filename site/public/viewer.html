@@ -252,6 +252,11 @@
   let viewportTimer = null;
   let lastFeatures = [];
   let pendingAutoLoadUrl = null;
+  // Number of queries currently in flight against the DuckDB worker.
+  // We only call conn.cancelSent() when this is > 0; cancelling on an
+  // idle connection puts the worker in a state where the very next
+  // send rejects with an empty-message onMessage error.
+  let inFlightCount = 0;
   // Refresh gate: only fire viewport refreshes after a real user
   // interaction. Programmatic camera moves (FlyToInterpolator after
   // inspectFile, page-load fit) emit onViewStateChange events that
@@ -663,11 +668,22 @@
     // the result before yielding batches in 1.32. Kept for forward-
     // compatibility — when streaming actually lands, this loop benefits
     // automatically without callers changing.
-    const stream = await conn.send(sql);
+    inFlightCount++;
+    let stream;
+    try {
+      stream = await conn.send(sql);
+    } catch (e) {
+      inFlightCount--;
+      throw e;
+    }
     const rows = [];
-    for await (const batch of stream) {
-      if (shouldContinue && !shouldContinue()) break;
-      for (const r of batch.toArray()) rows.push(r);
+    try {
+      for await (const batch of stream) {
+        if (shouldContinue && !shouldContinue()) break;
+        for (const r of batch.toArray()) rows.push(r);
+      }
+    } finally {
+      inFlightCount--;
     }
     // Polygon themes use deck.gl's binary attribute API — coords and
     // start-indices go in as typed arrays, no per-feature JS object
@@ -910,14 +926,17 @@
 
   async function refreshViewport() {
     if (!currentUrl || hasFullFile) return;
-    // Cancel whatever's still running. Without this, panning around
-    // queues stage 1 + stage 2 from each gesture in the worker; on
-    // big files (MA buildings, NY State) each query is many seconds
-    // and the queue fills faster than it drains — the UI looks frozen
-    // because the worker is saturated. The userInteractionSeen gate
-    // already prevents fly-to / synthetic events from triggering a
-    // refresh, so any cancel here is in response to real interaction.
-    try { await conn.cancelSent(); } catch (_) {}
+    // Only cancel if a query is actually in flight. cancelSent on an
+    // idle connection produces an empty-message onMessage error that
+    // breaks the very next send. The userInteractionSeen gate ensures
+    // any cancel here is in response to real user input.
+    if (inFlightCount > 0) {
+      try { await conn.cancelSent(); } catch (_) {}
+      // Give the worker a tick to settle before issuing the next send.
+      // Without this small breathing room the next send sometimes still
+      // catches the worker mid-cancel and rejects.
+      await new Promise((r) => setTimeout(r, 50));
+    }
     queryToken++;
     const myToken = queryToken;
     const bbox = viewportBbox();
