@@ -1043,13 +1043,22 @@
     }
   }
 
-  // DuckDB-WASM throws "query was canceled" through onMessage when we
-  // call conn.cancelSent. That's a control-flow signal, not an error
-  // to surface to the user.
+  // DuckDB-WASM surfaces a cancelled query in two ways from its
+  // worker bridge:
+  //   1. An Error with message "query was canceled" — the happy path.
+  //   2. An Error with EMPTY message but stack pointing at j.onMessage
+  //      — same root cause, different code path inside the worker
+  //      (race between cancelSent and the next stream batch).
+  // Real SQL errors always come back with a non-empty message
+  // ("Catalog Error", "Binder Error", "IO Error", etc.), so an empty
+  // message + j.onMessage stack is reliably a cancellation we want
+  // to swallow.
   function isCancellation(e) {
     if (!e) return false;
-    const msg = String(e.message || e);
-    return msg.includes('query was canceled') || msg.includes('query was cancelled');
+    const msg = String(e.message || '');
+    if (msg.includes('query was canceled') || msg.includes('query was cancelled')) return true;
+    if (!msg && String(e.stack || '').includes('j.onMessage')) return true;
+    return false;
   }
 
   // ---------- User-interaction detection -----------------------------------
