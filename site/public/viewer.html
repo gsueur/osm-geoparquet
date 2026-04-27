@@ -638,15 +638,16 @@
         console.warn('fetchFeatures: invalid bbox, querying without filter', bbox);
       }
     }
-    // Simplify scales tolerance to whatever bbox we're rendering at.
-    // For viewport queries that's the WHERE bbox; for unbounded
-    // initial loads the caller passes simplifyReferenceBbox (the
-    // dataset extent we just fitted to). With either reference we
-    // don't ship microscopic vertex detail the user can't possibly
-    // see — slashes ST_AsWKB output volume + the per-feature CPU on
-    // the JS-side WKB walker.
+    // Simplify scales tolerance to the on-screen pixel-per-degree of
+    // whatever the user is actually viewing. simplifyReferenceBbox
+    // is preferred over the WHERE bbox: when we tile a viewport into
+    // 25 sub-bboxes, each tile is 1/5 of the viewport, so using the
+    // tile bbox would compute a tolerance ~5x finer than necessary
+    // and we'd ship 5x as much vertex detail the user can't see.
+    // Initial unbounded loads pass datasetBbox; tile queries pass
+    // the viewport bbox.
     if (simplify) {
-      const ref = bbox || simplifyReferenceBbox;
+      const ref = simplifyReferenceBbox || bbox;
       if (ref) {
         const tolerance = simplifyToleranceFor(ref);
         if (tolerance > 0) {
@@ -1056,6 +1057,11 @@
             limit: TILE_LIMIT,
             simplify: true,
             withLabels: true,
+            // Tolerance scales with the WHOLE viewport, not the
+            // 1/25th tile — so all 25 tiles produce features at
+            // the same on-screen vertex density as the initial
+            // load did at the dataset bbox.
+            simplifyReferenceBbox: bbox,
             shouldContinue: () => myToken === queryToken,
           });
         } catch (e) {
