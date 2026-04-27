@@ -796,6 +796,79 @@
     return null;
   }
 
+  // Subdivide a viewport bbox into a GRID×GRID array of tile bboxes.
+  function tileBbox(bbox, grid) {
+    const [w, s, e, n] = bbox;
+    const dx = (e - w) / grid;
+    const dy = (n - s) / grid;
+    const tiles = [];
+    for (let j = 0; j < grid; j++) {
+      const ts = s + j * dy;
+      const tn = (j === grid - 1) ? n : s + (j + 1) * dy;
+      for (let i = 0; i < grid; i++) {
+        const tw = w + i * dx;
+        const te = (i === grid - 1) ? e : w + (i + 1) * dx;
+        tiles.push([tw, ts, te, tn]);
+      }
+    }
+    return tiles;
+  }
+
+  // Sort by Euclidean distance from the viewport center so the user
+  // sees the tile under their cursor / the area they were pointing at
+  // fill in first, then the surrounding ring, etc.
+  function sortByDistanceFromCenter(tiles, bbox) {
+    const cx = (bbox[0] + bbox[2]) / 2;
+    const cy = (bbox[1] + bbox[3]) / 2;
+    return tiles.slice().sort((a, b) => {
+      const ax = (a[0] + a[2]) / 2 - cx, ay = (a[1] + a[3]) / 2 - cy;
+      const bx = (b[0] + b[2]) / 2 - cx, by = (b[1] + b[3]) / 2 - cy;
+      return (ax * ax + ay * ay) - (bx * bx + by * by);
+    });
+  }
+
+  // Incremental builder for the binary-polygon data shape. Append
+  // a tile's binary result, snapshot to typed arrays whenever the
+  // map needs to render. Snapshot allocates new typed arrays each
+  // time — wasteful in absolute terms but a 5 MB allocation 25
+  // times during a refresh is invisible in practice.
+  function newPolygonAccumulator() {
+    return {
+      positions: [],
+      startIndices: [0],
+      polyToRow: [],
+      labels: [],
+      add(binary) {
+        if (!binary || !binary.binary) return;
+        const coordOffset = this.positions.length / 2;
+        const labelOffset = this.labels.length;
+        for (let i = 0; i < binary.positions.length; i++) {
+          this.positions.push(binary.positions[i]);
+        }
+        for (let i = 1; i < binary.startIndices.length; i++) {
+          this.startIndices.push(binary.startIndices[i] + coordOffset);
+        }
+        for (let i = 0; i < binary.polyToRow.length; i++) {
+          this.polyToRow.push(binary.polyToRow[i] + labelOffset);
+        }
+        for (let i = 0; i < binary.labels.length; i++) {
+          this.labels.push(binary.labels[i]);
+        }
+      },
+      snapshot() {
+        return {
+          binary: true,
+          positions: new Float64Array(this.positions),
+          startIndices: new Uint32Array(this.startIndices),
+          length: this.startIndices.length - 1,
+          polyToRow: this.polyToRow.slice(),
+          labels: this.labels.slice(),
+          rowCount: this.labels.length,
+        };
+      },
+    };
+  }
+
   function walkCoords(g, cb) {
     if (!g) return;
     const t = g.type;
@@ -954,88 +1027,73 @@
     // can't tell whether anything is happening.
     lastFeatures = [];
     rerender();
-    setStatus('Loading viewport (preview)…');
+    setStatus('Loading viewport…');
 
-    // Heartbeat so the user sees the elapsed time tick up — looks like
-    // progress, reads less like a hang.
-    const refreshStart = performance.now();
-    const heartbeat = setInterval(() => {
-      if (myToken !== queryToken) { clearInterval(heartbeat); return; }
-      const secs = Math.round((performance.now() - refreshStart) / 1000);
-      setStatus(`Loading viewport (preview)… ${secs}s`);
-    }, 1000);
+    // Tile the viewport bbox into a 5x5 grid (25 tiles, LIMIT 1000
+    // per tile = 25 K total, same overall budget as before). The
+    // first tile decompresses the row groups for this area; the
+    // remaining 24 reuse the cache and return in <1 s each on warm
+    // connections. The user sees coverage fill in tile-by-tile from
+    // the viewport center outward — way better perceived
+    // responsiveness than waiting for one big LIMIT 25000 to
+    // materialise all at once.
+    const GRID = 5;
+    const TILE_LIMIT = 1000;
+    const tiles = sortByDistanceFromCenter(tileBbox(bbox, GRID), bbox);
+
+    const acc = (geomKind === 'polygon')
+      ? newPolygonAccumulator()
+      : { features: [], rowCount: 0 };
 
     try {
-      // Stage 1: keep it modest so something paints fast. Always
-      // simplify — on dense polygon files, ST_AsWKB without simplify
-      // emits so much vertex bulk that the worker effectively hangs.
-      // Labels included so hover tooltips work on the preview.
-      const STAGE1_LIMIT = 5000;
       const t0 = performance.now();
-      const quick = await fetchFeatures(currentUrl, bbox, {
-        limit: STAGE1_LIMIT,
-        simplify: true,
-        withLabels: true,
-        shouldContinue: () => myToken === queryToken,
-      });
-      const quickRows = dataRowCount(quick);
-      console.log(`refreshViewport: stage 1 (${quickRows} rows) in ${Math.round(performance.now() - t0)}ms`);
-      if (myToken !== queryToken) return;
-      lastFeatures = quick;
-      rerender();
-      setCounter(quickRows, totalCount);
-
-      // Skip stage 2 entirely when stage 1 didn't fill its LIMIT —
-      // there's nothing more to fetch for this viewport, and running
-      // stage 2 just to confirm wastes a multi-second query on the
-      // worker (the hang the user kept hitting).
-      if (quickRows < STAGE1_LIMIT) {
-        setStatus(`Showing ${quickRows.toLocaleString()} features in viewport.`);
-        return;
-      }
-      setStatus(`Preview ready (${quickRows.toLocaleString()}). Loading full detail…`);
-
-      // Stage 2: full LIMIT, with simplify, with labels for hover.
-      try {
-        const t1 = performance.now();
-        const data = await fetchFeatures(currentUrl, bbox, {
-          limit: MAX_FEATURES,
-          simplify: true,
-          withLabels: true,
-          shouldContinue: () => myToken === queryToken,
-        });
-        const shown = dataRowCount(data);
-        console.log(`refreshViewport: stage 2 (${shown} rows) in ${Math.round(performance.now() - t1)}ms`);
+      let completedTiles = 0;
+      for (const tile of tiles) {
         if (myToken !== queryToken) return;
-        lastFeatures = data;
-        rerender();
+        let tileResult;
+        try {
+          tileResult = await fetchFeatures(currentUrl, tile, {
+            limit: TILE_LIMIT,
+            simplify: true,
+            withLabels: true,
+            shouldContinue: () => myToken === queryToken,
+          });
+        } catch (e) {
+          if (myToken !== queryToken) return;
+          if (isCancellation(e)) return;
+          console.error('tile query failed (continuing):', e);
+          continue;
+        }
+        if (myToken !== queryToken) return;
+
+        if (geomKind === 'polygon') {
+          acc.add(tileResult);
+          lastFeatures = acc.snapshot();
+        } else {
+          if (Array.isArray(tileResult)) {
+            for (const f of tileResult) acc.features.push(f);
+            acc.rowCount += tileResult.rowCount || tileResult.length;
+          }
+          lastFeatures = acc.features;
+          lastFeatures.rowCount = acc.rowCount;
+        }
+        completedTiles++;
+        scheduleRender();
+        const shown = dataRowCount(lastFeatures);
         setCounter(shown, totalCount);
-        setStatus(shown >= MAX_FEATURES
-          ? `Showing ${shown.toLocaleString()} of ${totalCount.toLocaleString()} — zoom in further to see more.`
-          : `Showing ${shown.toLocaleString()} features in viewport.`);
-      } catch (e2) {
-        if (myToken !== queryToken) return;
-        if (isCancellation(e2)) return;
-        // No "retry without simplify" path — simplify is the thing
-        // making these queries terminate at all on dense polygons.
-        // Falling back to no-simplify just hangs the worker again.
-        console.error('refreshViewport: stage 2 failed:', e2);
-        setStatus(`Preview only (${quickRows.toLocaleString()}) — full detail failed: ${e2.message || e2}`, true);
+        setStatus(`Loading… ${completedTiles}/${tiles.length} tiles, ${shown.toLocaleString()} features`);
       }
+      const elapsed = Math.round(performance.now() - t0);
+      const finalShown = dataRowCount(lastFeatures);
+      console.log(`refreshViewport: tiled ${tiles.length} tiles, ${finalShown} features in ${elapsed}ms`);
+      setStatus(`Showing ${finalShown.toLocaleString()} features in viewport.`);
     } catch (e) {
       if (myToken !== queryToken) return;
       if (isCancellation(e)) return;
       console.error('refreshViewport failed:', {
-        message: e.message,
-        stack: e.stack,
-        url: currentUrl,
-        bbox,
-        viewState,
-        error: e,
+        message: e.message, stack: e.stack, url: currentUrl, bbox, viewState, error: e,
       });
       setStatus('Viewport query failed: ' + (e.message || e), true);
-    } finally {
-      clearInterval(heartbeat);
     }
   }
 
