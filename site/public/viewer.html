@@ -1040,36 +1040,61 @@
     // materialise all at once.
     const GRID = 5;
     const TILE_LIMIT = 1000;
+    const PER_TILE_TIMEOUT_MS = 60_000;
     const tiles = sortByDistanceFromCenter(tileBbox(bbox, GRID), bbox);
 
     const acc = (geomKind === 'polygon')
       ? newPolygonAccumulator()
       : { features: [], rowCount: 0 };
 
+    // Heartbeat so a slow first tile (cold-cache row group fetch
+    // can be 10-30 s) reads as progress, not a hang.
+    const refreshStart = performance.now();
+    let currentTileStart = refreshStart;
+    let completedTiles = 0;
+    const heartbeat = setInterval(() => {
+      if (myToken !== queryToken) { clearInterval(heartbeat); return; }
+      const total = Math.round((performance.now() - refreshStart) / 1000);
+      const tileSecs = Math.round((performance.now() - currentTileStart) / 1000);
+      const shown = dataRowCount(lastFeatures);
+      setStatus(`Loading… tile ${completedTiles + 1}/${tiles.length} (${tileSecs}s) · ${shown.toLocaleString()} features · ${total}s total`);
+    }, 1000);
+
     try {
-      const t0 = performance.now();
-      let completedTiles = 0;
       for (const tile of tiles) {
         if (myToken !== queryToken) return;
         let tileResult;
+        currentTileStart = performance.now();
         try {
-          tileResult = await fetchFeatures(currentUrl, tile, {
-            limit: TILE_LIMIT,
-            simplify: true,
-            withLabels: true,
-            // Tolerance scales with the WHOLE viewport, not the
-            // 1/25th tile — so all 25 tiles produce features at
-            // the same on-screen vertex density as the initial
-            // load did at the dataset bbox.
-            simplifyReferenceBbox: bbox,
-            shouldContinue: () => myToken === queryToken,
-          });
+          // Race the query against a hard timeout. A genuinely stuck
+          // tile (DuckDB-WASM worker race, broken connection) won't
+          // hold up the other 24 — its slot is just left blank.
+          tileResult = await Promise.race([
+            fetchFeatures(currentUrl, tile, {
+              limit: TILE_LIMIT,
+              simplify: true,
+              withLabels: true,
+              // Tolerance scales with the WHOLE viewport, not the
+              // 1/25th tile — so all 25 tiles produce features at
+              // the same on-screen vertex density as the initial
+              // load did at the dataset bbox.
+              simplifyReferenceBbox: bbox,
+              shouldContinue: () => myToken === queryToken,
+            }),
+            new Promise((_, reject) => setTimeout(
+              () => reject(new Error('tile timed out after ' + PER_TILE_TIMEOUT_MS + 'ms')),
+              PER_TILE_TIMEOUT_MS,
+            )),
+          ]);
         } catch (e) {
           if (myToken !== queryToken) return;
           if (isCancellation(e)) return;
-          console.error('tile query failed (continuing):', e);
+          const tileMs = Math.round(performance.now() - currentTileStart);
+          console.error(`tile ${completedTiles + 1}/${tiles.length} failed after ${tileMs}ms:`, e.message || e);
           continue;
         }
+        const tileMs = Math.round(performance.now() - currentTileStart);
+        console.log(`tile ${completedTiles + 1}/${tiles.length} -> ${dataRowCount(tileResult)} rows in ${tileMs}ms`);
         if (myToken !== queryToken) return;
 
         if (geomKind === 'polygon') {
