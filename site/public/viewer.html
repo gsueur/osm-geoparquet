@@ -593,42 +593,53 @@
     return features;
   }
 
+  // Tolerance in degrees: <=1m at the equator. Bigger collapses small
+  // buildings to NULL on the new GEOMETRY logical type.
+  const MAX_SIMPLIFY_TOLERANCE_DEG = 0.00001;
+
+  function simplifyToleranceFor(bbox) {
+    const [w, , e] = bbox;
+    if (!Number.isFinite(w) || !Number.isFinite(e) || !(e > w)) return 0;
+    const mapEl = document.getElementById('map');
+    const widthPx = mapEl.clientWidth || window.innerWidth;
+    const degPerPx = (e - w) / Math.max(widthPx, 1);
+    return Math.min(degPerPx * 0.5, MAX_SIMPLIFY_TOLERANCE_DEG);
+  }
+
   async function fetchFeatures(url, bbox, opts = {}) {
     const {
       limit = MAX_FEATURES,
       simplify = true,
       withLabels = false,
+      simplifyReferenceBbox = null,
       shouldContinue,
     } = opts;
     let where = '';
     let geomExpr = 'geometry';
+    // Bbox-overlap filter via st_intersects_extent — pushes down to
+    // GeoParquet 2.0's per-row-group bbox stats.
     if (bbox) {
       const [w, s, e, n] = bbox;
       if ([w, s, e, n].every(Number.isFinite) && e > w && n > s) {
-        // st_intersects_extent pushes down to GeoParquet 2.0's per-row-
-        // group bbox stats, so we only fetch row groups whose bbox
-        // overlaps the viewport.
         where = `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
-        if (simplify) {
-          // Sub-pixel simplification, scaled by viewport — but capped
-          // hard so it can never exceed ~1 m at the equator. At wide
-          // zooms (whole-state view) half a pixel is 50-100 m, which
-          // is bigger than most buildings; ST_Simplify with that
-          // tolerance collapses them to NULL and our parser skips
-          // them, making features visibly disappear when stage 2
-          // replaces stage 1. With the cap, simplify only ever
-          // removes truly invisible micro-detail.
-          const MAX_TOLERANCE_DEG = 0.00001; // ~1 m at the equator
-          const mapEl = document.getElementById('map');
-          const widthPx = mapEl.clientWidth || window.innerWidth;
-          const degPerPx = (e - w) / Math.max(widthPx, 1);
-          const tolerance = Math.min(degPerPx * 0.5, MAX_TOLERANCE_DEG);
-          if (Number.isFinite(tolerance) && tolerance > 0) {
-            geomExpr = `ST_Simplify(geometry, ${tolerance})`;
-          }
-        }
       } else {
         console.warn('fetchFeatures: invalid bbox, querying without filter', bbox);
+      }
+    }
+    // Simplify scales tolerance to whatever bbox we're rendering at.
+    // For viewport queries that's the WHERE bbox; for unbounded
+    // initial loads the caller passes simplifyReferenceBbox (the
+    // dataset extent we just fitted to). With either reference we
+    // don't ship microscopic vertex detail the user can't possibly
+    // see — slashes ST_AsWKB output volume + the per-feature CPU on
+    // the JS-side WKB walker.
+    if (simplify) {
+      const ref = bbox || simplifyReferenceBbox;
+      if (ref) {
+        const tolerance = simplifyToleranceFor(ref);
+        if (tolerance > 0) {
+          geomExpr = `ST_Simplify(geometry, ${tolerance})`;
+        }
       }
     }
     // Critical: only project the columns we'll render. The OSM tags MAP
@@ -847,8 +858,13 @@
       // Initial query — first MAX features in row order (Hilbert-clustered).
       // Labels included here because the file may fit entirely in the
       // initial query; if it does, hover tooltips work without a refetch.
+      // simplifyReferenceBbox = datasetBbox so ST_Simplify uses a
+      // tolerance scaled to the post-fit camera view — saves real
+      // ST_AsWKB / parse cost on big polygon files.
       const data = await fetchFeatures(url, null, {
         withLabels: true,
+        simplify: true,
+        simplifyReferenceBbox: datasetBbox,
         shouldContinue: () => myToken === queryToken,
       });
       if (myToken !== queryToken) return;
@@ -894,12 +910,14 @@
 
   async function refreshViewport() {
     if (!currentUrl || hasFullFile) return;
-    // No cancelSent() here. Earlier we cancelled the in-flight query
-    // on every refresh, but that meant any small nudge during the
-    // 20-30 s stage-2 wait killed stage 2 — the user kept seeing only
-    // stage 1's 5000-row preview ("hangs at 1500"). The queryToken
-    // check below ensures stale results don't render; the worst we
-    // pay for letting old queries drain is some extra worker CPU.
+    // Cancel whatever's still running. Without this, panning around
+    // queues stage 1 + stage 2 from each gesture in the worker; on
+    // big files (MA buildings, NY State) each query is many seconds
+    // and the queue fills faster than it drains — the UI looks frozen
+    // because the worker is saturated. The userInteractionSeen gate
+    // already prevents fly-to / synthetic events from triggering a
+    // refresh, so any cancel here is in response to real interaction.
+    try { await conn.cancelSent(); } catch (_) {}
     queryToken++;
     const myToken = queryToken;
     const bbox = viewportBbox();
