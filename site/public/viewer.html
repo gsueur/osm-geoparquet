@@ -922,7 +922,24 @@
     const myToken = queryToken;
     const bbox = viewportBbox();
     console.log('refreshViewport: firing, bbox =', bbox, 'viewState =', viewState);
+
+    // Clear the map immediately so the gesture reads as "registered".
+    // Otherwise the old SW-MA buildings keep rendering for the 30-60 s
+    // it takes to cold-fetch the new area's row groups, and the user
+    // can't tell whether anything is happening.
+    lastFeatures = [];
+    rerender();
     setStatus('Loading viewport (preview)…');
+
+    // Heartbeat so the user sees the elapsed time tick up — looks like
+    // progress, reads less like a hang.
+    const refreshStart = performance.now();
+    const heartbeat = setInterval(() => {
+      if (myToken !== queryToken) { clearInterval(heartbeat); return; }
+      const secs = Math.round((performance.now() - refreshStart) / 1000);
+      setStatus(`Loading viewport (preview)… ${secs}s`);
+    }, 1000);
+
     try {
       // Stage 1: keep it modest so something paints fast. No simplify
       // (saves spatial-extension CPU) and no labels (the tags MAP
@@ -1010,6 +1027,8 @@
         error: e,
       });
       setStatus('Viewport query failed: ' + (e.message || e), true);
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
