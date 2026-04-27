@@ -319,12 +319,14 @@
         id: 'features',
         data: { type: 'FeatureCollection', features: data },
         pickable: true,
-        stroked: true,
-        filled: false,
-        pointRadiusMinPixels: 3,
-        pointRadiusMaxPixels: 7,
+        // For point themes: solid filled 3 px dots (no outline ring).
+        // For line themes: stroked, no fill.
+        stroked: geomKind !== 'point',
+        filled: geomKind === 'point',
+        pointRadiusMinPixels: 1.5,
+        pointRadiusMaxPixels: 1.5,
         lineWidthMinPixels: geomKind === 'line' ? 2 : 1,
-        getFillColor: [...ACCENT, 110],
+        getFillColor: [...ACCENT, 230],
         getLineColor: [...ACCENT, 230],
       })];
     }
