@@ -201,6 +201,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
     `</footer>` +
+    `<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "662d86a95662419abf6b79622cf413dc"}'></script><!-- End Cloudflare Web Analytics -->` +
     `</body></html>`
   );
 }

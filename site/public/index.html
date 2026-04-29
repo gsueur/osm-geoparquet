@@ -347,7 +347,7 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Row-group statistics are proper per-geometry bboxes, so engines prune without deserializing anything.</li>
 <li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
 <li><strong>ZSTD compression</strong> on every column, including geometry.</li>
-<li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
+<li><strong>10,000-row row groups.</strong> Small enough for aggressive spatial pruning (and snappy map-viewer panning over dense layers like buildings), large enough to keep metadata overhead negligible.</li>
 <li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
 <li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>
 <li><strong>Dated, immutable snapshots</strong> plus a <code>latest/</code> alias. Pin a date for reproducibility; use <code>latest/</code> when you just want today's data.</li>
@@ -715,5 +715,6 @@ document.querySelectorAll(".code-block").forEach(block => {
 $c.value = "US"; refillStates(); $s.value = "US-NY"; $t.value = "buildings"; rebuild();
 </script>
 
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "662d86a95662419abf6b79622cf413dc"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
