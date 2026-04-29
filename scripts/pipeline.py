@@ -256,7 +256,7 @@ def write_theme_parquet(
             FORMAT PARQUET,
             GEOPARQUET_VERSION 'V2',
             COMPRESSION ZSTD,
-            ROW_GROUP_SIZE 50000
+            ROW_GROUP_SIZE 10000
         )
     """, [country, state_name, state_iso])
 
