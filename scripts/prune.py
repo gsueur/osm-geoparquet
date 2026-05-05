@@ -115,6 +115,7 @@ def main() -> None:
         args.remote,
         "snapshots.json",
         json.dumps(manifest, indent=2),
+        cache_control="public, max-age=300",
         dry_run=False,
     )
     print(f"  remaining snapshots: {len(manifest['snapshots'])}")
