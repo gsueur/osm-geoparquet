@@ -382,6 +382,10 @@ SELECT COUNT(*) FROM read_parquet(
 <pre><code>INSTALL httpfs; LOAD httpfs;
 INSTALL spatial; LOAD spatial;
 
+-- Our coordinates are (longitude, latitude). Tell the spatial extension so
+-- ST_Distance_Sphere & friends read the axes in that order (example 5).
+SET geometry_always_xy = true;
+
 CREATE OR REPLACE MACRO url(state, theme) AS
   'https://parquetry.geomermaids.com/latest/country=' ||
   split_part(state, '-', 1) || '/state=' || state || '/' || theme || '.parquet';</code></pre>
@@ -393,18 +397,12 @@ CREATE OR REPLACE MACRO url(state, theme) AS
 <div class="code-block">
 <pre><code>SELECT COUNT(*) AS buildings
 FROM read_parquet(url('US-NY', 'buildings'))
-WHERE st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
+WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99   -- prunes row groups (standard float stats)
+  AND bbox.ymin &lt;= 40.76  AND bbox.ymax &gt;= 40.75
+  AND st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
-<p><strong>Engine-agnostic pruning.</strong> <code>st_intersects_extent</code> leans on DuckDB's native geometry stats. Any Parquet engine — Spark, Trino, polars, or DuckDB without the spatial extension — can prune the same row groups by filtering the <code>bbox</code> column directly, since it carries standard float column statistics:</p>
-<div class="code-block">
-<pre><code>SELECT COUNT(*) AS candidates
-FROM read_parquet(url('US-NY', 'buildings'))
-WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
-  AND bbox.ymin &lt;= 40.76  AND bbox.ymax &gt;= 40.75;</code></pre>
-<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
-</div>
-<p>Each <code>bbox</code> is a conservative bound (rounded outward to float32), so this returns a slight superset — the bbox-overlap candidates. It's the pruning step; pair it with a precise <code>ST_*</code> predicate when you need exact geometry.</p>
+<p>The <code>bbox.*</code> clause is what makes this fast: it filters the explicit <code>bbox</code> covering column, whose standard Parquet float statistics let <em>any</em> engine skip row groups before reading them. <code>st_intersects_extent</code> then does the exact bbox-overlap test. Each <code>bbox</code> is a conservative bound (rounded outward to float32), so the <code>bbox.*</code> clause alone returns a slight superset — drop the <code>st_intersects_extent</code> line on engines without DuckDB's spatial functions (Spark, Trino, polars) and you still get correct pruning.</p>
 
 <h3>3 · Tallest residential towers in a neighborhood</h3>
 <p>Pulls four columns (not the whole 20-column file) and uses a spatial filter at the same time:</p>
@@ -413,6 +411,8 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 FROM read_parquet(url('US-NY', 'buildings'))
 WHERE building = 'residential'
   AND levels &gt; 30
+  AND bbox.xmin &lt;= -73.95 AND bbox.xmax &gt;= -73.99   -- prune row groups to the neighborhood
+  AND bbox.ymin &lt;= 40.79  AND bbox.ymax &gt;= 40.76
   AND st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.76, -73.95, 40.79))
 ORDER BY levels DESC
 LIMIT 10;</code></pre>
@@ -420,7 +420,7 @@ LIMIT 10;</code></pre>
 </div>
 
 <h3>4 · Match restaurants to the buildings they sit inside</h3>
-<p>A spatial join between two theme files in Massachusetts, using <code>ST_Contains</code>:</p>
+<p>A spatial join between two theme files, scoped to downtown Boston with a <code>bbox</code> filter on each side so DuckDB reads only the relevant row groups from both files before the <code>ST_Contains</code> join:</p>
 <div class="code-block">
 <pre><code>SELECT b.name AS building, p.name AS restaurant, p.cuisine
 FROM read_parquet(url('US-MA', 'buildings')) b
@@ -428,6 +428,10 @@ JOIN read_parquet(url('US-MA', 'pois')) p
   ON ST_Contains(b.geometry, p.geometry)
 WHERE p.amenity = 'restaurant'
   AND b.name IS NOT NULL
+  AND b.bbox.xmin &lt;= -71.05 AND b.bbox.xmax &gt;= -71.07   -- downtown Boston, both files
+  AND b.bbox.ymin &lt;= 42.36  AND b.bbox.ymax &gt;= 42.34
+  AND p.bbox.xmin &lt;= -71.05 AND p.bbox.xmax &gt;= -71.07
+  AND p.bbox.ymin &lt;= 42.36  AND p.bbox.ymax &gt;= 42.34
 LIMIT 10;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
@@ -439,13 +443,14 @@ LIMIT 10;</code></pre>
 SELECT p.amenity, p.name,
        ST_Distance_Sphere(p.geometry, o.pt) AS dist_m
 FROM read_parquet(url('US-NY', 'pois')) p, origin o
-WHERE ST_DWithin(p.geometry, o.pt, 0.01)             -- ~1 km bbox prefilter, planar degrees
-  AND ST_Distance_Sphere(p.geometry, o.pt) &lt; 500   -- exact cutoff, metres
+WHERE p.bbox.xmin &lt;= -73.9757 AND p.bbox.xmax &gt;= -73.9957   -- ~1 km bbox prefilter (prunes row groups)
+  AND p.bbox.ymin &lt;= 40.7584 AND p.bbox.ymax &gt;= 40.7384
+  AND ST_Distance_Sphere(p.geometry, o.pt) &lt; 500            -- exact cutoff, metres
 ORDER BY dist_m
 LIMIT 15;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
-<p><strong>Why both?</strong> <code>ST_DWithin</code> compares planar (degree) coordinates and is push-downable against the row-group bboxes stored in GeoParquet 2.0, so DuckDB can skip groups that don't overlap the search box before reading any data. <code>ST_Distance_Sphere</code> returns the exact great-circle distance in metres but isn't a bbox predicate — used alone, it forces a full scan. Pairing them gives you readable metre-based output <em>and</em> the cloud-native pruning that makes querying over HTTPS viable. The degree prefilter is deliberately loose (~1 km &gt; 500 m) so no in-range point gets dropped by the prefilter; the sphere check tightens it to the exact 500 m.</p>
+<p><strong>Why both?</strong> The <code>bbox.*</code> prefilter compares plain float columns whose Parquet statistics let DuckDB skip row groups that don't overlap the search box before reading any data — and it works on any engine, no spatial extension needed. <code>ST_Distance_Sphere</code> returns the exact great-circle distance in metres but isn't a bbox predicate; used alone it forces a full scan. Pairing them gives you readable metre-based output <em>and</em> the cloud-native pruning that makes querying over HTTPS viable. The bbox prefilter is deliberately loose (~1 km box &gt; 500 m radius) so no in-range point is dropped; the sphere check tightens it to the exact 500 m.</p>
 
 <h3>6 · Compare across states</h3>
 <p>Pass a list of URLs, group by state:</p>
