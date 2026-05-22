@@ -287,6 +287,7 @@
     pitch: 0, bearing: 0,
   };
   let geomKind = 'point';        // 'point' | 'line' | 'polygon'
+  let hasBboxColumn = false;     // file has a GeoParquet `bbox` covering column
   let totalCount = 0;
   let hasFullFile = false;       // true when initial query returned < MAX
   let currentUrl = null;
@@ -670,12 +671,21 @@
     } = opts;
     let where = '';
     let geomExpr = 'geometry';
-    // Bbox-overlap filter via st_intersects_extent — pushes down to
-    // GeoParquet 2.0's per-row-group bbox stats.
+    // Bbox-overlap filter. st_intersects_extent pushes down to the native
+    // GEOMETRY row-group stats (DuckDB-WASM understands them). When the file
+    // also carries the `bbox` covering column (schema 0.2.0+), we AND a plain
+    // float predicate on it: that prunes row groups via standard Parquet
+    // column statistics — more universally than the native-geometry path —
+    // and doesn't change results. The float32 covering is rounded outward (a
+    // superset), so st_intersects_extent stays the tight, exact filter.
     if (bbox) {
       const [w, s, e, n] = bbox;
       if ([w, s, e, n].every(Number.isFinite) && e > w && n > s) {
-        where = `WHERE st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
+        const preds = [`st_intersects_extent(geometry, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`];
+        if (hasBboxColumn) {
+          preds.push(`bbox.xmin <= ${e} AND bbox.xmax >= ${w} AND bbox.ymin <= ${n} AND bbox.ymax >= ${s}`);
+        }
+        where = `WHERE ${preds.join('\n        AND ')}`;
       } else {
         console.warn('fetchFeatures: invalid bbox, querying without filter', bbox);
       }
@@ -784,7 +794,21 @@
     } catch (e) {
       console.warn('geo metadata read failed; falling back to feature bbox:', e);
     }
-    return { total, geomKind: kind, bbox };
+
+    // Whether the file carries the `bbox` covering column (schema 0.2.0+). We
+    // write the column but not the GeoParquet `covering` metadata (that would
+    // force out the bloom filters), so detect it by probing the schema rather
+    // than reading metadata. LIMIT 0 = no data scan. When present, spatial
+    // queries AND a float predicate on it for standard-Parquet row-group
+    // pruning; older snapshots lack it, so this keeps the viewer compatible.
+    let hasBbox = false;
+    try {
+      await conn.query(`SELECT bbox.xmin FROM read_parquet('${escUrl(url)}') LIMIT 0`);
+      hasBbox = true;
+    } catch (_) {
+      hasBbox = false;
+    }
+    return { total, geomKind: kind, bbox, hasBbox };
   }
 
   // ---------- Viewport / bbox helpers --------------------------------------
@@ -983,12 +1007,13 @@
     showLoading('Inspecting file…');
 
     try {
-      const { total, geomKind: gk, bbox: datasetBbox } = await inspectFile(url);
+      const { total, geomKind: gk, bbox: datasetBbox, hasBbox } = await inspectFile(url);
       if (myToken !== queryToken) return;
       totalCount = total;
       geomKind = gk;
+      hasBboxColumn = hasBbox;
 
-      console.log('inspectFile result', { total, geomKind: gk, datasetBbox });
+      console.log('inspectFile result', { total, geomKind: gk, datasetBbox, hasBbox });
 
       // Fit to the full dataset extent before any data lands so the user
       // sees the right region while the feature query is still in flight.

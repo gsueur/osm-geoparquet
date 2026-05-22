@@ -344,10 +344,11 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <p>Every file in every theme in every region carries the same guarantees:</p>
 
 <ul>
-<li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Row-group statistics are proper per-geometry bboxes, so engines prune without deserializing anything.</li>
+<li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Carries per-geometry row-group bbox statistics that DuckDB-class engines prune on without deserializing anything.</li>
+<li><strong>Explicit <code>bbox</code> column</strong> (<code>xmin/ymin/xmax/ymax</code>). The native geo statistics above only help readers that understand the <code>GEOMETRY</code> type; the <code>bbox</code> column exposes standard Parquet float stats so <em>any</em> engine — Spark, Trino, polars, pyarrow — prunes row groups on <code>WHERE bbox.xmin &lt;= … AND bbox.xmax &gt;= …</code>.</li>
 <li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
 <li><strong>ZSTD compression</strong> on every column, including geometry.</li>
-<li><strong>10,000-row row groups.</strong> Small enough for aggressive spatial pruning (and snappy map-viewer panning over dense layers like buildings), large enough to keep metadata overhead negligible.</li>
+<li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
 <li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
 <li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>
 <li><strong>Dated, immutable snapshots</strong> plus a <code>latest/</code> alias. Pin a date for reproducibility; use <code>latest/</code> when you just want today's data.</li>
@@ -395,6 +396,15 @@ FROM read_parquet(url('US-NY', 'buildings'))
 WHERE st_intersects_extent(geometry, ST_MakeEnvelope(-73.99, 40.75, -73.98, 40.76));</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
+<p><strong>Engine-agnostic pruning.</strong> <code>st_intersects_extent</code> leans on DuckDB's native geometry stats. Any Parquet engine — Spark, Trino, polars, or DuckDB without the spatial extension — can prune the same row groups by filtering the <code>bbox</code> column directly, since it carries standard float column statistics:</p>
+<div class="code-block">
+<pre><code>SELECT COUNT(*) AS candidates
+FROM read_parquet(url('US-NY', 'buildings'))
+WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
+  AND bbox.ymin &lt;= 40.76  AND bbox.ymax &gt;= 40.75;</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
+<p>Each <code>bbox</code> is a conservative bound (rounded outward to float32), so this returns a slight superset — the bbox-overlap candidates. It's the pruning step; pair it with a precise <code>ST_*</code> predicate when you need exact geometry.</p>
 
 <h3>3 · Tallest residential towers in a neighborhood</h3>
 <p>Pulls four columns (not the whole 20-column file) and uses a spatial filter at the same time:</p>

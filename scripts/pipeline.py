@@ -43,7 +43,7 @@ import duckdb
 
 from themes import THEMES, POST_FILTERS, Theme
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.2.0"
 
 # Set by main(); workers inherit it through fork. True = echo every subprocess
 # command + per-theme status; False = quiet, main prints one progress line
@@ -231,8 +231,25 @@ def write_theme_parquet(
 
     out_parquet.parent.mkdir(parents=True, exist_ok=True)
 
-    # DuckDB writes GeoParquet 2.0 directly (native Parquet GEOMETRY logical type).
-    # Hilbert-ordered via ST_Extent_Agg CTE; no sidecar bbox column needed in v2.0.
+    # DuckDB writes GeoParquet 2.0 directly (native Parquet GEOMETRY logical type),
+    # Hilbert-ordered via the ST_Extent_Agg CTE. We also emit an explicit `bbox`
+    # struct column: the native GEOMETRY type's row-group stats are only readable
+    # by DuckDB-class engines, whereas a plain float bbox carries standard Parquet
+    # min/max stats that *any* engine (Spark, Trino, polars, pyarrow) can use to
+    # prune row groups via `WHERE bbox.xmin <= ... AND bbox.xmax >= ...`.
+    #
+    # Stored as FLOAT (not DOUBLE): float64 coordinates barely compress (+28% file
+    # size on dense polygon themes vs +10% for float32). To keep the box a correct
+    # outer bound we round each value OUTWARD (min down, max up) by a tiny relative
+    # epsilon so it always contains the geometry — verified 0 violations, ~9 m max
+    # slack, negligible for row-group pruning.
+    #
+    # We deliberately do NOT write the GeoParquet `covering` metadata. The only
+    # tools that add it (gpio) rewrite the file and strip the bloom filters DuckDB
+    # writes by default, and injecting it via KV_METADATA produces a duplicate
+    # `geo` key. So spec-aware readers won't auto-detect the column, but explicit
+    # `bbox.*` predicates prune row groups in every engine, and we keep the bloom
+    # filters. DuckDB emits bloom filters on typed/admin/tags columns automatically.
     con.execute(f"""
         COPY (
             WITH extent AS (
@@ -248,6 +265,12 @@ def write_theme_parquet(
                 ? AS state_iso,
                 {typed_sql},
                 tags,
+                struct_pack(
+                    xmin := (ST_XMin(geometry) - abs(ST_XMin(geometry)) * 1e-6 - 1e-9)::FLOAT,
+                    ymin := (ST_YMin(geometry) - abs(ST_YMin(geometry)) * 1e-6 - 1e-9)::FLOAT,
+                    xmax := (ST_XMax(geometry) + abs(ST_XMax(geometry)) * 1e-6 + 1e-9)::FLOAT,
+                    ymax := (ST_YMax(geometry) + abs(ST_YMax(geometry)) * 1e-6 + 1e-9)::FLOAT
+                ) AS bbox,
                 geometry
             FROM src, extent
             WHERE {where}
@@ -256,13 +279,13 @@ def write_theme_parquet(
             FORMAT PARQUET,
             GEOPARQUET_VERSION 'V2',
             COMPRESSION ZSTD,
-            ROW_GROUP_SIZE 10000
+            ROW_GROUP_SIZE 50000
         )
     """, [country, state_name, state_iso])
 
     if VERBOSE:
         size_mb = out_parquet.stat().st_size / (1024 * 1024)
-        print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0)")
+        print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0 + bbox)")
     return count
 
 # ---------- per-state orchestration ----------

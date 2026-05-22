@@ -35,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from themes import THEMES  # noqa: E402
 
-BASE_COLUMNS = {"osm_id", "osm_type", "country", "state", "state_iso", "tags", "geometry"}
+BASE_COLUMNS = {"osm_id", "osm_type", "country", "state", "state_iso", "tags", "bbox", "geometry"}
 EXPECTED_THEMES = [t.name for t in THEMES]
 
 # Cloudflare's default bot mitigation rejects urllib's generic UA with 403.
