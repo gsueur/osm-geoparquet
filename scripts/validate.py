@@ -86,7 +86,7 @@ def load_expected_isos(geojson: Path, excluded: set[str]) -> set[str]:
     return out
 
 
-def check_local(out_dir: Path, geojson: Path) -> Suite:
+def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> Suite:
     s = Suite(f"Local checks — {out_dir}/")
     s.header()
 
@@ -99,6 +99,11 @@ def check_local(out_dir: Path, geojson: Path) -> Suite:
     expected = load_expected_isos(
         geojson, excluded={"US-AS", "US-GU", "US-MP", "US-UM"}
     )
+    if only:
+        unknown = only - expected
+        if unknown:
+            s.fail(f"--states not in geojson/coverage: {sorted(unknown)}")
+        expected &= only
     manifests = {
         m.parent.name.replace("state=", ""): m
         for m in out_dir.glob("country=*/state=*/_manifest.json")
@@ -112,6 +117,7 @@ def check_local(out_dir: Path, geojson: Path) -> Suite:
 
     # Per-state checks
     incomplete_themes: list[tuple[str, int]] = []
+    failed_themes: list[str] = []
     missing_files: list[str] = []
     row_mismatches: list[str] = []
     schema_fails: list[str] = []
@@ -125,7 +131,11 @@ def check_local(out_dir: Path, geojson: Path) -> Suite:
 
         # File existence + row count consistency for non-zero themes
         for theme, claimed in (m.get("themes") or {}).items():
-            if claimed <= 0:
+            if claimed < 0:
+                # pipeline.py records -1 when osmium/DuckDB failed for a theme
+                failed_themes.append(f"{iso}/{theme}")
+                continue
+            if claimed == 0:
                 continue
             p = state_dir / f"{theme}.parquet"
             if not p.exists() or p.stat().st_size == 0:
@@ -155,6 +165,12 @@ def check_local(out_dir: Path, geojson: Path) -> Suite:
         s.fail(f"{len(incomplete_themes)} states missing themes: {snippets}{more}")
     else:
         s.ok("every state manifest lists all 16 themes")
+
+    if failed_themes:
+        s.fail(f"{len(failed_themes)} themes failed in the pipeline: "
+               f"{', '.join(failed_themes[:5])}{'...' if len(failed_themes) > 5 else ''}")
+    else:
+        s.ok("no theme reported a pipeline failure")
 
     if missing_files:
         s.fail(f"{len(missing_files)} parquet files missing/empty: "
@@ -363,6 +379,8 @@ def main() -> None:
     p.add_argument("--no-remote", action="store_true", help="skip remote checks")
     p.add_argument("--sample", type=int, default=8,
                    help="state count to sample for remote HEAD checks (default 8)")
+    p.add_argument("--states", nargs="*", default=None,
+                   help="Local checks: only these ISO codes (per-region CI jobs).")
     args = p.parse_args()
 
     suites: list[Suite] = []
@@ -372,7 +390,8 @@ def main() -> None:
         elif not args.admin_geojson.is_file():
             print(f"skip local checks: {args.admin_geojson} not found")
         else:
-            suites.append(check_local(args.out_dir, args.admin_geojson))
+            suites.append(check_local(args.out_dir, args.admin_geojson,
+                                      only=set(args.states) if args.states else None))
 
     if not args.no_remote:
         suites.append(check_remote(args.remote_url, args.sample))

@@ -7,11 +7,24 @@ Publish a pipeline out/ directory to an S3/R2 remote as a dated snapshot.
 - Rebuilds a snapshots.json index at bucket root listing every dated snapshot
   with object count + total bytes
 
+Stages (--stage):
+  all       upload + finalize (default; what a single-machine nightly does)
+  upload    copy out/ -> <remote>/<date>/ only. Additive, so many machines
+            (GitHub Actions matrix jobs) can each upload their own regions
+            into the same dated prefix.
+  finalize  verify the dated prefix is complete (every expected region has
+            a manifest, every manifest lists every theme with no failures,
+            every claimed parquet exists), then sync latest/, write
+            ATTRIBUTION.txt and rebuild snapshots.json. Nothing goes live
+            until this passes.
+
 Usage:
   python3 scripts/publish.py
   python3 scripts/publish.py --remote parquetry:parquetry --out-dir out/
   python3 scripts/publish.py --date 2026-04-18        # backfill
   python3 scripts/publish.py --dry-run                # preview only
+  python3 scripts/publish.py --stage upload --out-dir out/ --date 2026-09-14
+  python3 scripts/publish.py --stage finalize --date 2026-09-14
 """
 
 from __future__ import annotations
@@ -25,7 +38,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from themes import THEMES  # noqa: E402
+
 SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+EXPECTED_THEMES = {t.name for t in THEMES}
+
+# Present in the admin-region GeoJSON but out of coverage (matches validate.py).
+DEFAULT_EXCLUDE = ["US-AS", "US-GU", "US-MP", "US-UM"]
 
 ATTRIBUTION = """\
 # Data attribution
@@ -171,6 +191,63 @@ def ensure_attribution(remote: str, *, dry_run: bool) -> None:
                       cache_control="public, max-age=300", dry_run=dry_run)
 
 
+def load_expected_isos(geojson: Path, exclude: set[str]) -> set[str]:
+    data = json.loads(geojson.read_text())
+    out: set[str] = set()
+    for f in data.get("features", []):
+        iso = (f.get("properties") or {}).get("ISO3166-2")
+        if iso and iso not in exclude:
+            out.add(iso)
+    if not out:
+        sys.exit(f"no ISO3166-2 features in {geojson}")
+    return out
+
+
+def count_remote_manifests(remote: str, date: str) -> int:
+    """Cheap completeness probe: number of _manifest.json under <date>/."""
+    entries = sh_json([
+        "rclone", "lsjson", "-R", "--files-only",
+        "--include", "_manifest.json", f"{remote}/{date}/",
+    ])
+    return len(entries)
+
+
+def check_snapshot_complete(remote: str, date: str, expected: set[str]) -> list[str]:
+    """Return a list of problems (empty = the dated prefix is complete).
+
+    Runs before anything goes live so a matrix run with one failed region
+    never becomes `latest/` or shows up in snapshots.json.
+    """
+    prefix = f"{remote}/{date}/"
+    listing = sh_json(["rclone", "lsjson", "-R", "--files-only", prefix])
+    sizes = {e["Path"]: e.get("Size", 0) for e in listing}
+    if not sizes:
+        return [f"{prefix} is empty or missing"]
+
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            ["rclone", "copy", "--include", "_manifest.json", prefix, tmp],
+            check=True, capture_output=True,
+        )
+        for iso in sorted(expected):
+            rel = f"country={iso.split('-')[0]}/state={iso}"
+            mpath = Path(tmp) / rel / "_manifest.json"
+            if not mpath.is_file():
+                problems.append(f"{iso}: no _manifest.json")
+                continue
+            themes = (json.loads(mpath.read_text()).get("themes") or {})
+            missing = EXPECTED_THEMES - set(themes)
+            if missing:
+                problems.append(f"{iso}: manifest missing themes {sorted(missing)}")
+            for theme, count in themes.items():
+                if count < 0:
+                    problems.append(f"{iso}/{theme}: pipeline reported failure")
+                elif count > 0 and sizes.get(f"{rel}/{theme}.parquet", 0) <= 0:
+                    problems.append(f"{iso}/{theme}: parquet missing or empty on remote")
+    return problems
+
+
 def build_snapshot_manifest(remote: str) -> dict:
     entries = sh_json(["rclone", "lsjson", remote, "--dirs-only"])
     snapshots: list[dict] = []
@@ -201,44 +278,89 @@ def main() -> None:
     p.add_argument("--date", default=None,
                    help="Snapshot date YYYY-MM-DD. Default: today (UTC).")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--stage", choices=["all", "upload", "finalize"], default="all",
+                   help="upload: copy out/ into the dated prefix only. "
+                        "finalize: verify completeness, then sync latest/, "
+                        "attribution and snapshots.json. Default: both.")
+    p.add_argument("--states-geojson", type=Path, default=Path("data/admin_regions.geojson"),
+                   help="Admin regions; defines what a complete snapshot is (finalize).")
+    p.add_argument("--exclude", nargs="*", default=DEFAULT_EXCLUDE,
+                   help="ISO codes in the geojson that are out of coverage.")
+    p.add_argument("--skip-completeness", action="store_true",
+                   help="Finalize without the completeness gate (partial backfills).")
     args = p.parse_args()
 
-    if not args.out_dir.is_dir():
-        sys.exit(f"out dir not found: {args.out_dir}")
+    do_upload = args.stage in ("all", "upload")
+    do_finalize = args.stage in ("all", "finalize")
 
-    any_parquet = any(args.out_dir.rglob("*.parquet"))
-    if not any_parquet:
-        sys.exit(f"no .parquet files under {args.out_dir}; nothing to publish")
+    if do_upload:
+        if not args.out_dir.is_dir():
+            sys.exit(f"out dir not found: {args.out_dir}")
+        if not any(args.out_dir.rglob("*.parquet")):
+            sys.exit(f"no .parquet files under {args.out_dir}; nothing to publish")
 
     date = args.date or dt.datetime.now(dt.timezone.utc).date().isoformat()
     if not SNAPSHOT_RE.match(date):
         sys.exit(f"--date must be YYYY-MM-DD, got {date!r}")
 
     dest = f"{args.remote}/{date}/"
-    print(f"Local:     {args.out_dir}/")
+    print(f"Stage:     {args.stage}")
+    if do_upload:
+        print(f"Local:     {args.out_dir}/")
     print(f"Remote:    {dest}")
     print(f"Dry-run:   {args.dry_run}")
     print()
 
-    total_bytes = _count_bytes(args.out_dir)
-    print(f"Total:     {total_bytes/1e9:.2f} GB across "
-          f"{sum(1 for _ in args.out_dir.rglob('*.parquet'))} parquet files")
-    print()
+    if do_upload:
+        total_bytes = _count_bytes(args.out_dir)
+        print(f"Total:     {total_bytes/1e9:.2f} GB across "
+              f"{sum(1 for _ in args.out_dir.rglob('*.parquet'))} parquet files")
+        print()
 
-    print(f"[1/4] upload -> {dest}")
-    rclone_with_progress(
-        [
-            "rclone", "copy", "--exclude", "_work/**",
-            # Dated snapshots never change — tell browsers and Cloudflare's
-            # edge cache they can pin the bytes for a year.
-            "--header-upload",
-            "Cache-Control: public, max-age=31536000, immutable",
-            f"{args.out_dir}/", dest,
-        ],
-        label="upload",
-        total_bytes=total_bytes,
-        dry_run=args.dry_run,
-    )
+        print(f"[1/4] upload -> {dest}")
+        rclone_with_progress(
+            [
+                "rclone", "copy", "--exclude", "_work/**",
+                # Dated snapshots never change — tell browsers and Cloudflare's
+                # edge cache they can pin the bytes for a year.
+                "--header-upload",
+                "Cache-Control: public, max-age=31536000, immutable",
+                f"{args.out_dir}/", dest,
+            ],
+            label="upload",
+            total_bytes=total_bytes,
+            dry_run=args.dry_run,
+        )
+        if not do_finalize:
+            print("\nDone (upload only).")
+            return
+    else:
+        print("[1/4] upload: skipped (finalize only)")
+        if args.dry_run:
+            total_bytes = 0
+        else:
+            total_bytes = sh_json(["rclone", "size", "--json", dest])["bytes"]
+
+    if args.skip_completeness:
+        print("\n[gate] completeness check skipped (--skip-completeness)")
+    elif args.dry_run:
+        print("\n[gate] completeness check skipped in --dry-run")
+    else:
+        if not args.states_geojson.is_file():
+            sys.exit(f"--states-geojson not found: {args.states_geojson} "
+                     f"(needed for the completeness gate; or --skip-completeness)")
+        expected = load_expected_isos(args.states_geojson, set(args.exclude))
+        print(f"\n[gate] checking {dest} covers {len(expected)} regions "
+              f"x {len(EXPECTED_THEMES)} themes")
+        problems = check_snapshot_complete(args.remote, date, expected)
+        if problems:
+            for pr in problems[:30]:
+                print(f"  - {pr}")
+            if len(problems) > 30:
+                print(f"  ... {len(problems) - 30} more")
+            sys.exit(f"snapshot {date} is incomplete ({len(problems)} problems); "
+                     f"not touching latest/ or snapshots.json")
+        print("  complete")
 
     latest = f"{args.remote}/latest/"
     print(f"\n[2/4] sync latest/ -> {latest}  (server-side copy from {date}/)")

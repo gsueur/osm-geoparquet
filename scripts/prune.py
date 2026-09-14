@@ -8,6 +8,12 @@ Rules (UTC):
   * 15-365 days old: keep the 1st of each month; delete the rest.
   * >365 days old: keep Dec 31 of each year; delete the rest.
 
+Optionally (--purge-incomplete, needs --states-geojson) also deletes dated
+prefixes that never completed: a matrix run that failed halfway leaves a
+partial <date>/ behind, which publish.py's finalize gate refuses to publish
+but which would otherwise sit there forever and get listed by the next
+snapshots.json rebuild.
+
 Dry-run by default. Pass --execute to actually delete.
 
 Typical use (from nightly.sh, after remote validation passes):
@@ -24,8 +30,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from publish import (  # noqa: E402
+    DEFAULT_EXCLUDE,
     SNAPSHOT_RE,
     build_snapshot_manifest,
+    count_remote_manifests,
+    load_expected_isos,
     sh,
     sh_json,
     write_remote_text,
@@ -62,7 +71,17 @@ def main() -> None:
                    help="Actually delete. Default is dry-run.")
     p.add_argument("--now", default=None,
                    help="Override 'now' for testing (YYYY-MM-DD UTC).")
+    p.add_argument("--purge-incomplete", action="store_true",
+                   help="Also delete dated prefixes missing region manifests.")
+    p.add_argument("--states-geojson", type=Path, default=Path("data/admin_regions.geojson"))
+    p.add_argument("--exclude", nargs="*", default=DEFAULT_EXCLUDE)
     args = p.parse_args()
+
+    expected_regions = None
+    if args.purge_incomplete:
+        if not args.states_geojson.is_file():
+            sys.exit(f"--purge-incomplete needs --states-geojson ({args.states_geojson} not found)")
+        expected_regions = len(load_expected_isos(args.states_geojson, set(args.exclude)))
 
     if args.now:
         if not SNAPSHOT_RE.match(args.now):
@@ -81,14 +100,21 @@ def main() -> None:
         print("No dated snapshots found.")
         return
 
-    keeps, deletes = [], []
+    keeps, deletes, incomplete = [], [], []
     for d in dates:
         verdict = classify(dt.date.fromisoformat(d), now)
+        if verdict == "keep" and expected_regions is not None:
+            n = count_remote_manifests(args.remote, d)
+            if n < expected_regions:
+                incomplete.append(f"{d} ({n}/{expected_regions} regions)")
+                verdict = "delete"
         (keeps if verdict == "keep" else deletes).append(d)
 
     print(f"[inventory] {len(dates)} dated snapshots")
     print(f"  keep:   {len(keeps)}")
     print(f"  delete: {len(deletes)}")
+    if incomplete:
+        print(f"  incomplete (will delete): {', '.join(incomplete)}")
     print()
 
     if deletes:

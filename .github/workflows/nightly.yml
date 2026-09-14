@@ -1,0 +1,229 @@
+# Nightly OSM -> GeoParquet build on GitHub Actions.
+#
+# One `build` job per Geofabrik extract (US state / CA province / Mexico),
+# each clipping its regions with the admin polygons, building all themes and
+# uploading its part of the dated snapshot to R2. `finalize` then verifies the
+# snapshot is complete before syncing latest/, ATTRIBUTION.txt and
+# snapshots.json, and prunes old snapshots.
+#
+# A failed region never goes live: finalize only runs if every build job
+# succeeded, and publish.py's completeness gate re-checks the bucket. Use
+# "Re-run failed jobs" on a failed run — successful uploads are kept, so the
+# re-run completes the same dated prefix and finalize follows.
+#
+# Repository secrets:
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   R2 API token (object read/write)
+#   R2_ENDPOINT                              https://<account-id>.r2.cloudflarestorage.com
+#   NTFY_TOPIC                               optional, phone recap via ntfy.sh
+# Repository variables (optional):
+#   ADMIN_REGIONS_URL   fallback download for data/admin_regions.geojson when
+#                       the file is not committed.
+
+name: nightly
+
+on:
+  schedule:
+    # Geofabrik refreshes its North America extracts around 21:00-02:00 UTC.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Snapshot date YYYY-MM-DD (default: today UTC)"
+        required: false
+        default: ""
+      states:
+        description: "Space-separated ISO subset, e.g. 'US-RI US-VT' (default: all). Partial runs skip finalize."
+        required: false
+        default: ""
+      publish:
+        description: "Upload to R2"
+        type: boolean
+        default: true
+      prune:
+        description: "Prune old snapshots after finalize"
+        type: boolean
+        default: true
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry
+  LC_ALL: C.UTF-8
+  # rclone reads its remote config from the environment: no config file on disk.
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      date: ${{ steps.date.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Admin regions
+        run: bash .github/scripts/admin-regions.sh
+        env:
+          ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
+
+      - name: Snapshot date
+        id: date
+        run: |
+          d="${{ inputs.date }}"
+          [[ -z "$d" ]] && d="$(date -u +%F)"
+          [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "bad date: $d"; exit 1; }
+          echo "date=$d" >> "$GITHUB_OUTPUT"
+          echo "snapshot date: $d"
+
+      - name: Build matrix
+        id: plan
+        run: |
+          only=(${{ inputs.states }})
+          python3 scripts/plan.py --states-geojson data/admin_regions.geojson \
+            --output matrix.json ${only:+--only "${only[@]}"}
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    name: ${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work dir on the runner's big scratch disk
+        # / has ~14 GB free on hosted runners; /mnt (temp disk) has ~65 GB.
+        # A state extract + clipped PBF + jsonseq intermediates + parquet can
+        # exceed 14 GB for California/Texas.
+        run: |
+          if sudo mkdir -p /mnt/work 2>/dev/null && [[ $(df -Pk /mnt | awk 'NR==2{print $4}') -gt 30000000 ]]; then
+            sudo chown "$USER" /mnt/work; work=/mnt/work
+          else
+            work="$RUNNER_TEMP/work"; mkdir -p "$work"
+          fi
+          echo "WORK=$work" >> "$GITHUB_ENV"
+          echo "work dir: $work"; df -h "$work"
+
+      - name: Tools
+        run: bash .github/scripts/install-tools.sh
+
+      - uses: astral-sh/setup-uv@v6
+      - name: Python deps
+        run: uv sync --project scripts
+
+      - name: Admin regions
+        run: bash .github/scripts/admin-regions.sh
+        env:
+          ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
+
+      - name: Download ${{ matrix.id }} from Geofabrik
+        run: |
+          curl -fL --retry 5 --retry-delay 30 --retry-all-errors \
+            -A "osm-geoparquet-nightly/1.0 (+https://geoparquet.geomermaids.com/)" \
+            -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
+          ls -lh "$WORK/source.osm.pbf"
+
+      - name: Pipeline (${{ matrix.states }})
+        working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
+        run: |
+          uv run --project "$GITHUB_WORKSPACE/scripts" \
+            python "$GITHUB_WORKSPACE/scripts/pipeline.py" \
+            --source-pbf "$WORK/source.osm.pbf" \
+            --states-geojson "$GITHUB_WORKSPACE/data/admin_regions.geojson" \
+            --out-dir "$WORK/out" \
+            --states ${{ matrix.states }} \
+            --workers ${{ matrix.workers }} \
+            --verbose
+          rm -f "$WORK/source.osm.pbf"
+          du -sh "$WORK/out"
+
+      - name: Local validation
+        run: |
+          uv run --project scripts python scripts/validate.py --no-remote \
+            --out-dir "$WORK/out" \
+            --admin-geojson data/admin_regions.geojson \
+            --states ${{ matrix.states }}
+
+      - name: Upload to R2 (${{ needs.plan.outputs.date }})
+        if: env.PUBLISH == 'true'
+        run: |
+          uv run --project scripts python scripts/publish.py --stage upload \
+            --out-dir "$WORK/out" --remote "$REMOTE" \
+            --date "${{ needs.plan.outputs.date }}"
+
+  finalize:
+    needs: [plan, build]
+    # Only after every region built, and only for full, publishing runs.
+    if: needs.build.result == 'success' && (github.event_name == 'schedule' || inputs.publish) && (inputs.states || '') == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: bash .github/scripts/install-tools.sh
+
+      - uses: astral-sh/setup-uv@v6
+      - name: Python deps
+        run: uv sync --project scripts
+
+      - name: Admin regions
+        run: bash .github/scripts/admin-regions.sh
+        env:
+          ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
+
+      - name: Finalize snapshot ${{ needs.plan.outputs.date }}
+        run: |
+          uv run --project scripts python scripts/publish.py --stage finalize \
+            --remote "$REMOTE" --date "${{ needs.plan.outputs.date }}" \
+            --states-geojson data/admin_regions.geojson
+
+      - name: Remote validation
+        run: uv run --project scripts python scripts/validate.py --no-local
+
+      - name: Prune old snapshots
+        if: github.event_name == 'schedule' || inputs.prune
+        run: |
+          uv run --project scripts python scripts/prune.py --execute \
+            --remote "$REMOTE" --purge-incomplete \
+            --states-geojson data/admin_regions.geojson
+
+  notify:
+    needs: [plan, build, finalize]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          BUILD: ${{ needs.build.result }}
+          FINALIZE: ${{ needs.finalize.result }}
+          DATE: ${{ needs.plan.outputs.date }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
+          if [[ "$BUILD" == "success" && ( "$FINALIZE" == "success" || "$FINALIZE" == "skipped" ) ]]; then
+            title="parquetry nightly OK"; tags="white_check_mark"; prio="default"
+            msg="snapshot $DATE published (finalize: $FINALIZE)"
+          else
+            title="parquetry nightly FAILED"; tags="warning"; prio="high"
+            msg="snapshot $DATE: build=$BUILD finalize=$FINALIZE"
+          fi
+          curl -fsS --max-time 10 -H "Title: $title" -H "Tags: $tags" \
+            -H "Priority: $prio" -H "Click: $RUN_URL" -d "$msg" \
+            "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || echo "ntfy POST failed"
