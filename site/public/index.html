@@ -325,7 +325,7 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
 
 Rows                   4,469,880
 Row groups             88   (avg 50,794 rows each, 4.5 MB compressed)
-Compression            ZSTD
+Compression            ZSTD (level 15)
 Parquet type           GEOMETRY   (native v2.0 logical type, not WKB)
 GeoParquet version     2.0.0
 CRS                    OGC:CRS84  (WGS 84, lng/lat)
@@ -347,7 +347,7 @@ Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code><
 <li><strong>Native Parquet <code>GEOMETRY</code> logical type</strong>, emitted directly by <a href="https://duckdb.org/">DuckDB</a>'s parquet writer (<code>GEOPARQUET_VERSION 'V2'</code>) — no WKB-in-binary + sidecar metadata roundtrip. Carries per-geometry row-group bbox statistics that DuckDB-class engines prune on without deserializing anything.</li>
 <li><strong>Explicit <code>bbox</code> column</strong> (<code>xmin/ymin/xmax/ymax</code>). The native geo statistics above only help readers that understand the <code>GEOMETRY</code> type; the <code>bbox</code> column exposes standard Parquet float stats so <em>any</em> engine — Spark, Trino, polars, pyarrow — prunes row groups on <code>WHERE bbox.xmin &lt;= … AND bbox.xmax &gt;= …</code>.</li>
 <li><strong>Hilbert-ordered rows.</strong> Bbox queries read a contiguous slice of row groups instead of the whole file. Typical spatial query touches under 5% of file bytes.</li>
-<li><strong>ZSTD compression</strong> on every column, including geometry.</li>
+<li><strong>ZSTD compression at level 15</strong> on every column, including geometry. Files are ~30% smaller than at DuckDB's default level 3; range-request reads are unaffected, since the bytes you skip were never decompressed anyway.</li>
 <li><strong>50,000-row row groups.</strong> Small enough for aggressive spatial pruning, large enough to keep metadata overhead negligible.</li>
 <li><strong>Bloom filters on every promoted column</strong> plus <code>country</code>, <code>state_iso</code>, <code>osm_type</code>, and the <code>tags</code> map (see above). Point lookups skip whole row groups before any I/O.</li>
 <li><strong>Hive-partitioned</strong> by <code>country=</code> and <code>state=</code>. Query engines prune entire countries or regions before reading a single parquet.</li>

@@ -279,6 +279,14 @@ def write_theme_parquet(
             FORMAT PARQUET,
             GEOPARQUET_VERSION 'V2',
             COMPRESSION ZSTD,
+            -- Level 15 (DuckDB default is 3): ~30% smaller files, mostly from
+            -- the WKB geometry column, which is ~80% of every file and
+            -- barely compresses at level 3. Write cost is a few seconds per
+            -- theme; pruned reads are unaffected, full scans decompress
+            -- ~50% slower but move 30% fewer bytes over HTTP. Measured on
+            -- CT buildings/roads 2026-09-14; 19+ buys 11% more for 3x the
+            -- write time and 2x slower full scans.
+            COMPRESSION_LEVEL 15,
             ROW_GROUP_SIZE 50000
         )
     """, [country, state_name, state_iso])
