@@ -69,7 +69,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       date: ${{ steps.date.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Admin regions
         run: bash .github/scripts/admin-regions.sh
@@ -103,7 +103,7 @@ jobs:
       max-parallel: 20
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Work dir on the runner's big scratch disk
         # / has ~14 GB free on hosted runners; /mnt (temp disk) has ~65 GB.
@@ -121,7 +121,7 @@ jobs:
       - name: Tools
         run: bash .github/scripts/install-tools.sh
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
       - name: Python deps
         run: uv sync --project scripts
 
@@ -172,12 +172,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Tools
         run: bash .github/scripts/install-tools.sh
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
       - name: Python deps
         run: uv sync --project scripts
 
