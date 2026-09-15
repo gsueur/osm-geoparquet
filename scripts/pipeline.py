@@ -211,15 +211,27 @@ def write_theme_parquet(
     con.execute(f"""
         CREATE VIEW src AS
         SELECT
-            TRY_CAST(substr(id, 2) AS BIGINT)           AS osm_id,
-            CASE left(id, 1)
+            -- osmium ids: n<node>, w<way>, r<relation>, and a<area> for the
+            -- areas it assembles. An area id is the source way id doubled, or
+            -- the source relation id doubled plus one, so halving it recovers
+            -- the element the polygon was built from and its parity says which
+            -- kind that was.
+            CASE WHEN kind = 'a' THEN num // 2 ELSE num END AS osm_id,
+            CASE kind
                 WHEN 'n' THEN 'node'
                 WHEN 'w' THEN 'way'
                 WHEN 'r' THEN 'relation'
+                WHEN 'a' THEN IF(num % 2 = 0, 'way', 'relation')
             END                                         AS osm_type,
+            tags,
+            geometry
+        FROM (
+          SELECT
+            left(id, 1)                                 AS kind,
+            TRY_CAST(substr(id, 2) AS BIGINT)           AS num,
             CAST(properties AS MAP(VARCHAR, VARCHAR))   AS tags,
             ST_GeomFromGeoJSON(geometry)                AS geometry
-        FROM read_json_auto(
+          FROM read_json_auto(
             '{jsonseq}',
             format = 'newline_delimited',
             -- 256 MB per object. OSM multipolygon relations for complex
@@ -228,6 +240,7 @@ def write_theme_parquet(
             maximum_object_size = 268435456,
             columns = {{'type': 'VARCHAR', 'id': 'VARCHAR',
                        'properties': 'JSON', 'geometry': 'JSON'}}
+          )
         )
         WHERE geometry IS NOT NULL
     """)
