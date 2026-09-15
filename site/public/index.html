@@ -321,24 +321,27 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
 
 <p>Every parquet is validator-clean GeoParquet 2.0 — spatial-query-optimized, metadata-complete, bloom-filtered. Pop the hood on <code>country=US/state=US-NY/buildings.parquet</code> for example, and <a href="https://geoparquet.io/"><code>gpio</code></a>'s <code>inspect</code> / <code>check</code> commands report:</p>
 
-<pre><code>📄 country=US/state=US-NY/buildings.parquet          394 MB
+<pre><code>📄 country=US/state=US-NY/buildings.parquet          335 MB
 
-Rows                   4,469,880
-Row groups             88   (avg 50,794 rows each, 4.5 MB compressed)
+Rows                   4,487,700
+Row groups             88   (avg 50,997 rows each, 3.8 MB compressed)
 Compression            ZSTD (level 15)
 Parquet type           GEOMETRY   (native v2.0 logical type, not WKB)
 GeoParquet version     2.0.0
 CRS                    OGC:CRS84  (WGS 84, lng/lat)
 Geometry types         MultiPolygon
 Bbox                   [-79.76, 40.49, -71.86, 45.01]
-Bloom filters          16 columns, 1.0 MB total
-Spatial order          Hilbert   (consecutive/random ratio 0.00089 —
-                       "strongly spatially clustered")
-Spec validation        29 of 29 checks pass  (gpio check, zero warnings)</code></pre>
+Bloom filters          19 columns, 1.6 MB total
+Spatial order          Hilbert   (each row group's bbox overlaps ~7 of the
+                       other 87 — strongly spatially clustered)
+Spec validation        27 of 27 checks pass  (gpio check 1.1; two advisories,
+                       both about choices made on purpose: the explicit
+                       bbox column, and a consecutive-row-group overlap
+                       heuristic that Hilbert order triggers by design)</code></pre>
 
 <div class="callout">
 <p><strong>Wait, what's a bloom filter?</strong> A tiny probabilistic index (a few KB per column, per row group) that answers one question very fast: <em>"could this value be in this row group?"</em> If the filter says <em>no</em>, the query engine skips the whole group without opening it. If it says <em>maybe</em>, the engine reads the group and checks for real. No false negatives — a match is never missed.</p>
-<p>The win: a query like <code>WHERE name = 'Central Park'</code> across 4.5M New York buildings touches <strong>one row group out of 88</strong> instead of the whole 394 MB file. Same story for every typed column and for tag-key lookups.</p>
+<p>The win: a query like <code>WHERE name = 'Central Park'</code> across 4.5M New York buildings touches <strong>one row group out of 88</strong> instead of the whole 335 MB file. Same story for every typed column and for tag-key lookups.</p>
 </div>
 
 <p>Every file in every theme in every region carries the same guarantees:</p>
