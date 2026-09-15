@@ -15,8 +15,11 @@ Stages (--stage):
   finalize  verify the dated prefix is complete (every expected region has
             a manifest, every manifest lists every theme with no failures,
             every claimed parquet exists), then sync latest/, write
-            ATTRIBUTION.txt and rebuild snapshots.json. Nothing goes live
-            until this passes.
+            ATTRIBUTION.txt, rebuild snapshots.json and publish the Portolan
+            catalog (scripts/catalog.py) under catalog/. Nothing goes live
+            until the completeness check passes.
+  catalog   completeness check, then republish only the catalog (e.g. after
+            a catalog.py change, without re-syncing latest/).
 
 Usage:
   python3 scripts/publish.py
@@ -39,6 +42,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import catalog  # noqa: E402
 from themes import THEMES  # noqa: E402
 
 SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -212,11 +216,21 @@ def count_remote_manifests(remote: str, date: str) -> int:
     return len(entries)
 
 
-def check_snapshot_complete(remote: str, date: str, expected: set[str]) -> list[str]:
+def fetch_manifests(remote: str, date: str, dest: Path) -> None:
+    """Mirror every _manifest.json of a dated prefix into dest (same layout)."""
+    subprocess.run(
+        ["rclone", "copy", "--include", "_manifest.json", f"{remote}/{date}/", str(dest)],
+        check=True, capture_output=True,
+    )
+
+
+def check_snapshot_complete(remote: str, date: str, expected: set[str],
+                            manifests: Path) -> list[str]:
     """Return a list of problems (empty = the dated prefix is complete).
 
     Runs before anything goes live so a matrix run with one failed region
-    never becomes `latest/` or shows up in snapshots.json.
+    never becomes `latest/` or shows up in snapshots.json. `manifests` is the
+    fetch_manifests() mirror of the prefix.
     """
     prefix = f"{remote}/{date}/"
     listing = sh_json(["rclone", "lsjson", "-R", "--files-only", prefix])
@@ -225,27 +239,28 @@ def check_snapshot_complete(remote: str, date: str, expected: set[str]) -> list[
         return [f"{prefix} is empty or missing"]
 
     problems: list[str] = []
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(
-            ["rclone", "copy", "--include", "_manifest.json", prefix, tmp],
-            check=True, capture_output=True,
-        )
-        for iso in sorted(expected):
-            rel = f"country={iso.split('-')[0]}/state={iso}"
-            mpath = Path(tmp) / rel / "_manifest.json"
-            if not mpath.is_file():
-                problems.append(f"{iso}: no _manifest.json")
-                continue
-            themes = (json.loads(mpath.read_text()).get("themes") or {})
-            missing = EXPECTED_THEMES - set(themes)
-            if missing:
-                problems.append(f"{iso}: manifest missing themes {sorted(missing)}")
-            for theme, count in themes.items():
-                if count < 0:
-                    problems.append(f"{iso}/{theme}: pipeline reported failure")
-                elif count > 0 and sizes.get(f"{rel}/{theme}.parquet", 0) <= 0:
-                    problems.append(f"{iso}/{theme}: parquet missing or empty on remote")
+    for iso in sorted(expected):
+        rel = f"country={iso.split('-')[0]}/state={iso}"
+        mpath = manifests / rel / "_manifest.json"
+        if not mpath.is_file():
+            problems.append(f"{iso}: no _manifest.json")
+            continue
+        themes = (json.loads(mpath.read_text()).get("themes") or {})
+        missing = EXPECTED_THEMES - set(themes)
+        if missing:
+            problems.append(f"{iso}: manifest missing themes {sorted(missing)}")
+        for theme, count in themes.items():
+            if count < 0:
+                problems.append(f"{iso}/{theme}: pipeline reported failure")
+            elif count > 0 and sizes.get(f"{rel}/{theme}.parquet", 0) <= 0:
+                problems.append(f"{iso}/{theme}: parquet missing or empty on remote")
     return problems
+
+
+def newest_snapshot(remote: str) -> str | None:
+    dates = [e["Name"] for e in sh_json(["rclone", "lsjson", remote, "--dirs-only"])
+             if SNAPSHOT_RE.match(e["Name"])]
+    return max(dates, default=None)
 
 
 def build_snapshot_manifest(remote: str) -> dict:
@@ -278,10 +293,12 @@ def main() -> None:
     p.add_argument("--date", default=None,
                    help="Snapshot date YYYY-MM-DD. Default: today (UTC).")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--stage", choices=["all", "upload", "finalize"], default="all",
+    p.add_argument("--stage", choices=["all", "upload", "finalize", "catalog"], default="all",
                    help="upload: copy out/ into the dated prefix only. "
                         "finalize: verify completeness, then sync latest/, "
-                        "attribution and snapshots.json. Default: both.")
+                        "attribution, snapshots.json and the Portolan catalog. "
+                        "catalog: verify completeness, then republish only the "
+                        "catalog. Default: upload + finalize.")
     p.add_argument("--states-geojson", type=Path, default=Path("data/admin_regions.geojson"),
                    help="Admin regions; defines what a complete snapshot is (finalize).")
     p.add_argument("--exclude", nargs="*", default=DEFAULT_EXCLUDE,
@@ -292,6 +309,7 @@ def main() -> None:
 
     do_upload = args.stage in ("all", "upload")
     do_finalize = args.stage in ("all", "finalize")
+    do_catalog = args.stage in ("all", "finalize", "catalog")
 
     if do_upload:
         if not args.out_dir.is_dir():
@@ -317,7 +335,7 @@ def main() -> None:
               f"{sum(1 for _ in args.out_dir.rglob('*.parquet'))} parquet files")
         print()
 
-        print(f"[1/4] upload -> {dest}")
+        print(f"[1/5] upload -> {dest}")
         rclone_with_progress(
             [
                 "rclone", "copy", "--exclude", "_work/**",
@@ -335,35 +353,68 @@ def main() -> None:
             print("\nDone (upload only).")
             return
     else:
-        print("[1/4] upload: skipped (finalize only)")
-        if args.dry_run:
+        print(f"[1/5] upload: skipped ({args.stage} only)")
+        if args.dry_run or not do_finalize:
             total_bytes = 0
         else:
             total_bytes = sh_json(["rclone", "size", "--json", dest])["bytes"]
 
+    with tempfile.TemporaryDirectory(prefix="manifests-") as tmp:
+        manifests = Path(tmp)
+        if not args.dry_run:
+            fetch_manifests(args.remote, date, manifests)
+        gate(args, date, dest, manifests)
+        if do_finalize:
+            finalize(args, date, dest, total_bytes)
+        if do_catalog:
+            publish_catalog(args, date, manifests)
+    print("\nDone.")
+
+
+def gate(args, date: str, dest: str, manifests: Path) -> None:
     if args.skip_completeness:
         print("\n[gate] completeness check skipped (--skip-completeness)")
-    elif args.dry_run:
+        return
+    if args.dry_run:
         print("\n[gate] completeness check skipped in --dry-run")
-    else:
-        if not args.states_geojson.is_file():
-            sys.exit(f"--states-geojson not found: {args.states_geojson} "
-                     f"(needed for the completeness gate; or --skip-completeness)")
-        expected = load_expected_isos(args.states_geojson, set(args.exclude))
-        print(f"\n[gate] checking {dest} covers {len(expected)} regions "
-              f"x {len(EXPECTED_THEMES)} themes")
-        problems = check_snapshot_complete(args.remote, date, expected)
-        if problems:
-            for pr in problems[:30]:
-                print(f"  - {pr}")
-            if len(problems) > 30:
-                print(f"  ... {len(problems) - 30} more")
-            sys.exit(f"snapshot {date} is incomplete ({len(problems)} problems); "
-                     f"not touching latest/ or snapshots.json")
-        print("  complete")
+        return
+    if not args.states_geojson.is_file():
+        sys.exit(f"--states-geojson not found: {args.states_geojson} "
+                 f"(needed for the completeness gate; or --skip-completeness)")
+    expected = load_expected_isos(args.states_geojson, set(args.exclude))
+    print(f"\n[gate] checking {dest} covers {len(expected)} regions "
+          f"x {len(EXPECTED_THEMES)} themes")
+    problems = check_snapshot_complete(args.remote, date, expected, manifests)
+    if problems:
+        for pr in problems[:30]:
+            print(f"  - {pr}")
+        if len(problems) > 30:
+            print(f"  ... {len(problems) - 30} more")
+        sys.exit(f"snapshot {date} is incomplete ({len(problems)} problems); "
+                 f"not touching latest/, snapshots.json or the catalog")
+    print("  complete")
 
+
+def publish_catalog(args, date: str, manifests: Path) -> None:
+    print(f"\n[5/5] Portolan catalog -> {args.remote}/{catalog.CATALOG_PREFIX}/")
+    if args.dry_run:
+        print("  (skipped in --dry-run)")
+        return
+    if args.skip_completeness:
+        # Never describe a snapshot nobody checked: the catalog advertises
+        # the whole glob as one complete dataset.
+        print("  skipped: --skip-completeness")
+        return
+    newest = newest_snapshot(args.remote)
+    if newest and date < newest:
+        print(f"  skipped: {date} is older than the newest snapshot {newest}")
+        return
+    catalog.publish(manifests, date, args.remote, dry_run=False)
+
+
+def finalize(args, date: str, dest: str, total_bytes: int) -> None:
     latest = f"{args.remote}/latest/"
-    print(f"\n[2/4] sync latest/ -> {latest}  (server-side copy from {date}/)")
+    print(f"\n[2/5] sync latest/ -> {latest}  (server-side copy from {date}/)")
     # Server-side S3 CopyObject from the dated snapshot avoids re-uploading
     # ~35 GB every night. The source's Cache-Control is `immutable`, which
     # would pin latest/ at the edge forever if it leaked through, so we
@@ -388,10 +439,10 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
-    print(f"\n[3/4] attribution")
+    print(f"\n[3/5] attribution")
     ensure_attribution(args.remote, dry_run=args.dry_run)
 
-    print(f"\n[4/4] snapshots.json")
+    print(f"\n[4/5] snapshots.json")
     if args.dry_run:
         print("  (skipped in --dry-run)")
     else:
@@ -403,8 +454,6 @@ def main() -> None:
         for s in manifest["snapshots"]:
             print(f"  {s['date']}  {s['objects']:>4} files  "
                   f"{s['bytes']/1_000_000:>7.1f} MB")
-
-    print("\nDone.")
 
 
 if __name__ == "__main__":
