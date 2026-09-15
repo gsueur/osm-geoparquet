@@ -35,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from themes import THEMES  # noqa: E402
 
-BASE_COLUMNS = {"osm_id", "osm_type", "country", "state", "state_iso", "tags", "bbox", "geometry"}
+BASE_COLUMNS = {"osm_id", "osm_type", "country", "state_name", "state_iso", "tags", "bbox", "geometry"}
 EXPECTED_THEMES = [t.name for t in THEMES]
 
 # Cloudflare's default bot mitigation rejects urllib's generic UA with 403.
@@ -84,6 +84,35 @@ def load_expected_isos(geojson: Path, excluded: set[str]) -> set[str]:
         if iso and iso not in excluded and iso.split("-")[0] in ("US", "CA", "MX"):
             out.add(iso)
     return out
+
+
+OSM_TYPES = {"node", "way", "relation"}
+
+
+def osm_identity_errors(pf) -> list[str]:
+    """osm_id / osm_type sanity from footer statistics only (no row reads).
+
+    Up to schema 0.2.0 both columns were silently dead (NULL ids, 'Feature'
+    type) because osmium wrote no feature id. Guard against a regression.
+    """
+    md = pf.metadata
+    names = [md.schema.column(i).name for i in range(md.num_columns)]
+    idx = {n: names.index(n) for n in ("osm_id", "osm_type")}
+    nulls = {n: 0 for n in idx}
+    types: set[str] = set()
+    for rg in range(md.num_row_groups):
+        for n, i in idx.items():
+            st = md.row_group(rg).column(i).statistics
+            if st is None:
+                return [f"{n}: no column statistics"]
+            nulls[n] += st.null_count
+            if n == "osm_type" and st.has_min_max:
+                types |= {st.min, st.max}
+    errors = [f"{n}: {c:,} of {md.num_rows:,} rows are NULL"
+              for n, c in nulls.items() if c]
+    if types - OSM_TYPES:
+        errors.append(f"osm_type: unexpected values {sorted(types - OSM_TYPES)}")
+    return errors
 
 
 def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> Suite:
@@ -149,6 +178,9 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
                 schema = set(pf.schema_arrow.names)
                 if not BASE_COLUMNS.issubset(schema):
                     schema_fails.append(f"{iso}/{theme}: missing {BASE_COLUMNS - schema}")
+                else:
+                    schema_fails.extend(
+                        f"{iso}/{theme}: {e}" for e in osm_identity_errors(pf))
                 geo = pf.schema_arrow.metadata and pf.schema_arrow.metadata.get(b"geo")
                 if geo:
                     gm = json.loads(geo)

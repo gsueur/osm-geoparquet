@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -43,7 +44,12 @@ import duckdb
 
 from themes import THEMES, POST_FILTERS, Theme
 
-SCHEMA_VERSION = "0.2.0"
+# 0.3.0: the per-file `state` column is now `state_name`, so it no longer
+# collides with the `state=<ISO>` Hive key (DuckDB's hive auto-detection
+# silently replaced the column with the path value on globbed reads).
+# osm_id / osm_type are populated (they were NULL / 'Feature' before). The
+# manifest gains `source_timestamp` and `theme_stats` for the catalog.
+SCHEMA_VERSION = "0.3.0"
 
 # Set by main(); workers inherit it through fork. True = echo every subprocess
 # command + per-theme status; False = quiet, main prints one progress line
@@ -127,6 +133,11 @@ def osmium_export(src_pbf: Path, geometry_types: str, out_jsonseq: Path) -> None
         "osmium", "export",
         str(src_pbf),
         "--geometry-types", geometry_types,
+        # Top-level feature id "n123" / "w123" / "r123" (areas take the id of
+        # the way or relation they were built from). Without it osmium writes
+        # no id at all, which left osm_id NULL and osm_type 'Feature' in every
+        # file up to schema 0.2.0.
+        "--add-unique-id", "type_id",
         "--output-format", "geojsonseq",
         "-x", "print_record_separator=false",
         "-o", str(out_jsonseq),
@@ -200,8 +211,12 @@ def write_theme_parquet(
     con.execute(f"""
         CREATE VIEW src AS
         SELECT
-            TRY_CAST(id AS BIGINT)                      AS osm_id,
-            CAST(type AS VARCHAR)                       AS osm_type,
+            TRY_CAST(substr(id, 2) AS BIGINT)           AS osm_id,
+            CASE left(id, 1)
+                WHEN 'n' THEN 'node'
+                WHEN 'w' THEN 'way'
+                WHEN 'r' THEN 'relation'
+            END                                         AS osm_type,
             CAST(properties AS MAP(VARCHAR, VARCHAR))   AS tags,
             ST_GeomFromGeoJSON(geometry)                AS geometry
         FROM read_json_auto(
@@ -261,7 +276,7 @@ def write_theme_parquet(
                 osm_id,
                 osm_type,
                 ? AS country,
-                ? AS state,
+                ? AS state_name,
                 ? AS state_iso,
                 {typed_sql},
                 tags,
@@ -296,6 +311,43 @@ def write_theme_parquet(
         print(f"    [{theme.name}] {count:,} features, {size_mb:.1f} MB (v2.0 + bbox)")
     return count
 
+
+def parquet_stats(con: duckdb.DuckDBPyConnection, path: Path) -> dict:
+    """Extent and schema of a written theme file, recorded in the manifest so
+    the Portolan catalog (scripts/catalog.py) is built without reading any
+    parquet over the network.
+
+    The extent comes from the `bbox` column, an outer bound by construction,
+    rounded outward to 1e-6 degrees so it stays one. hive_partitioning is off:
+    the path contains country=/state=, and DuckDB would otherwise add those
+    keys to the schema as if they were columns of the file.
+    """
+    src = f"read_parquet('{path}', hive_partitioning = false)"
+    xmin, ymin, xmax, ymax = con.execute(f"""
+        SELECT min(bbox.xmin), min(bbox.ymin), max(bbox.xmax), max(bbox.ymax)
+        FROM {src}
+    """).fetchone()
+    columns = con.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()
+    return {
+        "bbox": [math.floor(xmin * 1e6) / 1e6, math.floor(ymin * 1e6) / 1e6,
+                 math.ceil(xmax * 1e6) / 1e6, math.ceil(ymax * 1e6) / 1e6],
+        "columns": [[name, col_type] for name, col_type, *_ in columns],
+    }
+
+
+def pbf_timestamp(pbf: Path) -> str | None:
+    """OSM replication timestamp from the PBF header (Geofabrik sets it), i.e.
+    the moment the data reflects. None when the header does not carry it."""
+    try:
+        r = subprocess.run(
+            ["osmium", "fileinfo", "-g",
+             "header.option.osmosis_replication_timestamp", str(pbf)],
+            check=True, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return r.stdout.strip() or None
+
 # ---------- per-state orchestration ----------
 
 def process_state(
@@ -307,6 +359,7 @@ def process_state(
     keep_intermediate: bool,
     verbose: bool = False,
     progress_queue=None,
+    source_timestamp: str | None = None,
 ) -> dict:
     """Run clip + all themes for one state.
 
@@ -359,6 +412,7 @@ def process_state(
     emit("step_done", step="clip")
 
     counts: dict[str, int] = {}
+    theme_stats: dict[str, dict] = {}
     for theme in themes:
         t0 = time.time()
         theme_pbf     = state_work / f"{theme.name}.osm.pbf"
@@ -374,6 +428,8 @@ def process_state(
                 state_iso=state.iso,
             )
             counts[theme.name] = n
+            if n > 0:
+                theme_stats[theme.name] = parquet_stats(con, theme_parquet)
             if verbose:
                 print(f"    [{theme.name}] {time.time()-t0:.1f}s total")
         except subprocess.CalledProcessError as e:
@@ -399,9 +455,11 @@ def process_state(
         "state_iso": state.iso,
         "state_name": state.name,
         "source_pbf": source_pbf.name,
+        "source_timestamp": source_timestamp,
         "duration_s": duration,
         "total_features": total_features,
         "themes": counts,
+        "theme_stats": theme_stats,
     }
     (state_out_dir / "_manifest.json").write_text(json.dumps(manifest, indent=2))
 
@@ -668,6 +726,7 @@ def main() -> None:
         themes=themes,
         keep_intermediate=args.keep_intermediate,
         verbose=args.verbose,
+        source_timestamp=pbf_timestamp(args.source_pbf),
     )
 
     if args.workers > 1:
