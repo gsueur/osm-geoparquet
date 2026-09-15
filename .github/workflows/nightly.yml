@@ -121,7 +121,7 @@ jobs:
       - name: Tools
         run: bash .github/scripts/install-tools.sh
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: Python deps
         run: uv sync --project scripts
 
@@ -177,7 +177,7 @@ jobs:
       - name: Tools
         run: bash .github/scripts/install-tools.sh
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: Python deps
         run: uv sync --project scripts
 
