@@ -11,5 +11,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommen
 
 curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
 
-osmium --version | head -1
-rclone version | head -1
+# sed -n 1p, not head -1: head closes the pipe after one line and the writer
+# can die of SIGPIPE (exit 141), which pipefail turns into a failed step.
+osmium --version | sed -n 1p
+rclone version | sed -n 1p
