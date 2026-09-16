@@ -3,8 +3,9 @@
 # One `build` job per Geofabrik extract (US state / CA province / Mexico),
 # each clipping its regions with the admin polygons, building all themes and
 # uploading its part of the dated snapshot to R2. `finalize` then verifies the
-# snapshot is complete before syncing latest/, ATTRIBUTION.txt and
-# snapshots.json, and prunes old snapshots.
+# snapshot is complete before syncing latest/, ATTRIBUTION.txt,
+# snapshots.json and the Portolan catalog (catalog/), and prunes old
+# snapshots.
 #
 # A failed region never goes live: finalize only runs if every build job
 # succeeded, and publish.py's completeness gate re-checks the bucket. Use
@@ -157,6 +158,14 @@ jobs:
             --out-dir "$WORK/out" \
             --admin-geojson data/admin_regions.geojson \
             --states ${{ matrix.states }}
+
+      - name: Portolan data check
+        # rashid's data pass over this job's partitions before anything is
+        # uploaded: 150,000-row row-group cap, per-row-group spatial
+        # statistics, GeoParquet version, one schema per theme.
+        run: |
+          uv run --project scripts python scripts/catalog.py check-data \
+            --out-dir "$WORK/out" --date "${{ needs.plan.outputs.date }}"
 
       - name: Upload to R2 (${{ needs.plan.outputs.date }})
         if: env.PUBLISH == 'true'

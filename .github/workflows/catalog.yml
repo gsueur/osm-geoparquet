@@ -1,0 +1,39 @@
+# Portolan catalog gate: the catalog rendered from the committed fixture
+# manifests must pass rashid, and every violation catalog.py plants in a copy
+# of it must fail. A validator that never fails proves nothing.
+#
+# The data rules (row groups, spatial statistics, one schema per theme) need
+# real parquet, so they run in the nightly build jobs (catalog.py check-data).
+
+name: catalog
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "catalog/**"
+      - "tests/fixtures/**"
+      - "site/public/logo-192.png"
+      - ".github/workflows/catalog.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "catalog/**"
+      - "tests/fixtures/**"
+      - "site/public/logo-192.png"
+      - ".github/workflows/catalog.yml"
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: Python deps
+        run: uv sync --project scripts
+
+      - name: Fixture catalog passes, planted violations fail
+        run: uv run --project scripts python scripts/catalog.py selftest

@@ -318,7 +318,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-    "Access-Control-Expose-Headers": "ETag, Content-Length, Content-Range, Accept-Ranges",
+    "Access-Control-Expose-Headers": "Content-Type, Content-Length, Content-Range, Accept-Ranges, ETag",
   };
 }
 

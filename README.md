@@ -21,6 +21,19 @@ Column projection, bbox filtering, and row-group pruning all work via HTTP range
 
 Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See the `ATTRIBUTION.txt` file at the bucket root for redistribution terms.
 
+### Portolan catalog
+
+Each snapshot is described by a [Portolan](https://github.com/portolan-sdi/portolan-spec) (STAC) catalog at `https://parquetry.geomermaids.com/catalog/catalog.json`: one partitioned collection per theme, with column docs, extents, row counts, and a `partition:glob` that reads every region at once through the anonymous S3 endpoint `s3.geomermaids.com`. It is metadata only and copies no data. `publish.py` finalize regenerates it from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
+
+### Schema 0.3.0 (breaking)
+
+Snapshots whose `_manifest.json` says `"schema_version": "0.3.0"` changed two things:
+
+- The per-file `state` column is now `state_name`. It collided with the `state=<ISO>` path key, and DuckDB's Hive auto-detection silently replaced the region name with the ISO code on globbed reads.
+- `osm_id` and `osm_type` are populated. Before, `osm_id` was always NULL and `osm_type` always `'Feature'`.
+
+Queries that mix older and newer snapshots in one glob need `union_by_name = true`.
+
 ## Requirements
 
 - Python ≥ 3.12
