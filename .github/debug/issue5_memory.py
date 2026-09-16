@@ -9,6 +9,7 @@ Mirrors pipeline.osmium_extract_batch exactly (config file, -d, batches of
          ... MX-              every region whose ISO starts with MX-
 """
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,8 +23,8 @@ from pipeline import load_states, write_state_polygon  # noqa: E402
 
 SRC, ADMIN, W = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 WANT = sys.argv[4:]
-BATCH = 5
-STRATEGIES = ["simple", "smart", "complete_ways"]
+BATCH = int(os.environ.get("BATCH", "5"))
+STRATEGIES = os.environ.get("STRATEGIES", "simple,smart,complete_ways").split(",")
 W.mkdir(parents=True, exist_ok=True)
 out: list[str] = []
 
@@ -97,7 +98,7 @@ for strategy in STRATEGIES:
     dest = W / strategy
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir()
-    total_s, peak = 0.0, 0
+    total_s, peak, call_peaks = 0.0, 0, []
     for batch in batches:
         for iso in batch:
             (dest / iso).mkdir(exist_ok=True)
@@ -110,6 +111,7 @@ for strategy in STRATEGIES:
                            "-s", strategy, "--overwrite", str(SRC)])
         total_s += secs
         peak = max(peak, rss)
+        call_peaks.append((batch, rss))
     size = sum((dest / iso / f"{iso}.osm.pbf").stat().st_size for iso in isos)
     elems = {"nodes": 0, "ways": 0, "relations": 0}
     with_state = admin_total = 0
@@ -123,6 +125,9 @@ for strategy in STRATEGIES:
         admin_total += sum(lv.values())
         with_state += 1 if lv.get("4") else 0
     rows.append((strategy, total_s, peak, size, elems, admin_total, with_state))
+    say(f"{strategy} per-call peak RSS: " + "; ".join(
+        f"{'+'.join(b)} {r / 1024 / 1024:.1f} GB" for b, r in call_peaks))
+    say()
     shutil.rmtree(dest)  # keep the runner disk free for the next strategy
 
 base = rows[0]
@@ -133,7 +138,7 @@ for strategy, secs, rss, size, elems, admin_total, with_state in rows:
     say(f"| {strategy} | {secs:.0f} s | {rss / 1024 / 1024:.1f} GB | {size / 1e9:.2f} GB | "
         f"{elems['ways']:,}{grow} | {admin_total:,} | {with_state} of {len(isos)} |")
 say()
-if len(isos) > 1:
+if len(isos) > 1 and {"simple", "smart"} <= set(STRATEGIES):
     say("Admin areas per region (simple → smart):")
     say()
     for iso in isos:

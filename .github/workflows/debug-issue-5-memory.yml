@@ -1,5 +1,6 @@
-# Temporary, issue #5: cost of clipping with smart / complete_ways on the
-# heaviest nightly jobs. Runs on pushes to debug/issue-5 that touch it.
+# Temporary, issue #5: peak memory of clipping Mexico with smart at
+# several extract batch sizes (5, the current default, is the control).
+# Runs on pushes to debug/issue-5 that touch it.
 
 name: debug-issue-5-memory
 
@@ -14,20 +15,11 @@ jobs:
   measure:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
-    name: ${{ matrix.id }}
+    name: mexico smart, batch ${{ matrix.batch }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - id: us-california
-            url: https://download.geofabrik.de/north-america/us/california-latest.osm.pbf
-            regions: US-CA
-          - id: ca-ontario
-            url: https://download.geofabrik.de/north-america/canada/ontario-latest.osm.pbf
-            regions: CA-ON
-          - id: mexico
-            url: https://download.geofabrik.de/north-america/mexico-latest.osm.pbf
-            regions: MX-
+        batch: [2, 3, 5]
     steps:
       - uses: actions/checkout@v7
 
@@ -51,15 +43,18 @@ jobs:
         env:
           ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
 
-      - name: Download ${{ matrix.id }}
+      - name: Download Mexico
         run: |
           curl -fL --retry 5 --retry-delay 30 --retry-all-errors \
             -A "osm-geoparquet-debug/1.0 (+https://geoparquet.geomermaids.com/)" \
-            -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
+            -o "$WORK/source.osm.pbf" https://download.geofabrik.de/north-america/mexico-latest.osm.pbf
           ls -lh "$WORK/source.osm.pbf"
 
       - name: Measure strategies
+        env:
+          BATCH: ${{ matrix.batch }}
+          STRATEGIES: smart
         run: |
           uv run --project scripts python .github/debug/issue5_memory.py \
-            "$WORK/source.osm.pbf" data/admin_regions.geojson "$WORK/debug" ${{ matrix.regions }}
+            "$WORK/source.osm.pbf" data/admin_regions.geojson "$WORK/debug" MX-
           cat "$WORK/debug/report.md" >> "$GITHUB_STEP_SUMMARY"
