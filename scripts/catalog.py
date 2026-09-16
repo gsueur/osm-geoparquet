@@ -15,8 +15,20 @@ writes (schema >= 0.3.0), so building the catalog reads no parquet. The prose
 lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
 pyproject.toml.
 
-Published at https://parquetry.geomermaids.com/catalog/catalog.json, rebuilt
-by publish.py's finalize stage after the completeness gate.
+Two kinds of catalog, both written by publish.py's finalize stage after the
+completeness gate:
+
+  catalog/catalog.json          the live one. Its globs read latest/, so it
+                                stays current, and its URL is what the
+                                registry points at. Rebuilt nightly.
+  catalog/<YYYY-MM-DD>/         a pinned copy, published only for snapshots
+                                retention keeps (the first of each month, and
+                                Dec 31), with globs pinned to that date. Never
+                                rewritten, and pruned with its snapshot.
+
+The live catalog links each pinned one as rel:'predecessor-version', and each
+pinned one links back as rel:'latest-version'. Neither rel is structural, so a
+validator does not try to resolve them inside the tree.
 
 Usage:
   # render from local manifests (a pipeline out/ dir or a manifest mirror)
@@ -280,10 +292,10 @@ def column_doc(theme: Theme, name: str) -> str:
     return doc + f" See https://wiki.openstreetmap.org/wiki/Key:{key}"
 
 
-def partition_glob(theme: str, date: str, local: bool) -> str:
+def partition_glob(theme: str, target: str, local: bool) -> str:
     if local:
         return f"./country=*/state=*/{theme}.parquet"
-    return f"s3://{BUCKET}/{date}/country=*/state=*/{theme}.parquet"
+    return f"s3://{BUCKET}/{target}/country=*/state=*/{theme}.parquet"
 
 
 def country_list(countries: list[str]) -> str:
@@ -300,12 +312,17 @@ def md_link(rel: str, href: str, title: str) -> dict:
 
 
 def build_collection(theme: Theme, agg: dict, date: str, updated: str,
-                     interval: list[str], countries: list[str], local: bool) -> dict:
+                     interval: list[str], countries: list[str], local: bool,
+                     target: str) -> dict:
     title, description = THEME_DOCS[theme.name]
-    glob = partition_glob(theme.name, date, local)
+    glob = partition_glob(theme.name, target, local)
+    tracking = ("the nightly build, so its contents change every night"
+                if target == "latest" else
+                f"the immutable {target} snapshot")
     description = (
         f"{description} Cut to the admin regions (states, provinces and "
         f"territories) of {country_list(countries)}, one GeoParquet file per region. "
+        f"This collection reads {tracking}. "
         f"Read every region at once with the partition glob {glob} through the "
         f"anonymous S3 endpoint {S3_ENDPOINT} (path-style, empty credentials), "
         f"or one region over plain HTTPS. The README gives both setups."
@@ -362,31 +379,56 @@ def build_collection(theme: Theme, agg: dict, date: str, updated: str,
             md_link("agents", "./AGENTS.md", f"{title}: agent guide"),
             LICENSE_LINK,
             VIA_LINK,
-            {"rel": "alternate", "href": f"{PUBLIC_BASE}/{date}/", "type": "text/html",
-             "title": f"Browse the {date} snapshot files"},
+            {"rel": "alternate", "href": f"{PUBLIC_BASE}/{target}/", "type": "text/html",
+             "title": f"Browse the {target} files"},
         ],
     }
 
 
-def build_root(collections: list[dict], date: str, updated: str, countries: list[str]) -> dict:
+def build_root(collections: list[dict], date: str, updated: str, countries: list[str],
+               target: str, archives: list[str]) -> dict:
+    """The live catalog (target 'latest') or a pinned archive (target = a date).
+
+    The live one links each archive as a predecessor version; an archive links
+    back to the live one. Those rels are not structural, so a validator does
+    not try to resolve them inside the tree.
+    """
     names = country_list(countries)
+    live = target == "latest"
+    tracks = ("Its collections read latest/, the alias the nightly build "
+              f"refreshes, and it was generated from the {date} snapshot."
+              if live else
+              f"Its collections are pinned to the immutable {date} snapshot.")
+    if live:
+        version_links = [
+            {"rel": "predecessor-version", "href": f"{CATALOG_URL}/{d}/catalog.json",
+             "type": "application/json", "title": f"{d} snapshot, pinned"}
+            for d in archives
+        ]
+    else:
+        version_links = [
+            {"rel": "latest-version", "href": f"{CATALOG_URL}/catalog.json",
+             "type": "application/json", "title": "Current data (latest)"},
+        ]
+    self_href = (f"{CATALOG_URL}/catalog.json" if live
+                 else f"{CATALOG_URL}/{date}/catalog.json")
     return {
         "type": "Catalog",
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
-        "id": CATALOG_ID,
-        "title": "OpenStreetMap GeoParquet for North America",
+        "id": CATALOG_ID if live else f"{CATALOG_ID}-{date}",
+        "title": ("OpenStreetMap GeoParquet for North America" if live else
+                  f"OpenStreetMap GeoParquet for North America, {date}"),
         "description": (
             f"OpenStreetMap for {names}, split into {len(collections)} thematic "
             f"collections and partitioned by country and admin region, as "
-            f"Hilbert-ordered GeoParquet 2.0. Rebuilt nightly from Geofabrik "
-            f"extracts; this catalog describes the {date} snapshot. Data "
-            f"(c) OpenStreetMap contributors, ODbL 1.0."
+            f"Hilbert-ordered GeoParquet 2.0, rebuilt nightly from Geofabrik "
+            f"extracts. {tracks} Data (c) OpenStreetMap contributors, ODbL 1.0."
         ),
         "version": date,
         "updated": updated,
         "links": [
-            {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
+            {"rel": "self", "href": self_href, "type": "application/json"},
             {"rel": "root", "href": "./catalog.json", "type": "application/json"},
             *({"rel": "child", "href": f"./{c['id']}/collection.json",
                "type": "application/json", "title": c["title"]} for c in collections),
@@ -401,6 +443,7 @@ def build_root(collections: list[dict], date: str, updated: str, countries: list
              "title": "Report a problem"},
             {"rel": "related", "href": f"{PUBLIC_BASE}/snapshots.json",
              "type": "application/json", "title": "Index of every retained snapshot"},
+            *version_links,
             {"rel": "alternate", "href": SITE_URL, "type": "text/html",
              "title": "Project site"},
         ],
@@ -413,14 +456,22 @@ def fmt_bbox(b: list[float]) -> str:
     return ", ".join(f"{v:.4f}" for v in b)
 
 
-def access_section(theme: str, date: str) -> str:
+def access_section(theme: str, target: str) -> str:
+    switch = (
+        "Replace `latest` with a snapshot date, e.g. "
+        f"`{PUBLIC_BASE}/2026-09-01/...`, to pin data that does not move under "
+        "you. Monthly snapshots are kept, and each has its own catalog under "
+        f"{CATALOG_URL}/<date>/catalog.json."
+        if target == "latest" else
+        f"`{target}` is immutable. Replace it with `latest` to follow the "
+        "nightly build instead.")
     return f"""\
 One region over plain HTTPS, no credentials:
 
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
 SELECT count(*)
-FROM read_parquet('{PUBLIC_BASE}/{date}/country=US/state=US-RI/{theme}.parquet');
+FROM read_parquet('{PUBLIC_BASE}/{target}/country=US/state=US-RI/{theme}.parquet');
 ```
 
 Every region at once, through the anonymous S3 endpoint (plain HTTPS cannot
@@ -430,14 +481,13 @@ expand a glob because it has no listing):
 CREATE SECRET parquetry (TYPE s3, KEY_ID '', SECRET '',
     ENDPOINT '{S3_ENDPOINT}', URL_STYLE 'path');
 SELECT state, count(*)
-FROM read_parquet('s3://{BUCKET}/{date}/country=*/state=*/{theme}.parquet')
+FROM read_parquet('s3://{BUCKET}/{target}/country=*/state=*/{theme}.parquet')
 GROUP BY state ORDER BY 2 DESC;
 ```
 
 DuckDB reads `country` and `state` from the path (Hive partitioning), so a
 `WHERE state = 'US-NY'` filter skips every other file without opening it.
-Replace `{date}` with `latest` to follow the nightly build instead of pinning
-this snapshot."""
+{switch}"""
 
 
 PROVENANCE = f"""\
@@ -457,10 +507,12 @@ Credit "(c) OpenStreetMap contributors" in any product built on this data, and
 publish derived databases under the ODbL."""
 
 
-def collection_readme(theme: Theme, col: dict, agg: dict, date: str) -> str:
+def collection_readme(theme: Theme, col: dict, agg: dict, date: str, target: str) -> str:
     interval = col["extent"]["temporal"]["interval"][0]
     schema = "\n".join(
         f"| `{c['name']}` | `{c['type']}` | {c['description']} |" for c in col["table:columns"])
+    reads = ("`latest/`, refreshed nightly" if target == "latest"
+             else f"`{target}/`, immutable")
     return f"""\
 # {col['title']}
 
@@ -468,7 +520,8 @@ def collection_readme(theme: Theme, col: dict, agg: dict, date: str) -> str:
 
 | | |
 |---|---|
-| Snapshot | {date} (OSM data as of {as_of(interval)}) |
+| Reads | {reads} |
+| Counted on | {date} (OSM data as of {as_of(interval)}) |
 | Rows | {agg['rows']:,} in {agg['files']} files, one per admin region |
 | Extent | {fmt_bbox(agg['bbox'])} (lon/lat) |
 | Selection | `osmium tags-filter {theme.osmium_filter}`, exported as {theme.geometry_types.replace(',', ', ')} |
@@ -477,7 +530,7 @@ def collection_readme(theme: Theme, col: dict, agg: dict, date: str) -> str:
 
 ## Access
 
-{access_section(theme.name, date)}
+{access_section(theme.name, target)}
 
 ## Schema
 
@@ -495,7 +548,7 @@ def collection_readme(theme: Theme, col: dict, agg: dict, date: str) -> str:
 """
 
 
-def collection_agents(theme: Theme, col: dict, date: str) -> str:
+def collection_agents(theme: Theme, col: dict, target: str) -> str:
     promoted = ", ".join(f"`{n}`" for n, _ in theme.typed_columns)
     return f"""\
 # {col['title']}: agent guide
@@ -505,7 +558,7 @@ Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
 
 ## Access
 
-{access_section(theme.name, date)}
+{access_section(theme.name, target)}
 
 ## Query tips
 
@@ -528,7 +581,30 @@ Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
 """
 
 
-def root_readme(root: dict, collections: list[dict], aggs: dict, date: str) -> str:
+def versions_section(date: str, target: str, archives: list[str]) -> str:
+    if target != "latest":
+        return (f"""\
+This catalog is pinned to the immutable `{date}` snapshot, so its numbers and
+its files stay as they are. [Current data]({CATALOG_URL}/catalog.json) follows
+the nightly build.""")
+    listing = "\n".join(
+        f"- [{d}]({CATALOG_URL}/{d}/catalog.json)" for d in reversed(archives)
+    ) or "- none yet"
+    return f"""\
+This catalog tracks `latest/`, the alias the nightly build refreshes, and was
+generated from the {date} snapshot. Its row counts and extents describe that
+build; the files behind it change every night.
+
+For work that has to be reproducible, use a pinned catalog instead. Every
+snapshot kept beyond the 14-day daily window (the first of each month, and
+31 December as the yearly anchor) gets one, and it is removed when its
+snapshot is:
+
+{listing}"""
+
+
+def root_readme(root: dict, collections: list[dict], aggs: dict, date: str,
+                target: str, archives: list[str]) -> str:
     rows = "\n".join(
         f"| [{c['title']}](./{c['id']}/README.md) | `{c['id']}` | "
         f"{aggs[c['id']]['rows']:,} | {aggs[c['id']]['files']} |" for c in collections)
@@ -540,6 +616,10 @@ def root_readme(root: dict, collections: list[dict], aggs: dict, date: str) -> s
 | Collection | File stem | Rows | Files |
 |---|---|---|---|
 {rows}
+
+## Versions
+
+{versions_section(date, target, archives)}
 
 ## Access
 
@@ -563,14 +643,27 @@ Geomermaids, {CONTACT_EMAIL}. Source and issues: {REPO_URL}.
 """
 
 
-def root_agents(collections: list[dict], date: str) -> str:
+def root_agents(collections: list[dict], date: str, target: str) -> str:
     listing = "\n".join(f"- `{c['id']}`: {c['title']}. {c['id']}/AGENTS.md" for c in collections)
+    reads = (f"""\
+Reads `latest/`, which the nightly build refreshes, so the same query can
+return different numbers tomorrow. The counts here were taken from the {date}
+snapshot. For a result someone can reproduce, use a pinned catalog under
+{CATALOG_URL}/<date>/catalog.json: one exists for every snapshot kept beyond
+the 14-day daily window, and the live catalog links them as
+rel:'predecessor-version'."""
+        if target == "latest" else f"""\
+Pinned to the immutable `{date}` snapshot. Current data is at
+{CATALOG_URL}/catalog.json (rel:'latest-version').""")
     return f"""\
 # {CATALOG_ID}: agent guide
 
 OpenStreetMap as GeoParquet 2.0, one collection per theme, one file per admin
 region (US states, Canadian provinces and territories, Mexican states).
-Snapshot {date}.
+
+## Version
+
+{reads}
 
 ## Collections
 
@@ -578,11 +671,11 @@ Snapshot {date}.
 
 ## Access
 
-- One file: `{PUBLIC_BASE}/{date}/country=US/state=US-NY/buildings.parquet`
+- One file: `{PUBLIC_BASE}/{target}/country=US/state=US-NY/buildings.parquet`
   over HTTPS, no credentials. DuckDB, polars, pyarrow and GDAL read it in
   place with range requests.
 - All regions of a theme: the `partition:glob` of its collection,
-  `s3://{BUCKET}/{date}/country=*/state=*/<theme>.parquet`, through the
+  `s3://{BUCKET}/{target}/country=*/state=*/<theme>.parquet`, through the
   anonymous S3 endpoint `{S3_ENDPOINT}` with path-style addressing and empty
   credentials. Plain HTTPS cannot expand a glob.
 - Every file of a theme shares one schema, documented in the collection's
@@ -611,8 +704,13 @@ def write_json(path: Path, doc: dict) -> None:
 
 
 def build(manifests_dir: Path, date: str, dest: Path, *, updated: str | None = None,
-          local_glob: bool = False) -> dict:
+          local_glob: bool = False, target: str = "latest",
+          archives: list[str] = ()) -> dict:
     """Render the catalog tree into dest (replaced). Returns per-theme totals.
+
+    `target` is what the globs read: "latest" for the live catalog, or a
+    snapshot date for a pinned archive. `archives` are the pinned catalogs the
+    live one links as predecessor versions.
 
     The published catalog needs rows in every theme. The local data check
     (local_glob) runs per build job over a few regions, where a theme can be
@@ -620,6 +718,10 @@ def build(manifests_dir: Path, date: str, dest: Path, *, updated: str | None = N
     missing = {t.name for t in THEMES} ^ set(THEME_DOCS)
     if missing:
         sys.exit(f"THEME_DOCS and themes.py disagree on: {sorted(missing)}")
+    if target not in ("latest", date):
+        # A pinned catalog takes its id, self link and version from the
+        # snapshot it reads, so it can only describe its own date.
+        sys.exit(f"pinned catalog target {target} does not match date {date}")
     manifests = load_manifests(manifests_dir)
     aggs = aggregate(manifests)
     empty = [t.name for t in THEMES if t.name not in aggs]
@@ -637,19 +739,20 @@ def build(manifests_dir: Path, date: str, dest: Path, *, updated: str | None = N
     for t in THEMES:
         if t.name not in aggs:
             continue
-        col = build_collection(t, aggs[t.name], date, updated, interval, countries, local_glob)
+        col = build_collection(t, aggs[t.name], date, updated, interval, countries,
+                               local_glob, target)
         cdir = dest / t.name
         write_json(cdir / "collection.json", col)
         shutil.copyfile(ASSETS / "thumbnails" / f"{t.name}.png", cdir / "thumbnail.png")
-        (cdir / "README.md").write_text(collection_readme(t, col, aggs[t.name], date))
-        (cdir / "AGENTS.md").write_text(collection_agents(t, col, date))
+        (cdir / "README.md").write_text(collection_readme(t, col, aggs[t.name], date, target))
+        (cdir / "AGENTS.md").write_text(collection_agents(t, col, target))
         collections.append(col)
 
-    root = build_root(collections, date, updated, countries)
+    root = build_root(collections, date, updated, countries, target, list(archives))
     write_json(dest / "catalog.json", root)
     shutil.copyfile(LOGO, dest / "logo.png")
-    (dest / "README.md").write_text(root_readme(root, collections, aggs, date))
-    (dest / "AGENTS.md").write_text(root_agents(collections, date))
+    (dest / "README.md").write_text(root_readme(root, collections, aggs, date, target, list(archives)))
+    (dest / "AGENTS.md").write_text(root_agents(collections, date, target))
     return aggs
 
 
@@ -733,17 +836,25 @@ def _mutations() -> list[tuple[str, callable]]:
 
 
 def selftest(manifests_dir: Path) -> int:
-    """The fixture catalog must pass; every planted violation must fail. A
-    validator that has never failed on this catalog proves nothing."""
+    """Both catalogs must pass; every planted violation must fail. A validator
+    that has never failed on this catalog proves nothing."""
     ok = True
     with tempfile.TemporaryDirectory(prefix="catalog-selftest-") as tmp:
         clean = Path(tmp) / "clean"
-        build(manifests_dir, "2026-09-15", clean, updated="2026-09-15T06:00:00Z")
-        errors, findings = rashid(clean, *LOCAL_DATA)
-        print(f"clean fixture catalog: {errors} error(s)")
-        if errors:
-            print_findings(findings)
-            ok = False
+        # The live catalog, linking a pinned one, and a pinned catalog:
+        # different ids, self links, globs and version links.
+        for target, archives in (("latest", ["2026-09-01"]), ("2026-09-15", [])):
+            build(manifests_dir, "2026-09-15", clean, updated="2026-09-15T06:00:00Z",
+                  target=target, archives=archives)
+            errors, findings = rashid(clean, *LOCAL_DATA)
+            print(f"clean fixture catalog (target {target}): {errors} error(s)")
+            if errors:
+                print_findings(findings)
+                ok = False
+        # Violations are planted in the live one; the two differ only in
+        # links and prose.
+        build(manifests_dir, "2026-09-15", clean, updated="2026-09-15T06:00:00Z",
+              target="latest", archives=["2026-09-01"])
         for desc, mutate in _mutations():
             tree = Path(tmp) / "broken"
             if tree.exists():
@@ -761,37 +872,59 @@ def selftest(manifests_dir: Path) -> int:
 
 # ---------- upload ----------
 
-def upload(tree: Path, remote: str, *, dry_run: bool) -> None:
-    """Copy the rendered tree to <remote>/catalog/, root catalog.json last so
-    it never links a child that is not there yet. Short Cache-Control: the
-    catalog is rewritten every night. Nothing is deleted; a theme dropped from
-    themes.py leaves its old collection files behind until removed by hand."""
+def upload(tree: Path, remote: str, prefix: str, *, dry_run: bool) -> None:
+    """Copy the rendered tree to <remote>/<prefix>/, root catalog.json last so
+    it never links a child that is not there yet. Nothing is deleted; a theme
+    dropped from themes.py leaves its old collection files behind until
+    removed by hand.
+
+    Cache-Control is short for the live catalog, which is rewritten nightly,
+    and a year for a pinned one, which never changes."""
+    pinned = prefix != CATALOG_PREFIX
+    cache = ("public, max-age=31536000, immutable" if pinned
+             else "public, max-age=300")
     files = sorted(p for p in tree.rglob("*") if p.is_file())
     root = tree / "catalog.json"
     files = [p for p in files if p != root] + [root]
     for p in files:
         rel = p.relative_to(tree).as_posix()
         cmd = ["rclone", "copyto", "--ignore-times",
-               "--header-upload", "Cache-Control: public, max-age=300",
+               "--header-upload", f"Cache-Control: {cache}",
                "--header-upload", f"Content-Type: {MEDIA_TYPES[p.suffix]}",
-               str(p), f"{remote}/{CATALOG_PREFIX}/{rel}"]
+               str(p), f"{remote}/{prefix}/{rel}"]
         if dry_run:
             print(f"  $ {' '.join(cmd)}")
         else:
             subprocess.run(cmd, check=True)
-    print(f"  {len(files)} files -> {remote}/{CATALOG_PREFIX}/")
+    print(f"  {len(files)} files -> {remote}/{prefix}/")
 
 
-def publish(manifests_dir: Path, date: str, remote: str, *, dry_run: bool) -> None:
-    """Build, validate (metadata pass), upload. Used by publish.py finalize."""
+def build_check_upload(manifests_dir: Path, date: str, remote: str, prefix: str,
+                       *, target: str, archives: list[str], dry_run: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="catalog-") as tmp:
         tree = Path(tmp) / "catalog"
-        aggs = build(manifests_dir, date, tree)
+        aggs = build(manifests_dir, date, tree, target=target, archives=archives)
         print(f"  rendered {len(aggs)} collections, "
-              f"{sum(a['rows'] for a in aggs.values()):,} rows")
+              f"{sum(a['rows'] for a in aggs.values()):,} rows, reading {target}/")
         if check(tree, *LOCAL_DATA):
             sys.exit("catalog failed rashid; not uploading")
-        upload(tree, remote, dry_run=dry_run)
+        upload(tree, remote, prefix, dry_run=dry_run)
+
+
+def publish(manifests_dir: Path, date: str, remote: str, *,
+            archives: list[str], pin: bool, dry_run: bool) -> None:
+    """Publish the live catalog, and a pinned copy when this snapshot is one
+    retention keeps. Used by publish.py finalize.
+
+    The pinned copy goes up first, so the predecessor-version link the live
+    catalog carries resolves as soon as anyone can follow it."""
+    if pin:
+        print(f"  pinned catalog for {date}")
+        build_check_upload(manifests_dir, date, remote, f"{CATALOG_PREFIX}/{date}",
+                           target=date, archives=[], dry_run=dry_run)
+    print("  live catalog (latest)")
+    build_check_upload(manifests_dir, date, remote, CATALOG_PREFIX,
+                       target="latest", archives=archives, dry_run=dry_run)
 
 
 def main() -> None:
