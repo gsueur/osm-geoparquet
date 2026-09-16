@@ -42,7 +42,7 @@ from queue import Empty
 
 import duckdb
 
-from themes import THEMES, POST_FILTERS, Theme
+from themes import THEMES, POST_FILTERS, Theme, filter_predicate
 
 # 0.3.0: the per-file `state` column is now `state_name`, so it no longer
 # collides with the `state=<ISO>` Hive key (DuckDB's hive auto-detection
@@ -245,7 +245,12 @@ def write_theme_parquet(
         WHERE geometry IS NOT NULL
     """)
 
-    where = POST_FILTERS.get(theme.name, "TRUE")
+    # tags-filter keeps the objects a match references so geometries can be
+    # assembled, and export writes the tagged ones as features of their own
+    # (coastline rings in boundaries, crossing nodes in railways). Re-apply
+    # the theme's own filter to each row; see filter_predicate.
+    where = (f"({filter_predicate(theme.osmium_filter)}) "
+             f"AND ({POST_FILTERS.get(theme.name, 'TRUE')})")
 
     count = con.execute(f"SELECT COUNT(*) FROM src WHERE {where}").fetchone()[0]
     if count == 0:
