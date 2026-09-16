@@ -6,6 +6,9 @@ name: debug-issue-5
 on:
   push:
     branches: ["debug/issue-5"]
+    paths:
+      - ".github/debug/issue5.py"
+      - ".github/workflows/debug-issue-5.yml"
 
 jobs:
   rhode-island:
