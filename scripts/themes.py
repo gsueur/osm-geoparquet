@@ -16,6 +16,7 @@ code in pipeline.py stays unchanged.
 """
 
 from __future__ import annotations
+import re
 from dataclasses import dataclass
 
 
@@ -275,6 +276,40 @@ THEMES: list[Theme] = [
         ],
     ),
 ]
+
+
+_OSM_TYPES = {"n": "node", "w": "way", "r": "relation"}
+_FILTER_TOKEN = re.compile(r"([nwr]+)/([^=!*~\s]+)(?:=([^=!*~\s]+))?")
+
+
+def filter_predicate(expr: str) -> str:
+    """SQL predicate that keeps only the rows matching an osmium_filter.
+
+    `osmium tags-filter` also keeps every object a match references (the
+    nodes of a matched way, the members of a matched relation) so that
+    geometries can be assembled. `osmium export` then writes any of those
+    that carry tags of their own as features: the coastline rings inside a
+    boundary relation, the tagged nodes along a power line. Re-applying the
+    filter to each exported row's own type and tags drops them, while the
+    geometries assembled from them stay intact.
+
+    Supports the subset themes.py uses: `types/key` and
+    `types/key=v1,v2`, tokens OR-ed together. Anything else raises rather than
+    silently matching the wrong rows.
+    """
+    clauses = []
+    for token in expr.split():
+        m = _FILTER_TOKEN.fullmatch(token)
+        if not m:
+            raise ValueError(f"unsupported osmium filter token {token!r}")
+        types, key, values = m.groups()
+        type_list = ", ".join(f"'{_OSM_TYPES[t]}'" for t in types)
+        if values is None:
+            tag = f"map_contains(tags, '{key}')"
+        else:
+            tag = f"tags['{key}'] IN ({', '.join(repr(v) for v in values.split(','))})"
+        clauses.append(f"(osm_type IN ({type_list}) AND {tag})")
+    return " OR ".join(clauses)
 
 
 # SQL predicates applied AFTER osmium export, before parquet write.
