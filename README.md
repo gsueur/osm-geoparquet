@@ -23,7 +23,12 @@ Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opend
 
 ### Portolan catalog
 
-Each snapshot is described by a [Portolan](https://github.com/portolan-sdi/portolan-spec) (STAC) catalog at `https://parquetry.geomermaids.com/catalog/catalog.json`: one partitioned collection per theme, with column docs, extents, row counts, and a `partition:glob` that reads every region at once through the anonymous S3 endpoint `s3.geomermaids.com`. It is metadata only and copies no data. `publish.py` finalize regenerates it from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
+The data is described by a [Portolan](https://github.com/portolan-sdi/portolan-spec) (STAC) catalog: one partitioned collection per theme, with column docs, extents, row counts, and a `partition:glob` that reads every region at once through the anonymous S3 endpoint `s3.geomermaids.com`. It is metadata only and copies no data.
+
+- `https://parquetry.geomermaids.com/catalog/catalog.json` is the live catalog. It reads `latest/`, so it always describes current data, and it is rebuilt nightly.
+- `https://parquetry.geomermaids.com/catalog/<YYYY-MM-DD>/catalog.json` pins one snapshot. These are published only for the snapshots retention keeps (the first of each month, plus Dec 31), never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.
+
+`publish.py` finalize regenerates both from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
 
 ### Schema 0.3.0 (breaking)
 

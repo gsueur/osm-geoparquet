@@ -1,6 +1,10 @@
 # Portolan conformance
 
-The catalog at `https://parquetry.geomermaids.com/catalog/catalog.json` targets
+Two catalogs are published: the live one at
+`https://parquetry.geomermaids.com/catalog/catalog.json`, whose globs read
+`latest/`, and a pinned copy under `catalog/<YYYY-MM-DD>/` for every snapshot
+retention keeps. Both are rendered by the same generator and validated the
+same way, and the gates below cover both. They target
 [portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and is
 validated with rashid 0.1.8, pinned in `scripts/pyproject.toml`. Where rashid
 and the spec disagree, the spec decides; file the disagreement against rashid
@@ -14,14 +18,20 @@ the published JSON and Markdown are never edited in place.
 
 | Gate | Runs | Covers |
 |---|---|---|
-| `catalog.py selftest` | `catalog.yml`, every PR and push touching the catalog | Profile schema, STAC structure, links, providers, license, mirror rules, thumbnail bytes. Fixture catalog must pass; eight planted violations must each fail. |
+| `catalog.py selftest` | `catalog.yml`, every PR and push touching the catalog | Profile schema, STAC structure, links, providers, license, mirror rules, thumbnail bytes. The fixture catalog must pass in both forms, live and pinned; eight planted violations must each fail. |
 | `catalog.py check-data` | `nightly.yml`, every build job, before upload | rashid data pass (`PTL-DAT-*`) over that job's partitions: 150,000-row cap, spatial statistics, GeoParquet version, one schema per theme. |
 | `catalog.py` via `publish.py` finalize | `nightly.yml`, finalize, before upload | Same metadata pass on the real catalog. A failure stops the catalog upload and fails the run. |
 
-The published glob is `s3://parquetry/<date>/...`, which rashid cannot expand
-from a local tree, so the data rules would never reach the partitions in a
-metadata run. `check-data` renders a throwaway catalog whose globs point at
-the job's local files instead.
+The published glob is `s3://parquetry/latest/...` or `s3://parquetry/<date>/...`,
+which rashid cannot expand from a local tree, so the data rules would never
+reach the partitions in a metadata run. `check-data` renders a throwaway
+catalog whose globs point at the job's local files instead.
+
+A note on what the live catalog claims: its row counts, extents and file
+counts are measured from the snapshot it was generated from, while its globs
+read `latest/`, which the next night replaces. The two agree until the next
+build finishes. A pinned catalog has no such gap, which is why documentation
+sends anyone who needs reproducibility to one.
 
 ## Findings accepted as they stand
 

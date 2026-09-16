@@ -89,6 +89,16 @@ def sh_json(cmd: list[str]) -> list | dict:
     return json.loads(r.stdout)
 
 
+def list_snapshot_dirs(remote_path: str) -> set[str]:
+    """Date-named directories under a remote path. Empty when the path does
+    not exist yet, which is the state before the first catalog is published."""
+    r = subprocess.run(["rclone", "lsjson", remote_path, "--dirs-only"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return set()
+    return {e["Name"] for e in json.loads(r.stdout) if SNAPSHOT_RE.match(e["Name"])}
+
+
 # ---------- rclone progress-bar integration ----------
 
 _SIZE_RE = re.compile(r"([\d.]+)\s*([KMGTP]?i?B)\b")
@@ -263,6 +273,30 @@ def newest_snapshot(remote: str) -> str | None:
     return max(dates, default=None)
 
 
+def is_pinned_date(date: str) -> bool:
+    """True for the snapshots prune.py keeps past the 14-day daily window: the
+    first of each month, and Dec 31 as the yearly anchor. Those are the ones
+    worth a catalog of their own, since they are still there in a year.
+    Mirrors prune.classify(); keep the two in step."""
+    d = dt.date.fromisoformat(date)
+    return d.day == 1 or (d.month == 12 and d.day == 31)
+
+
+def pinned_catalogs(remote: str, date: str) -> list[str]:
+    """Pinned catalogs the live one should link, oldest first: those already on
+    the remote that tonight's prune will keep, plus this snapshot when it earns
+    one. Filtering by the retention rule keeps the live catalog from linking a
+    catalog that the prune step deletes a minute later."""
+    from prune import classify  # local import: prune imports this module
+
+    today = dt.date.today()
+    dates = list_snapshot_dirs(f"{remote}/{catalog.CATALOG_PREFIX}/")
+    if is_pinned_date(date):
+        dates.add(date)
+    return sorted(d for d in dates
+                  if classify(dt.date.fromisoformat(d), today) == "keep")
+
+
 def build_snapshot_manifest(remote: str) -> dict:
     entries = sh_json(["rclone", "lsjson", remote, "--dirs-only"])
     snapshots: list[dict] = []
@@ -407,9 +441,12 @@ def publish_catalog(args, date: str, manifests: Path) -> None:
         return
     newest = newest_snapshot(args.remote)
     if newest and date < newest:
+        # The live catalog describes latest/, which this run did not move.
         print(f"  skipped: {date} is older than the newest snapshot {newest}")
         return
-    catalog.publish(manifests, date, args.remote, dry_run=False)
+    catalog.publish(manifests, date, args.remote,
+                    archives=pinned_catalogs(args.remote, date),
+                    pin=is_pinned_date(date), dry_run=False)
 
 
 def finalize(args, date: str, dest: str, total_bytes: int) -> None:

@@ -34,6 +34,7 @@ from publish import (  # noqa: E402
     SNAPSHOT_RE,
     build_snapshot_manifest,
     count_remote_manifests,
+    list_snapshot_dirs,
     load_expected_isos,
     sh,
     sh_json,
@@ -61,6 +62,11 @@ def classify(date: dt.date, now: dt.date) -> str:
 def list_dated_prefixes(remote: str) -> list[str]:
     entries = sh_json(["rclone", "lsjson", remote, "--dirs-only"])
     return sorted(e["Name"] for e in entries if SNAPSHOT_RE.match(e["Name"]))
+
+
+def pinned_catalog_dates(remote: str) -> set[str]:
+    """Dates under catalog/ that carry a pinned Portolan catalog."""
+    return list_snapshot_dirs(f"{remote}/catalog/")
 
 
 def main() -> None:
@@ -131,8 +137,13 @@ def main() -> None:
         print("Nothing to delete. Remote already matches policy.")
         return
 
+    pinned = pinned_catalog_dates(args.remote)
     for d in deletes:
         sh(["rclone", "purge", f"{args.remote}/{d}/"])
+        # A pinned catalog outlives nothing: its globs point into the prefix
+        # that just went away.
+        if d in pinned:
+            sh(["rclone", "purge", f"{args.remote}/catalog/{d}/"])
 
     print()
     print("[snapshots.json] rebuilding")
