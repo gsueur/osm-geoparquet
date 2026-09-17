@@ -68,7 +68,7 @@ def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path) -> None:
     run([
         "osmium", "extract",
         "-p", str(poly),
-        "-s", "complete_ways",
+        "-s", "smart",  # same strategy as osmium_extract_batch, see there
         str(src_pbf),
         "-o", str(out_pbf),
         "--overwrite",
@@ -102,18 +102,22 @@ def osmium_extract_batch(
         })
     config_path = work_dir / "_extract_config.json"
     config_path.write_text(json.dumps({"extracts": extracts}))
-    # Strategy "simple" is single-pass, O(file-size) memory (~1-2 GB).
-    # complete_ways would build a full node-location index across the source
-    # (~22 GB for North America) and OOM on any normal server. simple
-    # clips cross-boundary ways at the region edge — which is the semantics
-    # we actually want for per-region thematic files: an NY roads file
-    # should contain the NY portion of interstate highways, not the whole
-    # thing reaching into NJ.
+    # Strategy "smart": nodes inside the polygon, every way touching the
+    # region kept whole with all its nodes, and type=multipolygon relations
+    # completed with all their members (osmium-extract(1); boundary relations
+    # are not completed, but their edge ways now arrive whole, which is what
+    # was missing). "simple" kept only the nodes inside the polygon; a
+    # handful of missing edge nodes left rings open, and osmium export
+    # silently dropped those areas: 20 of 32 Mexican state boundaries,
+    # Ontario's, and border towns and counties everywhere (issue #5).
+    # Keeping cross-border ways whole added only 0.0-0.2% ways, since an OSM
+    # way is a short segment. Memory grows with outputs per call; see
+    # --extract-batch-size.
     run([
         "osmium", "extract",
         "-c", str(config_path),
         "-d", str(work_dir),
-        "-s", "simple",
+        "-s", "smart",
         "--overwrite",
         str(src_pbf),
     ])
@@ -497,16 +501,14 @@ def process_state(
 
 def _bulk_extract(source_pbf: Path, states: list[State],
                   work_dir: Path, verbose: bool,
-                  batch_size: int = 25) -> None:
+                  batch_size: int = 3) -> None:
     """Osmium extract producing one state PBF per input state.
 
-    osmium's `complete_ways` strategy holds per-output bookkeeping in memory
-    for every polygon opened in the same invocation, so a single pass over
-    a 19 GB source with 100+ continental polygons can need 20+ GB of RAM.
-    We batch into groups of `batch_size` (default 25) — each batch is one
-    scan of the source PBF with bounded memory; the source is read once
-    per batch, not once per state, so total cost is still orders of
-    magnitude less than per-state extracts.
+    osmium's `smart` strategy holds per-output bookkeeping in memory for
+    every polygon opened in the same invocation, so peak memory follows the
+    number of outputs per call. We batch into groups of `batch_size` — each
+    batch is one scan of the source PBF with bounded memory; the source is
+    read once per batch, not once per state.
 
     If every expected state PBF already exists (e.g. a previous run with
     --keep-intermediate), the whole thing is skipped.
@@ -697,14 +699,14 @@ def main() -> None:
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Echo every subprocess command and per-theme status. "
                         "Default is quiet — one line per completed state.")
-    p.add_argument("--extract-batch-size", type=int, default=5,
+    p.add_argument("--extract-batch-size", type=int, default=3,
                    help="States per osmium-extract invocation during bulk extract. "
-                        "Memory scales per-polygon (osmium holds membership state "
-                        "for every output simultaneously), so continental-scale "
-                        "polygons cap at ~5 per batch on a 32 GB box. For 101 "
-                        "states that's ~21 scans of the source PBF; still way "
-                        "faster than per-state extracts because each scan covers "
-                        "5 outputs. Raise if you have more RAM, lower if less.")
+                        "Peak memory follows outputs per call (osmium holds "
+                        "membership state for every output at once). Measured "
+                        "with -s smart on Mexico's 32 states, 16 GB runner: "
+                        "5 per call 14.9 GB, 3 per call 10.8 GB in the same "
+                        "time, 2 per call 7.3 GB and ~30%% slower. Raise if you "
+                        "have more RAM, lower if less.")
     args = p.parse_args()
 
     global VERBOSE

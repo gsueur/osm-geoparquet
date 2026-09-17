@@ -494,9 +494,10 @@ PROVENANCE = f"""\
 OpenStreetMap data (c) OpenStreetMap contributors, via the daily regional
 extracts published by [Geofabrik](https://download.geofabrik.de/). Each night
 the [pipeline]({REPO_URL}) cuts every extract to admin-region polygons with
-`osmium extract` (simple strategy: a way crossing a border keeps only its
-nodes inside the region), selects each theme with `osmium tags-filter`,
-exports geometries with `osmium export`, and writes GeoParquet 2.0 with
+`osmium extract` (smart strategy: a way touching the region is kept whole,
+and multipolygon relations are completed), selects each theme with
+`osmium tags-filter`, exports geometries with `osmium export`, keeps only the
+features that match the theme's own filter, and writes GeoParquet 2.0 with
 DuckDB: Hilbert-ordered rows, zstd level 15, 50,000-row row groups, bloom
 filters on the promoted columns. A snapshot goes live only after every region
 and theme is complete."""
@@ -554,7 +555,7 @@ def collection_agents(theme: Theme, col: dict, target: str) -> str:
 # {col['title']}: agent guide
 
 Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
-`osmium tags-filter {theme.osmium_filter}`, cut to one admin region.
+`osmium tags-filter {theme.osmium_filter}` that touches one admin region.
 
 ## Access
 
@@ -571,10 +572,10 @@ Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
 - Filter regions on the `state` path key (ISO 3166-2, e.g. `US-NY`) rather
   than the `state_iso` column: the path key skips files without opening them.
   `state_name` is the region name.
-- A feature crossing a region border is in every region it touches, cut to
-  the nodes inside each one. Across the glob, count features with
-  `count(DISTINCT (osm_type, osm_id))`, and treat summed lengths or areas
-  near borders as approximate.
+- A feature crossing a region border is in every region it touches, whole
+  in each. Across the glob it repeats, so count features with
+  `count(DISTINCT (osm_type, osm_id))` and deduplicate on the same pair
+  before summing lengths or areas.
 - Snapshots are immutable under `/<YYYY-MM-DD>/`; `/latest/` follows the
   nightly build. Retention: {PUBLIC_BASE}/snapshots.json.
 - Attribution is required: "(c) OpenStreetMap contributors", ODbL 1.0.
