@@ -64,5 +64,6 @@ Run on 2026-09-15 with rashid 0.1.8:
 
 rashid's live probe (`--live`) against `parquetry.geomermaids.com` found range
 requests conformant and one CORS gap: `Access-Control-Expose-Headers` omitted
-`Content-Type` (`PTL-LIV-004`). Fixed in `files/` and `api/`; takes effect
-once both Workers are redeployed.
+`Content-Type` (`PTL-LIV-004`). Fixed in `files/` and `api/` and deployed on
+2026-09-16. On 2026-09-17, rashid 0.1.8 with `--schema --live` over a mirror of
+the published live catalog reported no errors and no warnings.
