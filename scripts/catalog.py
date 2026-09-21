@@ -78,6 +78,8 @@ PARTITION_EXT = "https://schemas.portolan-sdi.org/incubating/partition/v1.0.0/sc
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 FILE_EXT = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
 VERSION_EXT = "https://stac-extensions.github.io/version/v1.2.0/schema.json"
+ALTERNATE_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json"
+PARQUET_TYPE = "application/vnd.apache.parquet"
 
 LICENSE = "ODbL-1.0"
 LICENSE_LINK = {
@@ -190,10 +192,10 @@ BASE_COLUMN_DOCS = {
     "tags": "Every OSM tag on the element, as a key to value map. The promoted "
             "columns are typed copies of single tags.",
     "bbox": "Per-feature bounding box in float32, rounded outward so it always "
-            "contains the geometry (at most about 9 m of slack). Its Parquet "
+            "contains the geometry (at most about 9 m of slack). Declared as "
+            "the GeoParquet `covering` for the geometry column, and its Parquet "
             "min/max statistics let any engine skip row groups: filter on "
-            "bbox.xmin/ymin/xmax/ymax before touching geometry. It is not "
-            "declared as a GeoParquet covering.",
+            "bbox.xmin/ymin/xmax/ymax before touching geometry.",
     "geometry": "Feature geometry, native Parquet GEOMETRY (GeoParquet 2.0), "
                 "OGC:CRS84 longitude/latitude.",
 }
@@ -238,6 +240,7 @@ def aggregate(manifests: list[dict]) -> dict[str, dict]:
         bbox = [180.0, 90.0, -180.0, -90.0]
         columns: list | None = None
         columns_from = None
+        regions: list[dict] = []
         for m in manifests:
             n = m["themes"].get(t.name, 0)
             if n <= 0:
@@ -248,13 +251,17 @@ def aggregate(manifests: list[dict]) -> dict[str, dict]:
             b = st["bbox"]
             bbox = [min(bbox[0], b[0]), min(bbox[1], b[1]),
                     max(bbox[2], b[2]), max(bbox[3], b[3])]
+            regions.append({"iso": m["state_iso"], "country": m["country"],
+                            "name": m["state_name"], "rows": n,
+                            "size": st.get("size_bytes"), "sha256": st.get("sha256")})
             if columns is None:
                 columns, columns_from = st["columns"], m["state_iso"]
             elif st["columns"] != columns:
                 sys.exit(f"{t.name}: schema of {m['state_iso']} differs from "
                          f"{columns_from}; partitions must share one schema")
         if files:
-            out[t.name] = {"rows": rows, "files": files, "bbox": bbox, "columns": columns}
+            out[t.name] = {"rows": rows, "files": files, "bbox": bbox, "columns": columns,
+                           "regions": sorted(regions, key=lambda r: r["iso"])}
     return out
 
 
@@ -311,6 +318,43 @@ def md_link(rel: str, href: str, title: str) -> dict:
     return {"rel": rel, "href": href, "type": "text/markdown", "title": title}
 
 
+def data_assets(theme: str, regions: list[dict], target: str, local: bool) -> dict:
+    """One asset per region, so a STAC client can reach the files themselves.
+
+    The partition glob is the bulk path, but it is an s3 pattern a generic
+    client cannot expand or fetch, which left the catalog describing data no
+    STAC reader could open. Keyed `data-<iso>`; the s3 form of each href rides
+    along as an alternate (PORTO-CORE-024).
+
+    Skipped for the local data check, where the hrefs would send rashid to the
+    published bucket for every region.
+    """
+    if local:
+        return {}
+    assets = {}
+    for r in regions:
+        path = f"{target}/country={r['country']}/state={r['iso']}/{theme}.parquet"
+        asset = {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PARQUET_TYPE,
+            "title": f"{r['name']} ({r['iso']})",
+            "description": f"{r['rows']:,} features",
+            "roles": ["data"],
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        }
+        if r.get("size"):
+            asset["file:size"] = r["size"]
+        # A checksum must match the bytes the href resolves to, and `latest/`
+        # is replaced by the next build, so only a pinned catalog can carry
+        # one (spec: Assets, "a publisher that cannot keep one current should
+        # omit it").
+        if r.get("sha256") and target != "latest":
+            asset["file:checksum"] = "1220" + r["sha256"]
+        assets[f"data-{r['iso'].lower()}"] = asset
+    return assets
+
+
 def build_collection(theme: Theme, agg: dict, date: str, updated: str,
                      interval: list[str], countries: list[str], local: bool,
                      target: str) -> dict:
@@ -331,7 +375,8 @@ def build_collection(theme: Theme, agg: dict, date: str, updated: str,
     return {
         "type": "Collection",
         "stac_version": "1.1.0",
-        "stac_extensions": [PORTOLAN_SCHEMA, PARTITION_EXT, TABLE_EXT, FILE_EXT, VERSION_EXT],
+        "stac_extensions": [PORTOLAN_SCHEMA, PARTITION_EXT, TABLE_EXT, FILE_EXT,
+                            VERSION_EXT, ALTERNATE_EXT],
         "id": theme.name,
         "title": title,
         "description": description,
@@ -363,6 +408,7 @@ def build_collection(theme: Theme, agg: dict, date: str, updated: str,
             for n, t in agg["columns"]
         ],
         "assets": {
+            **data_assets(theme.name, agg["regions"], target, local),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -487,7 +533,12 @@ GROUP BY state ORDER BY 2 DESC;
 
 DuckDB reads `country` and `state` from the path (Hive partitioning), so a
 `WHERE state = 'US-NY'` filter skips every other file without opening it.
-{switch}"""
+{switch}
+
+Every region is also a STAC asset on this collection, keyed `data-<iso>` with
+media type `application/vnd.apache.parquet`, so a STAC client can list the
+files without expanding the glob. Each carries `file:size`, an `alternate` s3
+href, and, in a pinned catalog, `file:checksum`."""
 
 
 PROVENANCE = f"""\
@@ -681,12 +732,15 @@ region (US states, Canadian provinces and territories, Mexican states).
   credentials. Plain HTTPS cannot expand a glob.
 - Every file of a theme shares one schema, documented in the collection's
   `table:columns`.
+- Each collection also lists its regions as assets keyed `data-<iso>`, typed
+  `application/vnd.apache.parquet`, for clients that read assets rather than
+  the glob.
 
 ## Conventions
 
 - Geometry is native Parquet GEOMETRY, OGC:CRS84 lon/lat.
-- `bbox` is a per-row float32 box rounded outward; filter on it before
-  touching geometry.
+- `bbox` is a per-row float32 box rounded outward, declared as the
+  GeoParquet `covering`; filter on it before touching geometry.
 - `(osm_type, osm_id)` identifies an OSM element; it repeats across regions
   for features that cross a border.
 - Data (c) OpenStreetMap contributors, ODbL 1.0. Attribution is required.

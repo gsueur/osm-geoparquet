@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import shutil
@@ -44,12 +45,22 @@ import duckdb
 
 from themes import THEMES, POST_FILTERS, Theme, filter_predicate
 
+# 0.4.0: the `geo` metadata now declares the bbox column as a GeoParquet
+# covering, and each manifest records every file's size and sha256 so the
+# catalog can publish file:size and file:checksum.
 # 0.3.0: the per-file `state` column is now `state_name`, so it no longer
 # collides with the `state=<ISO>` Hive key (DuckDB's hive auto-detection
 # silently replaced the column with the path value on globbed reads).
 # osm_id / osm_type are populated (they were NULL / 'Feature' before). The
 # manifest gains `source_timestamp` and `theme_stats` for the catalog.
-SCHEMA_VERSION = "0.3.0"
+SCHEMA_VERSION = "0.4.0"
+
+# ST_GeometryType spelling -> the GeoParquet `geometry_types` spelling.
+GEOMETRY_TYPE_NAMES = {
+    "POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
+    "MULTIPOINT": "MultiPoint", "MULTILINESTRING": "MultiLineString",
+    "MULTIPOLYGON": "MultiPolygon", "GEOMETRYCOLLECTION": "GeometryCollection",
+}
 
 # Set by main(); workers inherit it through fork. True = echo every subprocess
 # command + per-theme status; False = quiet, main prints one progress line
@@ -256,7 +267,17 @@ def write_theme_parquet(
     where = (f"({filter_predicate(theme.osmium_filter)}) "
              f"AND ({POST_FILTERS.get(theme.name, 'TRUE')})")
 
-    count = con.execute(f"SELECT COUNT(*) FROM src WHERE {where}").fetchone()[0]
+    # One pass over the JSON view gives the row count, the extent (for both the
+    # Hilbert box and the `geo` metadata) and the geometry types the file will
+    # declare. It also lets the COPY below use a literal box instead of a CTE,
+    # which drops one scan of the source.
+    count, xmin, ymin, xmax, ymax, geom_types = con.execute(f"""
+        SELECT COUNT(*),
+               MIN(ST_XMin(geometry)), MIN(ST_YMin(geometry)),
+               MAX(ST_XMax(geometry)), MAX(ST_YMax(geometry)),
+               list(DISTINCT ST_GeometryType(geometry)::VARCHAR)
+        FROM src WHERE {where}
+    """).fetchone()
     if count == 0:
         if VERBOSE:
             print(f"    [{theme.name}] 0 features after filter, skipping")
@@ -281,19 +302,33 @@ def write_theme_parquet(
     # epsilon so it always contains the geometry — verified 0 violations, ~9 m max
     # slack, negligible for row-group pruning.
     #
-    # We deliberately do NOT write the GeoParquet `covering` metadata. The only
-    # tools that add it (gpio) rewrite the file and strip the bloom filters DuckDB
-    # writes by default, and injecting it via KV_METADATA produces a duplicate
-    # `geo` key. So spec-aware readers won't auto-detect the column, but explicit
-    # `bbox.*` predicates prune row groups in every engine, and we keep the bloom
-    # filters. DuckDB emits bloom filters on typed/admin/tags columns automatically.
+    # The `covering` that points spec-aware readers at that bbox column is not
+    # part of GeoParquet 2.0 yet, so DuckDB's writer does not emit it. We write
+    # the whole `geo` value ourselves through KV_METADATA instead: one `geo`
+    # key, the native GEOMETRY logical type, the bloom filters and the file size
+    # are all unchanged (gpio's `add bbox-metadata` rewrites the file at its own
+    # compression level, +36% on RI roads). Drop this once the writer declares
+    # the covering itself.
+    geo_metadata = json.dumps({
+        "version": "2.0.0",
+        "primary_column": "geometry",
+        "columns": {
+            "geometry": {
+                "encoding": "WKB",
+                "geometry_types": sorted(GEOMETRY_TYPE_NAMES[t] for t in geom_types),
+                "bbox": [xmin, ymin, xmax, ymax],
+                "covering": {"bbox": {
+                    "xmin": ["bbox", "xmin"], "ymin": ["bbox", "ymin"],
+                    "xmax": ["bbox", "xmax"], "ymax": ["bbox", "ymax"],
+                }},
+            }
+        },
+    }).replace("'", "''")
+    hilbert_box = (f"ST_Extent(ST_MakeEnvelope({xmin!r}, {ymin!r}, "
+                   f"{xmax!r}, {ymax!r}))")
+
     con.execute(f"""
         COPY (
-            WITH extent AS (
-                SELECT ST_Extent(ST_Extent_Agg(geometry)) AS box
-                FROM src
-                WHERE {where}
-            )
             SELECT
                 osm_id,
                 osm_type,
@@ -309,9 +344,9 @@ def write_theme_parquet(
                     ymax := (ST_YMax(geometry) + abs(ST_YMax(geometry)) * 1e-6 + 1e-9)::FLOAT
                 ) AS bbox,
                 geometry
-            FROM src, extent
+            FROM src
             WHERE {where}
-            ORDER BY ST_Hilbert(geometry, extent.box)
+            ORDER BY ST_Hilbert(geometry, {hilbert_box})
         ) TO '{out_parquet}' (
             FORMAT PARQUET,
             GEOPARQUET_VERSION 'V2',
@@ -324,7 +359,8 @@ def write_theme_parquet(
             -- CT buildings/roads 2026-09-14; 19+ buys 11% more for 3x the
             -- write time and 2x slower full scans.
             COMPRESSION_LEVEL 15,
-            ROW_GROUP_SIZE 50000
+            ROW_GROUP_SIZE 50000,
+            KV_METADATA {{geo: '{geo_metadata}'}}
         )
     """, [country, state_name, state_iso])
 
@@ -344,6 +380,11 @@ def parquet_stats(con: duckdb.DuckDBPyConnection, path: Path) -> dict:
     the path contains country=/state=, and DuckDB would otherwise add those
     keys to the schema as if they were columns of the file.
     """
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+
     src = f"read_parquet('{path}', hive_partitioning = false)"
     xmin, ymin, xmax, ymax = con.execute(f"""
         SELECT min(bbox.xmin), min(bbox.ymin), max(bbox.xmax), max(bbox.ymax)
@@ -354,6 +395,8 @@ def parquet_stats(con: duckdb.DuckDBPyConnection, path: Path) -> dict:
         "bbox": [math.floor(xmin * 1e6) / 1e6, math.floor(ymin * 1e6) / 1e6,
                  math.ceil(xmax * 1e6) / 1e6, math.ceil(ymax * 1e6) / 1e6],
         "columns": [[name, col_type] for name, col_type, *_ in columns],
+        "size_bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
     }
 
 
