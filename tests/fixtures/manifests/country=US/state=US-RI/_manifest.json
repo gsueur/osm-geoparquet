@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "country": "US",
   "state_iso": "US-RI",
   "state_name": "Rhode Island",
@@ -106,7 +106,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 18929075,
+      "sha256": "233a2a4146d92fd874103e19e6bdb740ea66904492f90663bc44795ca8d49c75"
     },
     "roads": {
       "bbox": [
@@ -200,7 +202,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 11227522,
+      "sha256": "d2d6292ed85f9282e7fa84d9691643c577731185158edbce7e28d12072ffd06c"
     },
     "railways": {
       "bbox": [
@@ -274,7 +278,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 154938,
+      "sha256": "d6ce30c3660a3d3e4ec96b6591f71bd368c9dfd395a12914232d97d0402394b8"
     },
     "waterways": {
       "bbox": [
@@ -336,7 +342,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 698106,
+      "sha256": "dfc0375e43b8aaf0d0e4bf5c12e79f2d8d2de53f0e89685918b1bcbabadfb819"
     },
     "water": {
       "bbox": [
@@ -398,7 +406,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 1661614,
+      "sha256": "f0a1d952fca8539522386454b58f22ec95634a1cc0d3bd0c254b3de342e06bba"
     },
     "landuse": {
       "bbox": [
@@ -452,7 +462,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 13725704,
+      "sha256": "7060dbd33178eb3d37757651b714265e9a3f84db2021d3e4df7feb26df8b78bd"
     },
     "natural_areas": {
       "bbox": [
@@ -506,7 +518,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 20777406,
+      "sha256": "3fbf0254a37848903ccc344628ceec620991e9b8fca988679aa0a2e74917823c"
     },
     "natural_features": {
       "bbox": [
@@ -564,7 +578,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 249366,
+      "sha256": "9a6253ad9c847f6f97148d86681ba1a3fcb51860cc52fd7a29ab710e1bf64a8b"
     },
     "places": {
       "bbox": [
@@ -630,7 +646,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 27132,
+      "sha256": "5bd64f82cd7be513b06039f0d2e966dece16902ae393f8567b7fc4fc1cd8791d"
     },
     "boundaries": {
       "bbox": [
@@ -696,7 +714,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 793663,
+      "sha256": "e5e217914c1fc2ce5545c3def5d516907eb1854c9957522197dd2abb2c810d13"
     },
     "pois": {
       "bbox": [
@@ -790,7 +810,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 376570,
+      "sha256": "a7ace58560697cffc588d1c31f5d7fcdc8954791d86c4433b175693ef905fdee"
     },
     "amenities_polygons": {
       "bbox": [
@@ -884,7 +906,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 2879719,
+      "sha256": "e9fd8b385e8a868ae025a45a65f93e12746ef6846bd0f3e5263d417c5204c7ac"
     },
     "power": {
       "bbox": [
@@ -950,7 +974,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 652052,
+      "sha256": "828a6c716a6e9b5bb73abfee929cace8ed999c659443d4917b61a8c20f2247fd"
     },
     "aeroways": {
       "bbox": [
@@ -1016,7 +1042,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 68042,
+      "sha256": "a637bb3a02a4b8214543d979c98cf50a7beb410255557cbcc18947a3935f3e55"
     },
     "barriers": {
       "bbox": [
@@ -1078,7 +1106,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 670057,
+      "sha256": "2227a22d6cbb66b7a0c495b72a19091be36a53952beba714e161552d11b2ec2e"
     },
     "public_transport": {
       "bbox": [
@@ -1156,7 +1186,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 189482,
+      "sha256": "a9b0d686be8cf75fc317d7345e7512e58b38ed622306eb2bfc1b76b7ba7c8ecb"
     }
   }
 }

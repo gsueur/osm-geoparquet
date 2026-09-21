@@ -186,6 +186,15 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
                     gm = json.loads(geo)
                     if gm.get("version") != "2.0.0":
                         schema_fails.append(f"{iso}/{theme}: geo version={gm.get('version')!r}, want 2.0.0")
+                    # The bbox column is only usable by spec-aware readers when
+                    # the geo metadata declares it as a covering; the writer
+                    # does not add it, pipeline.py does.
+                    cov = ((gm.get("columns") or {}).get(gm.get("primary_column", ""), {})
+                           .get("covering") or {}).get("bbox")
+                    if not cov:
+                        schema_fails.append(f"{iso}/{theme}: bbox column not declared as a covering")
+                    elif cov.get("xmin") != ["bbox", "xmin"]:
+                        schema_fails.append(f"{iso}/{theme}: covering points at {cov.get('xmin')}")
                 else:
                     schema_fails.append(f"{iso}/{theme}: no 'geo' metadata")
             except Exception as e:

@@ -5,7 +5,7 @@ Two catalogs are published: the live one at
 `latest/`, and a pinned copy under `catalog/<YYYY-MM-DD>/` for every snapshot
 retention keeps. Both are rendered by the same generator and validated the
 same way, and the gates below cover both. They target
-[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and is
+[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and are
 validated with rashid 0.1.8, pinned in `scripts/pyproject.toml`. Where rashid
 and the spec disagree, the spec decides; file the disagreement against rashid
 with the `PORTO` id and record it here.
@@ -41,8 +41,18 @@ expected on every run:
 | Rule | Severity | Why |
 |---|---|---|
 | `PTL-PRO-002` | info | No `canonical` link. OpenStreetMap publishes no STAC catalog to point at; the `via` link names the source. |
-| `PTL-DAT-007` | warning | Per-row-group spatial statistics come from native Parquet `GEOMETRY` statistics (allowed for GeoParquet 2.x), not a declared `bbox` covering. The `bbox` column exists with min/max statistics, but declaring it as a covering needs a rewrite that drops DuckDB's bloom filters (see `write_theme_parquet` in `scripts/pipeline.py`). |
-| `PTL-DAT-006` | info | rashid evaluates spatial ordering from the covering column, so with none declared it cannot score it. Rows are Hilbert-ordered on each file's own extent. |
+| `PTL-AST-003` | warning | The live catalog's data assets carry `file:size` but no `file:checksum`. Their hrefs point at `latest/`, which the next build replaces, and a checksum that does not match the bytes is a conformance failure, so the spec says to omit it. Pinned catalogs address an immutable snapshot and do carry checksums; they validate with no warnings. |
+
+Until 2026-09-21 this list also held `PTL-DAT-006` and `PTL-DAT-007`: the
+`bbox` column was not declared as a GeoParquet `covering`, so rashid could not
+evaluate spatial ordering and recommended a covering. `pipeline.py` now writes
+the `geo` metadata itself, covering included, and both findings are gone; the
+spatial-ordering check runs and passes.
+
+Each collection lists one data asset per region (`data-<iso>`, media type
+`application/vnd.apache.parquet`) alongside the partition glob, so a STAC
+client can reach the files without expanding an s3 pattern. Each asset carries
+an `alternate` s3 href per PORTO-CORE-024.
 
 No PMTiles are published, so the collections have no visualization
 derivative and no style assets (`PTL-VIZ-002` does not apply). Each carries a

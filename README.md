@@ -28,7 +28,14 @@ The data is described by a [Portolan](https://github.com/portolan-sdi/portolan-s
 - `https://parquetry.geomermaids.com/catalog/catalog.json` is the live catalog. It reads `latest/`, so it always describes current data, and it is rebuilt nightly.
 - `https://parquetry.geomermaids.com/catalog/<YYYY-MM-DD>/catalog.json` pins one snapshot. These are published only for the snapshots retention keeps (the first of each month, plus Dec 31), never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.
 
+Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd.apache.parquet`) as well as through `partition:glob`, so STAC clients can reach the files directly.
+
 `publish.py` finalize regenerates both from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
+
+### Schema 0.4.0
+
+- The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`. File size, row groups, bloom filters and the native `GEOMETRY` type are unchanged.
+- Each `_manifest.json` records every file's size and sha256, which the catalog publishes as `file:size` and (on pinned catalogs) `file:checksum`.
 
 ### Schema 0.3.0 (breaking)
 
