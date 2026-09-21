@@ -304,11 +304,19 @@ def write_theme_parquet(
     #
     # The `covering` that points spec-aware readers at that bbox column is not
     # part of GeoParquet 2.0 yet, so DuckDB's writer does not emit it. We write
-    # the whole `geo` value ourselves through KV_METADATA instead: one `geo`
-    # key, the native GEOMETRY logical type, the bloom filters and the file size
-    # are all unchanged (gpio's `add bbox-metadata` rewrites the file at its own
-    # compression level, +36% on RI roads). Drop this once the writer declares
-    # the covering itself.
+    # the whole `geo` value ourselves through KV_METADATA instead, which leaves
+    # the native GEOMETRY logical type, the bloom filters and the file size
+    # unchanged (gpio's `add bbox-metadata` rewrites the file at its own
+    # compression level, +36% on RI roads).
+    #
+    # That is also why the COPY asks for GEOPARQUET_VERSION 'NONE' rather than
+    # 'V2'. Under 'V2' DuckDB writes its own `geo` block *as well as* the one
+    # passed through KV_METADATA, and the footer ends up carrying the key
+    # twice, ours with the covering and DuckDB's without, with the winner left
+    # to whichever entry the reader happens to keep. pyarrow, gpio inspect and
+    # DuckDB's own reader all collapse the pair and show one, so it does not
+    # surface until the footer is read entry by entry. Drop this once the
+    # writer declares the covering itself.
     geo_metadata = json.dumps({
         "version": "2.0.0",
         "primary_column": "geometry",
@@ -349,7 +357,10 @@ def write_theme_parquet(
             ORDER BY ST_Hilbert(geometry, {hilbert_box})
         ) TO '{out_parquet}' (
             FORMAT PARQUET,
-            GEOPARQUET_VERSION 'V2',
+            -- 'NONE' governs the `geo` *metadata* only: the geometry column is
+            -- still written with the native GEOMETRY logical type and its
+            -- per-column geo statistics. See the note above the `geo` value.
+            GEOPARQUET_VERSION 'NONE',
             COMPRESSION ZSTD,
             -- Level 15 (DuckDB default is 3): ~30% smaller files, mostly from
             -- the WKB geometry column, which is ~80% of every file and

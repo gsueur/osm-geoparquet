@@ -34,7 +34,7 @@ Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd
 
 ### Schema 0.4.0
 
-- The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`. File size, row groups, bloom filters and the native `GEOMETRY` type are unchanged.
+- The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`, with `GEOPARQUET_VERSION 'NONE'` so that DuckDB does not add a second `geo` block of its own beside it. That setting governs the metadata only: the geometry column keeps the native `GEOMETRY` logical type and its per-column geo statistics, and file size, row groups and bloom filters are unchanged.
 - Each `_manifest.json` records every file's size and sha256, which the catalog publishes as `file:size` and (on pinned catalogs) `file:checksum`.
 
 ### Schema 0.3.0 (breaking)
