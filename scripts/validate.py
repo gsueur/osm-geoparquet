@@ -115,6 +115,28 @@ def osm_identity_errors(pf) -> list[str]:
     return errors
 
 
+def footer_key_duplicates(con, state_dir: Path) -> list[str]:
+    """Footer keys a parquet in this directory carries more than once.
+
+    pyarrow hands the footer's key-value metadata back as a mapping, and so do
+    gpio and DuckDB's own reader, so a key written twice reads as one and the
+    reader silently picks a winner. `GEOPARQUET_VERSION 'V2'` used to put us in
+    exactly that position: DuckDB wrote its own `geo` block beside the one we
+    pass through KV_METADATA, ours carrying the covering and DuckDB's not.
+    Reading the entries one by one is the only way to see it.
+    """
+    if not any(state_dir.glob("*.parquet")):
+        return []
+    glob = f"{state_dir.as_posix()}/*.parquet".replace("'", "''")
+    rows = con.execute(f"""
+        SELECT file_name, key::VARCHAR AS k, count(*) AS n
+        FROM parquet_kv_metadata('{glob}')
+        GROUP BY 1, 2 HAVING count(*) > 1 ORDER BY 1, 2
+    """).fetchall()
+    iso = state_dir.name.replace("state=", "")
+    return [f"{iso}/{Path(f).stem}: footer key {k!r} appears {n} times" for f, k, n in rows]
+
+
 def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> Suite:
     s = Suite(f"Local checks — {out_dir}/")
     s.header()
@@ -124,6 +146,13 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
     except ImportError:
         s.fail("pyarrow not installed; cannot inspect parquet files")
         return s
+
+    try:
+        import duckdb
+    except ImportError:
+        s.fail("duckdb not installed; cannot read footer metadata entry by entry")
+        return s
+    con = duckdb.connect()
 
     expected = load_expected_isos(
         geojson, excluded={"US-AS", "US-GU", "US-MP", "US-UM"}
@@ -150,6 +179,7 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
     missing_files: list[str] = []
     row_mismatches: list[str] = []
     schema_fails: list[str] = []
+    duplicate_keys: list[str] = []
     for iso in sorted(expected & set(manifests)):
         mpath = manifests[iso]
         state_dir = mpath.parent
@@ -200,6 +230,13 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
             except Exception as e:
                 schema_fails.append(f"{iso}/{theme}: {e}")
 
+        try:
+            duplicate_keys.extend(footer_key_duplicates(con, state_dir))
+        except Exception as e:
+            duplicate_keys.append(f"{iso}: footer metadata unreadable: {e}")
+
+    con.close()
+
     if incomplete_themes:
         snippets = ", ".join(f"{iso} ({n}/16)" for iso, n in incomplete_themes[:5])
         more = "" if len(incomplete_themes) <= 5 else f" (+{len(incomplete_themes)-5} more)"
@@ -228,6 +265,11 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
         s.fail(f"{len(schema_fails)} schema problems: {'; '.join(schema_fails[:3])}")
     else:
         s.ok("every parquet has base columns + GeoParquet 2.0 metadata")
+
+    if duplicate_keys:
+        s.fail(f"{len(duplicate_keys)} duplicated footer keys: {'; '.join(duplicate_keys[:3])}")
+    else:
+        s.ok("no parquet carries a footer key twice")
 
     s.summary()
     return s
