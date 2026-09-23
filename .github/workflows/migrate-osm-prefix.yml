@@ -23,6 +23,12 @@
 #   3. purge   deletes the old root copies. Only after the Workers carry the
 #              legacy rewrite and a nightly has run green under /osm/.
 #
+# Plus one unrelated tidy-up that needs the same credentials:
+#
+#   drop-experiments   removes /naturalearth/ and /test/, neither of which
+#                      is being kept. Independent of the three stages above,
+#                      run it whenever.
+#
 # Cache-Control is the thing to watch. Dated prefixes carry `immutable` and
 # `latest/` carries `stale-while-revalidate`; a CopyObject that sends the
 # REPLACE metadata directive would flatten both and pin or spoil the edge.
@@ -41,10 +47,10 @@ on:
       stage:
         description: "Which stage to run"
         type: choice
-        options: [copy, verify, purge]
+        options: [copy, verify, purge, drop-experiments]
         default: verify
       confirm:
-        description: "purge only: type DELETE THE OLD ROOT to authorise"
+        description: "purge: type DELETE THE OLD ROOT. drop-experiments: type DROP EXPERIMENTS"
         required: false
         default: ""
 
@@ -231,6 +237,27 @@ jobs:
             echo "$PUBLIC/meta/ answered $code, which proves nothing."
             echo "Leaving $PREFIX/meta in place."
           fi
+
+      # Not part of the move. /naturalearth/ was a shaded-relief GeoTIFF
+      # experiment and /test/ a 456 MB scratch parquet; neither is being
+      # kept, and neither token on a laptop currently authenticates against
+      # R2, so they are dropped here. Named one by one rather than taken as
+      # an input: a stage that deletes whatever it is handed is not one to
+      # leave lying in a repo.
+      - name: Drop the experiments
+        if: inputs.stage == 'drop-experiments'
+        run: |
+          [ "${{ inputs.confirm }}" = "DROP EXPERIMENTS" ] || {
+            echo "drop-experiments needs confirm='DROP EXPERIMENTS'"; exit 1; }
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          for e in naturalearth test; do
+            echo "== $e/"
+            rclone lsf "$REMOTE/$e" --recursive || { echo "  not there, skipping"; continue; }
+            rclone purge "$REMOTE/$e"
+          done
 
       - name: What the root looks like now
         run: rclone lsf "$REMOTE" --max-depth 1
