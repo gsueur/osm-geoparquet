@@ -175,6 +175,11 @@ const DATASETS = {
     attribution: "geoboundaries/6.0.0/ATTRIBUTION.txt",
     snapshots: "geoboundaries/snapshots.json",
   },
+  "gaul/": {
+    subtitle: "FAO GAUL 2024, global administrative units, L1 and L2 as published " +
+      "and a country layer (L0) dissolved here.",
+    attribution: "gaul/2024/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared inputs the builds read. Not a dataset of its own.",
   },
@@ -282,6 +287,13 @@ function renderListingHtml(prefix, folders, files, truncated) {
       : "") +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
+    // The same folder on the S3 endpoint, so a page deep inside any dataset
+    // shows its own s3:// path rather than sending the reader to the
+    // endpoint's landing text for a generic example.
+    (prefix
+      ? `<br>this folder over S3: <code>s3://parquetry/${escapeHtml(prefix)}</code>` +
+        ` on <code>s3.geomermaids.com</code>, path style, empty credentials`
+      : "") +
     `</footer>` +
     `<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "662d86a95662419abf6b79622cf413dc"}'></script><!-- End Cloudflare Web Analytics -->` +
     `</body></html>`

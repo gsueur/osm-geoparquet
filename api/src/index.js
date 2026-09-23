@@ -274,17 +274,26 @@ function landingText() {
     `Bucket:   ${BUCKET_NAME}\n` +
     `Endpoint: https://s3.geomermaids.com\n` +
     `\n` +
-    `Example (DuckDB):\n` +
+    `Setup (DuckDB):\n` +
     `  INSTALL httpfs; LOAD httpfs;\n` +
     `  SET s3_endpoint='s3.geomermaids.com';\n` +
     `  SET s3_url_style='path';\n` +
     `  SET s3_use_ssl=true;\n` +
     `  SET s3_access_key_id='';\n` +
     `  SET s3_secret_access_key='';\n` +
-    `  SELECT count(*) FROM read_parquet(\n` +
-    `    's3://${BUCKET_NAME}/${DATASET_PREFIX}latest/country=*/state=*/aeroways.parquet'\n` +
-    `  );\n` +
     `\n` +
+    `Datasets, one prefix each (browse them at https://parquetry.geomermaids.com/):\n` +
+    `  osm/            OpenStreetMap, North America, nightly. Partitioned; glob it:\n` +
+    `    SELECT count(*) FROM read_parquet(\n` +
+    `      's3://${BUCKET_NAME}/${DATASET_PREFIX}latest/country=*/state=*/aeroways.parquet');\n` +
+    `  gaul/           FAO GAUL 2024, global admin units. One file per level:\n` +
+    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/gaul/2024/L2.parquet');\n` +
+    `  clc/            Corine Land Cover 2018, Europe:\n` +
+    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/clc/2018/clc_2018.parquet');\n` +
+    `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
+    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/geoboundaries/6.0.0/cgaz_adm1.parquet');\n` +
+    `\n` +
+    `Every https://parquetry.geomermaids.com/<key> is s3://${BUCKET_NAME}/<key> here.\n` +
     `Fast browser-friendly downloads: https://parquetry.geomermaids.com/\n`
   );
 }
