@@ -103,7 +103,7 @@ The default (`--stage all`) does both, which is what a single-machine run wants.
 
 Setup:
 
-- `data/admin_regions.geojson` is too large for git (114 MB), so it is hosted at `https://parquetry.geomermaids.com/osm/meta/admin_regions.geojson` and the repository variable `ADMIN_REGIONS_URL` points there. Update it with `rclone copyto data/admin_regions.geojson parquetry:parquetry/osm/meta/admin_regions.geojson --header-upload "Cache-Control: public, max-age=300"`.
+- `data/admin_regions.geojson` is too large for git (114 MB), so it is hosted at `https://parquetry.geomermaids.com/meta/admin_regions.geojson` and the repository variable `ADMIN_REGIONS_URL` points there. Update it with `rclone copyto data/admin_regions.geojson parquetry:parquetry/meta/admin_regions.geojson --header-upload "Cache-Control: public, max-age=300"`. `meta/` sits at the bucket root, not under `osm/`: it is a shared place for cross-dataset files rather than one dataset's.
 - Repository secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT` (`https://<account-id>.r2.cloudflarestorage.com`). Optional: `NTFY_TOPIC`.
 - rclone is configured from those secrets through `RCLONE_CONFIG_PARQUETRY_*` environment variables, so no config file is stored anywhere.
 
