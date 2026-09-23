@@ -182,6 +182,17 @@ jobs:
       - name: Purge the old root copies
         if: inputs.stage == 'purge' && inputs.confirm == 'DELETE THE OLD ROOT'
         run: |
+          # Every delete below is built by interpolation, and an empty
+          # variable turns `rclone purge "$REMOTE/$e"` into a purge of a
+          # LOCAL path. Refuse before deleting anything rather than trust the
+          # env block, because this step is the one that cannot be undone.
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          [ -n "$PREFIX" ] || { echo "PREFIX is empty. Refusing."; exit 1; }
+          [ -n "$PUBLIC" ] || { echo "PUBLIC is empty. Refusing."; exit 1; }
+
           # Last chance to notice the copy never happened. Deleting the root
           # while /osm/ is empty would take the whole dataset offline.
           osm=$(rclone size --json "$REMOTE/$PREFIX" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')
@@ -203,14 +214,22 @@ jobs:
           # stays at the root. Drop that duplicate -- but only once the
           # deployed Workers have stopped rewriting meta/, or deleting it
           # takes the root copy offline with it and the nightly loses its
-          # admin regions. A 301 here means the old rule is still live.
-          code=$(curl -s -o /dev/null -w '%{http_code}' -I -H 'Accept: text/html' "$PUBLIC/meta/")
-          if [ "$code" = "301" ]; then
+          # admin regions.
+          #
+          # Fails closed: delete only on a positive 200, never on "not 301".
+          # A redirect means the old rule is live, and anything else -- a
+          # network blip, a 000 from a curl that never connected -- is not
+          # evidence that deleting is safe.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -I -H 'Accept: text/html' "$PUBLIC/meta/" || echo 000)
+          if [ "$code" = "200" ]; then
+            echo "purge $PREFIX/meta/ (duplicate; meta/ lives at the root)"
+            rclone purge "$REMOTE/$PREFIX/meta"
+          elif [ "$code" = "301" ]; then
             echo "$PUBLIC/meta/ still redirects: the Workers have not been redeployed."
             echo "Leaving $PREFIX/meta in place. Deploy files/ and api/, then re-run."
           else
-            echo "purge $PREFIX/meta/ (duplicate; meta/ lives at the root)"
-            rclone purge "$REMOTE/$PREFIX/meta" || true
+            echo "$PUBLIC/meta/ answered $code, which proves nothing."
+            echo "Leaving $PREFIX/meta in place."
           fi
 
       - name: What the root looks like now
