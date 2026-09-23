@@ -75,11 +75,16 @@ def run(cmd: list[str]) -> None:
         print(f"    $ {' '.join(cmd)}")
     subprocess.run(cmd, check=True, capture_output=not VERBOSE)
 
-def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path) -> None:
+DEFAULT_RELATION_TYPES = "multipolygon"
+
+
+def osmium_extract(src_pbf: Path, poly: Path, out_pbf: Path,
+                   relation_types: str = DEFAULT_RELATION_TYPES) -> None:
     run([
         "osmium", "extract",
         "-p", str(poly),
         "-s", "smart",  # same strategy as osmium_extract_batch, see there
+        "-S", f"types={relation_types}",
         str(src_pbf),
         "-o", str(out_pbf),
         "--overwrite",
@@ -90,6 +95,7 @@ def osmium_extract_batch(
     src_pbf: Path,
     state_polys: dict[str, Path],
     work_dir: Path,
+    relation_types: str = DEFAULT_RELATION_TYPES,
 ) -> None:
     """Extract many per-state PBFs in one scan of the source PBF.
 
@@ -114,10 +120,16 @@ def osmium_extract_batch(
     config_path = work_dir / "_extract_config.json"
     config_path.write_text(json.dumps({"extracts": extracts}))
     # Strategy "smart": nodes inside the polygon, every way touching the
-    # region kept whole with all its nodes, and type=multipolygon relations
-    # completed with all their members (osmium-extract(1); boundary relations
-    # are not completed, but their edge ways now arrive whole, which is what
-    # was missing). "simple" kept only the nodes inside the polygon; a
+    # region kept whole with all its nodes, and relations of the types in
+    # `-S types=` completed with all their members (osmium-extract(1)). The
+    # default completes type=multipolygon only; boundary relations then get
+    # their edge ways whole, which recovered most of them, but a member way
+    # with no node inside the region polygon is still dropped and leaves the
+    # ring open. The parent-extract boundaries job passes
+    # multipolygon,boundary (--complete-relations): its source holds nothing
+    # but administrative relations, so completing them costs nothing there,
+    # whereas on a full extract the cost is unmeasured and the per-region
+    # jobs keep the default. "simple" kept only the nodes inside the polygon; a
     # handful of missing edge nodes left rings open, and osmium export
     # silently dropped those areas: 20 of 32 Mexican state boundaries,
     # Ontario's, and border towns and counties everywhere (issue #5).
@@ -129,6 +141,7 @@ def osmium_extract_batch(
         "-c", str(config_path),
         "-d", str(work_dir),
         "-s", "smart",
+        "-S", f"types={relation_types}",
         "--overwrite",
         str(src_pbf),
     ])
@@ -436,6 +449,7 @@ def process_state(
     verbose: bool = False,
     progress_queue=None,
     source_timestamp: str | None = None,
+    relation_types: str = DEFAULT_RELATION_TYPES,
 ) -> dict:
     """Run clip + all themes for one state.
 
@@ -479,7 +493,7 @@ def process_state(
         if verbose:
             print(f"  [clip] {source_pbf.name} -> {state_pbf.name}")
         t0 = time.time()
-        osmium_extract(source_pbf, state_poly_path, state_pbf)
+        osmium_extract(source_pbf, state_poly_path, state_pbf, relation_types)
         if verbose:
             print(f"  [clip] done in {time.time()-t0:.1f}s "
                   f"({state_pbf.stat().st_size/(1024*1024):.1f} MB)")
@@ -555,7 +569,8 @@ def process_state(
 
 def _bulk_extract(source_pbf: Path, states: list[State],
                   work_dir: Path, verbose: bool,
-                  batch_size: int = 3) -> None:
+                  batch_size: int = 3,
+                  relation_types: str = DEFAULT_RELATION_TYPES) -> None:
     """Osmium extract producing one state PBF per input state.
 
     osmium's `smart` strategy holds per-output bookkeeping in memory for
@@ -593,7 +608,7 @@ def _bulk_extract(source_pbf: Path, states: list[State],
         for i, batch in enumerate(batches, 1):
             if verbose:
                 print(f"  batch {i}/{n_batches} ({len(batch)} states)")
-            osmium_extract_batch(source_pbf, batch, work_dir)
+            osmium_extract_batch(source_pbf, batch, work_dir, relation_types)
 
     label = (f"Bulk-extracting {len(state_polys)} state PBFs from "
              f"{source_pbf.name} ({size_gb:.1f} GB) — {n_batches} scans "
@@ -623,7 +638,7 @@ def _bulk_extract(source_pbf: Path, states: list[State],
                 total=n_batches,
             )
             for i, batch in enumerate(batches, 1):
-                osmium_extract_batch(source_pbf, batch, work_dir)
+                osmium_extract_batch(source_pbf, batch, work_dir, relation_types)
                 progress.advance(task)
         console.print(
             f"[green]✓[/green] bulk-extract — "
@@ -761,6 +776,13 @@ def main() -> None:
                         "5 per call 14.9 GB, 3 per call 10.8 GB in the same "
                         "time, 2 per call 7.3 GB and ~30%% slower. Raise if you "
                         "have more RAM, lower if less.")
+    p.add_argument("--complete-relations", default=DEFAULT_RELATION_TYPES,
+                   metavar="TYPES",
+                   help="Relation types the clip completes with all their members "
+                        "(osmium extract -S types=...). Default: multipolygon. The "
+                        "parent-extract boundaries job passes multipolygon,boundary "
+                        "so a state relation whose member ways lie outside the "
+                        "region polygon still assembles (issue #5).")
     args = p.parse_args()
 
     global VERBOSE
@@ -801,6 +823,7 @@ def main() -> None:
         keep_intermediate=args.keep_intermediate,
         verbose=args.verbose,
         source_timestamp=pbf_timestamp(args.source_pbf),
+        relation_types=args.complete_relations,
     )
 
     if args.workers > 1:
@@ -812,7 +835,8 @@ def main() -> None:
     # Stage 0: one scan of the source PBF produces per-state PBFs for every
     # requested state. Orders of magnitude faster than re-scanning per state.
     _bulk_extract(args.source_pbf, states, work_dir,
-                  verbose=args.verbose, batch_size=args.extract_batch_size)
+                  verbose=args.verbose, batch_size=args.extract_batch_size,
+                  relation_types=args.complete_relations)
 
     # Stage 1: per-state theme processing. process_state now just reuses
     # the state_pbf that bulk extract already wrote.

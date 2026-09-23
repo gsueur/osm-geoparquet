@@ -12,6 +12,7 @@ on:
     paths:
       - ".github/debug/issue5_parent.py"
       - ".github/workflows/debug-issue-5-parent.yml"
+      - "scripts/pipeline.py"
   workflow_dispatch:
     inputs:
       url:
@@ -91,7 +92,7 @@ jobs:
             --states-geojson "$GITHUB_WORKSPACE/data/admin_regions.geojson" \
             --out-dir "$WORK/out" \
             --states ${{ steps.us.outputs.states }} \
-            --themes boundaries --workers 3
+            --themes boundaries --workers 3 --complete-relations multipolygon,boundary
           echo "pipeline, ${{ steps.us.outputs.states }}: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
           du -sh "$WORK/out"
 
