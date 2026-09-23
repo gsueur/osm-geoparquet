@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "build verifies only; publish also uploads"
+        description: "build converts and renders the catalog, verifying both; publish also uploads them"
         type: choice
         options: [build, publish]
         default: build
@@ -87,6 +87,36 @@ jobs:
           cp work/GAUL2024TermsOfUse.pdf "out/$VERSION/"
           ls -la "out/$VERSION"
 
+      # The catalog needs a thumbnail per collection. They are committed under
+      # catalog/thumbnails/gaul/ and only re-rendered here when missing (a new
+      # layer, or a fresh checkout after they were removed), then attached as
+      # an artifact so they can be committed.
+      - name: Thumbnails, when missing
+        run: |
+          missing=$(for l in L0_derived L1 L2; do
+            [ -f "catalog/thumbnails/gaul/$l.png" ] || echo "$l"; done)
+          if [ -n "$missing" ]; then
+            uv run --project scripts --with matplotlib \
+              python scripts/datasets/gaul_catalog.py thumbnails \
+              --out-dir "out/$VERSION" --layers $missing
+          fi
+          ls -la catalog/thumbnails/gaul/
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: gaul-thumbnails
+          path: catalog/thumbnails/gaul/
+          if-no-files-found: error
+
+      # rashid over the rendered tree, before anything is uploaded. The data
+      # assets are remote hrefs, so this is the metadata pass plus the bytes
+      # of the thumbnails; the parquet files were verified by gaul.py above.
+      - name: Portolan catalog, rendered and checked
+        run: |
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            build --out-dir "out/$VERSION" --dest build/catalog
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            check build/catalog
+
       - name: Upload
         if: inputs.stage == 'publish'
         run: |
@@ -105,14 +135,23 @@ jobs:
             --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
 
+      # After the data, so the catalog never links a file that is not there.
+      - name: Portolan catalog, published
+        if: inputs.stage == 'publish'
+        run: |
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            publish --out-dir "out/$VERSION" --remote "$REMOTE"
+
       - name: Check what is live
         if: inputs.stage == 'publish'
         run: |
           set +e
           fail=0
-          for f in L0_derived.parquet L1.parquet L2.parquet \
-                   _manifest.json ATTRIBUTION.txt GAUL2024TermsOfUse.pdf; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$VERSION/$f")
+          for f in $VERSION/L0_derived.parquet $VERSION/L1.parquet $VERSION/L2.parquet \
+                   $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
+                   $VERSION/GAUL2024TermsOfUse.pdf \
+                   catalog/catalog.json catalog/l2/collection.json catalog/l2/thumbnail.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
           done

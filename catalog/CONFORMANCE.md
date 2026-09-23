@@ -77,3 +77,30 @@ requests conformant and one CORS gap: `Access-Control-Expose-Headers` omitted
 `Content-Type` (`PTL-LIV-004`). Fixed in `files/` and `api/` and deployed on
 2026-09-16. On 2026-09-17, rashid 0.1.8 with `--schema --live` over a mirror of
 the published live catalog reported no errors and no warnings.
+
+## GAUL 2024 catalog
+
+A second, smaller catalog describes the FAO GAUL 2024 release at
+`https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
+`scripts/datasets/gaul_catalog.py` with the same constants, rashid wrapper
+and uploader as the OSM one. Three collections (`l0_derived`, `l1`, `l2`),
+each one collection-level data asset: the release is static and the files
+immutable, so every asset carries `file:size` and `file:checksum` from the
+converter's manifest, and there is no partition extension.
+
+`.github/workflows/dataset-gaul.yml` renders and checks the catalog on every
+run (stage `build`) and uploads it after the data (stage `publish`), so the
+check is the gate. It is the metadata pass plus the thumbnail bytes; the
+parquet files themselves are verified by `gaul.py` (footer, covering,
+declared extent, bbox bounds) before upload.
+
+Findings accepted as they stand, on top of `PTL-PRO-002` above (FAO publishes
+no STAC catalog to link as canonical):
+
+| Rule | Severity | Why |
+|---|---|---|
+| `PTL-VIZ-004` | info | Each data asset is 286 to 489 MB with no PMTiles derivative. The layers are a join target for FAO statistics rather than a map layer; a visual derivative is not planned. |
+
+Rendered from the published files on 2026-09-23 with rashid 0.1.8: 0
+errors, 3 warnings (`PTL-COL-003`, fixed by lower-casing the ids) and the
+info findings above.

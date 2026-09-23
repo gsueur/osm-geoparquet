@@ -48,6 +48,18 @@ Snapshots whose `_manifest.json` says `"schema_version": "0.3.0"` changed two th
 
 Queries that mix older and newer snapshots in one glob need `union_by_name = true`.
 
+## Other datasets in the bucket
+
+The repository also carries the builder for FAO GAUL 2024
+(`scripts/datasets/gaul.py`, workflow `dataset-gaul.yml`): three GeoParquet
+files under `https://parquetry.geomermaids.com/gaul/2024/` (L1 and L2 as FAO
+publishes them, and a country layer L0 dissolved here), each with a bbox
+covering and a sha256 in `_manifest.json`. Its Portolan catalog is at
+`https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
+`scripts/datasets/gaul_catalog.py`. The licence obligations (citation,
+disclaimers) are encoded in its `ATTRIBUTION.txt`, quoted from the Terms of
+Use shipped inside the FAO archives.
+
 ## Requirements
 
 - Python ≥ 3.12
