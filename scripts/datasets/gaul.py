@@ -12,6 +12,14 @@ covering, so a reader can prune row groups instead of downloading 775 MB.
   L2  45,524 units   second-level (districts, departments)
   L0  countries      DERIVED HERE, see below
 
+Each layer is written twice: once as a single whole-world file, for anyone
+who wants one download, and once split per country under
+country=<iso3_code>/, for readers that want a small file (the map viewer,
+a bbox query on one country). DuckDB will not write row groups under 2,048
+rows, so a whole-world L1 is two groups of ~185 MB and L0 is one group of
+286 MB; a bbox filter cannot skip anything, and a browser has to fetch the
+whole group. The per-country files are the answer to that.
+
 FAO does not publish an L0. The GAUL 2024 package stops at L1, and a country
 layer is a boundary statement rather than a statistical convenience, so its
 absence looks deliberate. The Terms of Use permit derivative works (para 4,
@@ -197,7 +205,8 @@ def row_group_rows(feature_count: int, source_bytes: int) -> int:
 
 
 def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
-                feature_count: int, source_bytes: int) -> dict:
+                feature_count: int, source_bytes: int, *,
+                out: Path | None = None, quiet: bool = False) -> dict:
     con.execute(f"CREATE OR REPLACE TEMP VIEW layer AS {select_sql}")
     count, xmin, ymin, xmax, ymax, types = con.execute("""
         SELECT COUNT(*), MIN(ST_XMin(geom)), MIN(ST_YMin(geom)),
@@ -208,7 +217,7 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
     if count == 0:
         sys.exit(f"{name}: no features, refusing to write an empty layer")
 
-    out = out_dir / f"{name}.parquet"
+    out = out or out_dir / f"{name}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     cols = [c for c in con.execute("DESCRIBE layer").fetchall() if c[0] != "geom"]
     attrs = ",\n                ".join(c[0] for c in cols)
@@ -243,12 +252,53 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
             FROM parquet_metadata('{out}') GROUP BY 1)
     """).fetchone()
     note = "" if groups > 4 else "   <- too few rows to prune well"
-    print(f"  {name}: {count:,} features, {size/1e6:.1f} MB, "
-          f"{groups} row group(s), largest {largest/1e6:.1f} MB{note}")
+    if not quiet:
+        print(f"  {name}: {count:,} features, {size/1e6:.1f} MB, "
+              f"{groups} row group(s), largest {largest/1e6:.1f} MB{note}")
     return {"name": name, "features": count, "bytes": size,
             "row_groups": groups, "largest_row_group_bytes": largest,
             "sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
             "source": source}
+
+
+PARTITION_KEY = "country"       # the Hive key in the path
+PARTITION_COLUMN = "iso3_code"  # the column it takes its values from
+
+
+def write_partitions(con, name: str, table: str, source: str, out_dir: Path) -> dict:
+    """The same layer as one file per country, country=<iso3_code>/<name>.parquet.
+
+    iso3_code is the readable choice for a Hive key, with two quirks a reader
+    should know: FAO uses pseudo-codes for disputed areas (xAB Abyei, xJK
+    Jammu and Kashmir, xxx), and a few codes group several GAUL units (AUS
+    also holds Ashmore and Cartier Islands, xFR the scattered French islands).
+    gaul0_code is unique but opaque, and stays inside the files as a column.
+    """
+    keys = [r[0] for r in con.execute(
+        f"SELECT DISTINCT {PARTITION_COLUMN} FROM {table} ORDER BY 1").fetchall()]
+    bad = [k for k in keys if not k or "/" in k or k != k.strip()]
+    if bad:
+        sys.exit(f"{name}: {PARTITION_COLUMN} values unfit for a path: {bad}")
+    entries = []
+    for key in keys:
+        names = [r[0] for r in con.execute(
+            f"SELECT DISTINCT gaul0_name FROM {table} WHERE {PARTITION_COLUMN} = ? ORDER BY 1",
+            [key]).fetchall()]
+        count = con.execute(
+            f"SELECT count(*) FROM {table} WHERE {PARTITION_COLUMN} = ?", [key]).fetchone()[0]
+        e = write_layer(
+            con, name,
+            f"SELECT * FROM {table} WHERE {PARTITION_COLUMN} = '{key}'",
+            source, out_dir, feature_count=count, source_bytes=0,
+            out=out_dir / f"{PARTITION_KEY}={key}" / f"{name}.parquet", quiet=True)
+        entries.append({"country": key, "names": names, "features": e["features"],
+                        "bytes": e["bytes"], "row_groups": e["row_groups"],
+                        "sha256": e["sha256"]})
+    total = sum(e["bytes"] for e in entries)
+    print(f"  {name}: {len(entries)} per-country files, {total/1e6:.1f} MB, "
+          f"largest {max(e['bytes'] for e in entries)/1e6:.1f} MB")
+    return {"name": name, "key": PARTITION_KEY, "column": PARTITION_COLUMN,
+            "files": len(entries), "bytes": total, "entries": entries}
 
 
 def verify(con, out_dir: Path, names: list[str]) -> None:
@@ -263,6 +313,9 @@ def verify(con, out_dir: Path, names: list[str]) -> None:
     problems = []
     for name in names:
         f = out_dir / f"{name}.parquet"
+        if len(problems) >= 20:
+            problems.append("... stopping after 20 problems")
+            break
         kv = con.execute(
             f"SELECT key, value FROM parquet_kv_metadata('{f}')").fetchall()
         keys = [k.decode() for k, _ in kv]
@@ -299,7 +352,7 @@ def verify(con, out_dir: Path, names: list[str]) -> None:
 
     if problems:
         sys.exit("verification failed:\n  " + "\n  ".join(problems))
-    print(f"  verified {len(names)} layers: one geo key, covering, bbox bounds, extent")
+    print(f"  verified {len(names)} files: one geo key, covering, bbox bounds, extent")
 
 
 def main() -> None:
@@ -323,35 +376,42 @@ def main() -> None:
     con.execute("INSTALL spatial; LOAD spatial;")
     print(f"GAUL {VERSION} -> {args.out_dir}")
 
-    layers = []
+    # Each layer is materialised once, then written twice: the whole-world
+    # file, and one file per country from the same rows.
+    layers, partitions = [], []
     for lvl, columns in (("L1", L1_COLUMNS), ("L2", L2_COLUMNS)):
         cols = ", ".join(columns)
+        con.execute(f"CREATE TEMP TABLE src_{lvl} AS "
+                    f"SELECT {cols}, geom FROM ST_Read('{shp[lvl].as_posix()}')")
+        count = con.execute(f"SELECT count(*) FROM src_{lvl}").fetchone()[0]
         layers.append(write_layer(
-            con, lvl,
-            f"SELECT {cols}, geom FROM ST_Read('{shp[lvl].as_posix()}')",
-            SOURCE_ZIPS[lvl], args.out_dir,
-            feature_count=con.execute(
-                f"SELECT COUNT(*) FROM ST_Read('{shp[lvl].as_posix()}')").fetchone()[0],
-            source_bytes=shp[lvl].stat().st_size))
+            con, lvl, f"SELECT * FROM src_{lvl}", SOURCE_ZIPS[lvl], args.out_dir,
+            feature_count=count, source_bytes=shp[lvl].stat().st_size))
+        partitions.append(write_partitions(con, lvl, f"src_{lvl}", SOURCE_ZIPS[lvl],
+                                           args.out_dir))
 
     # L0, ours. ST_Union_Agg on the L1 units of each country: the shared
     # internal borders cancel and the country outline is what is left. Nothing
     # below level 0 survives, so only the country-level codes are carried.
     print("  L0: dissolving L1 by country (derived, not an FAO layer)")
+    con.execute("""CREATE TEMP TABLE src_L0_derived AS
+        SELECT iso3_code, map_code, gaul0_code, gaul0_name, continent,
+               'geomermaids, dissolved from GAUL 2024 L1' AS derived_by,
+               ST_Union_Agg(geom) AS geom
+        FROM src_L1
+        GROUP BY ALL""")
+    l0_source = "derived from " + SOURCE_ZIPS["L1"]
     layers.append(write_layer(
-        con, "L0_derived",
-        f"""SELECT iso3_code, map_code, gaul0_code, gaul0_name, continent,
-                   'geomermaids, dissolved from GAUL 2024 L1' AS derived_by,
-                   ST_Union_Agg(geom) AS geom
-            FROM ST_Read('{shp['L1'].as_posix()}')
-            GROUP BY ALL""",
-        "derived from " + SOURCE_ZIPS["L1"], args.out_dir,
-        feature_count=con.execute(
-            f"SELECT COUNT(DISTINCT gaul0_code) FROM ST_Read('{shp['L1'].as_posix()}')"
-        ).fetchone()[0],
+        con, "L0_derived", "SELECT * FROM src_L0_derived", l0_source, args.out_dir,
+        feature_count=con.execute("SELECT count(*) FROM src_L0_derived").fetchone()[0],
         source_bytes=shp["L1"].stat().st_size))
+    partitions.append(write_partitions(con, "L0_derived", "src_L0_derived", l0_source,
+                                       args.out_dir))
 
-    verify(con, args.out_dir, [l["name"] for l in layers])
+    verify(con, args.out_dir,
+           [l["name"] for l in layers]
+           + [f"{p['key']}={e['country']}/{p['name']}"
+              for p in partitions for e in p["entries"]])
 
     (args.out_dir / "ATTRIBUTION.txt").write_text(attribution(accessed))
     (args.out_dir / "_manifest.json").write_text(json.dumps({
@@ -361,6 +421,7 @@ def main() -> None:
         "accessed": accessed.isoformat(),
         "licence": "CC-BY-4.0",
         "files": layers,
+        "partitions": partitions,
     }, indent=2) + "\n")
     print(f"  ATTRIBUTION.txt, _manifest.json  (accessed {accessed.isoformat()})")
 

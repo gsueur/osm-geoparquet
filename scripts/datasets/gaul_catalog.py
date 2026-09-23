@@ -2,10 +2,11 @@
 """
 Render, validate and publish the Portolan catalog for FAO GAUL 2024.
 
-One STAC Collection per layer (L1, L2, and the L0 we derive), each with a
-single collection-level data asset: the files are a static release under
-/gaul/2024/, not partitioned, so there is no partition glob and every asset
-can carry a checksum. Row counts, sizes and checksums come from the
+One STAC Collection per layer (L1, L2, and the L0 we derive). Each layer is
+published in two layouts and the collection describes both: the whole-world
+file as the `data` asset, and the per-country files under country=<iso3>/
+through the partition extension (`partition:glob`) and one `data-<iso3>`
+asset each. The release is static, so every asset carries a checksum. Row counts, sizes and checksums come from the
 _manifest.json gaul.py writes; column types and the extent are read from the
 Parquet footers, which is a range request when the source is a URL. The
 prose lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
@@ -39,7 +40,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets.gaul import ACCESS_URL, SOURCE_ZIPS, VERSION
+from datasets.gaul import ACCESS_URL, PARTITION_KEY, SOURCE_ZIPS, VERSION
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -49,6 +50,7 @@ from catalog import (
     FILE_EXT,
     LOGO,
     PARQUET_TYPE,
+    PARTITION_EXT,
     PORTOLAN_SCHEMA,
     PUBLIC_BASE,
     REPO,
@@ -219,9 +221,29 @@ def connect(remote: bool):
 
 # ---------- STAC ----------
 
-def build_collection(name: str, entry: dict, columns: list[tuple[str, str]],
+def country_assets(name: str, part: dict) -> dict:
+    """One asset per country file, keyed data-<iso3>, checksummed."""
+    assets = {}
+    for e in part["entries"]:
+        path = f"{DATASET_PREFIX}/{VERSION}/{PARTITION_KEY}={e['country']}/{name}.parquet"
+        assets[f"data-{e['country'].lower()}"] = {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PARQUET_TYPE,
+            "title": f"{', '.join(e['names'])} ({e['country']})",
+            "description": f"{e['features']:,} features",
+            "roles": ["data"],
+            "file:size": e["bytes"],
+            "file:checksum": "1220" + e["sha256"],
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        }
+    return assets
+
+
+def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str, str]],
                      geo: dict, updated: str) -> dict:
     title, description = LAYERS[name]
+    glob = f"s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/{PARTITION_KEY}=*/{name}.parquet"
     # The footer extent is the outward-rounded data extent, which overshoots
     # the antimeridian by a few 1e-6; a STAC bbox must stay within the CRS.
     x0, y0, x1, y1 = geo["columns"]["geometry"]["bbox"]
@@ -235,15 +257,19 @@ def build_collection(name: str, entry: dict, columns: list[tuple[str, str]],
     return {
         "type": "Collection",
         "stac_version": "1.1.0",
-        "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT],
+        "stac_extensions": [PORTOLAN_SCHEMA, PARTITION_EXT, TABLE_EXT, FILE_EXT,
+                            VERSION_EXT, ALTERNATE_EXT],
         "id": name.lower(),
         "title": title,
         "description": (
-            f"{description} One GeoParquet 2.0 file, Hilbert-ordered, with a bbox "
-            f"covering, {entry['features']:,} rows, {entry['bytes'] / 1e6:,.0f} MB, "
-            f"readable in place over HTTPS or through the anonymous S3 endpoint "
-            f"{S3_ENDPOINT}. Data (c) FAO {VERSION}, CC BY 4.0, attribution required. "
-            f"{NOT_ENDORSED} {UN_DISCLAIMER}"
+            f"{description} Published twice from the same rows: one whole-world "
+            f"GeoParquet 2.0 file ({entry['features']:,} rows, {entry['bytes'] / 1e6:,.0f} MB, "
+            f"the data asset) for anyone who wants a single download, and one file per "
+            f"country under {PARTITION_KEY}=<iso3>/ ({part['files']} files, the data-<iso3> "
+            f"assets and the partition glob {glob}) for small reads. Both are "
+            f"Hilbert-ordered with a bbox covering and readable in place over HTTPS or "
+            f"through the anonymous S3 endpoint {S3_ENDPOINT}. Data (c) FAO {VERSION}, "
+            f"CC BY 4.0, attribution required. {NOT_ENDORSED} {UN_DISCLAIMER}"
         ),
         "keywords": ["GAUL", "FAO", "administrative boundaries", "administrative units",
                      "GeoParquet", "global", name.split("_")[0]],
@@ -255,6 +281,17 @@ def build_collection(name: str, entry: dict, columns: list[tuple[str, str]],
             "spatial": {"bbox": [bbox]},
             "temporal": {"interval": [INTERVAL]},
         },
+        "partition:scheme": "hive",
+        "partition:strategy": "attribute",
+        "partition:keys": [
+            {"name": PARTITION_KEY, "type": "string",
+             "description": "The unit's iso3_code: ISO 3166-1 alpha-3, plus FAO's "
+                            "pseudo-codes for disputed areas (xAB Abyei, xJK Jammu and "
+                            "Kashmir, xxx). A few codes group several GAUL units, e.g. "
+                            "AUS also holds Ashmore and Cartier Islands. One file per code."},
+        ],
+        "partition:file_count": part["files"],
+        "partition:glob": glob,
         "table:row_count": entry["features"],
         "table:primary_geometry": "geometry",
         "table:columns": [
@@ -264,15 +301,17 @@ def build_collection(name: str, entry: dict, columns: list[tuple[str, str]],
             "data": {
                 "href": f"{PUBLIC_BASE}/{path}",
                 "type": PARQUET_TYPE,
-                "title": f"{title}, GeoParquet",
+                "title": f"{title}, whole world in one file",
                 "description": f"{entry['features']:,} features in {entry['row_groups']} "
-                               f"row group(s)",
+                               f"row group(s). Large: a bbox filter cannot skip much, "
+                               f"so prefer the per-country files for small reads.",
                 "roles": ["data"],
                 "file:size": entry["bytes"],
                 "file:checksum": "1220" + entry["sha256"],
                 "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
+            **country_assets(name, part),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -350,17 +389,28 @@ def citation(accessed: str) -> str:
 
 def access_section(name: str) -> str:
     return f"""\
-One file, immutable, read in place with HTTP range requests:
+Two layouts of the same rows, both immutable and readable in place with
+HTTP range requests. One country, a small file:
 
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
 SELECT gaul0_name, ST_Area(geometry) AS area
-FROM read_parquet('{DATA_URL}/{name}.parquet')
-WHERE bbox.xmax >= 2.0 AND bbox.xmin <= 3.0 AND bbox.ymax >= 48.0 AND bbox.ymin <= 49.0;
+FROM read_parquet('{DATA_URL}/{PARTITION_KEY}=FRA/{name}.parquet');
 ```
 
-The same file is `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/{name}.parquet` on the anonymous
-S3 endpoint `{S3_ENDPOINT}` (path-style, empty credentials)."""
+The whole world in one download, `{DATA_URL}/{name}.parquet`. Its row groups
+are large (DuckDB writes none under 2,048 rows), so a bbox filter reads most
+of the file; use it when you want everything, or the per-country files when
+you do not. Every country at once, through the anonymous S3 endpoint
+`{S3_ENDPOINT}` (path-style, empty credentials):
+
+```sql
+SET s3_endpoint='{S3_ENDPOINT}'; SET s3_url_style='path';
+SET s3_access_key_id=''; SET s3_secret_access_key='';
+SELECT country, count(*) FROM read_parquet(
+  's3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/{PARTITION_KEY}=*/{name}.parquet', hive_partitioning = true)
+GROUP BY 1;
+```"""
 
 
 def license_md(accessed: str) -> str:
@@ -387,7 +437,7 @@ Each file's footer is verified after writing, and the manifest records size
 and sha256, which this catalog publishes as `file:size` and `file:checksum`."""
 
 
-def collection_readme(col: dict, entry: dict, accessed: str) -> str:
+def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
     name = stem(col)
     schema = "\n".join(
         f"| `{c['name']}` | `{c['type']}` | {c['description']} |" for c in col["table:columns"])
@@ -398,8 +448,9 @@ def collection_readme(col: dict, entry: dict, accessed: str) -> str:
 
 | | |
 |---|---|
-| Rows | {entry['features']:,} in one file, {entry['row_groups']} row group(s) |
-| Size | {entry['bytes'] / 1e6:,.0f} MB, sha256 `{entry['sha256'][:12]}...` |
+| Rows | {entry['features']:,} |
+| Whole-world file | {entry['bytes'] / 1e6:,.0f} MB, {entry['row_groups']} row group(s), sha256 `{entry['sha256'][:12]}...` |
+| Per-country files | {part['files']} under `{PARTITION_KEY}=<iso3>/`, {part['bytes'] / 1e6:,.0f} MB in all |
 | Extent | {shared.fmt_bbox(col['extent']['spatial']['bbox'][0])} (lon/lat) |
 | Vintage | GAUL {VERSION}, accessed {accessed} |
 | Source | {entry['source']} |
@@ -425,13 +476,12 @@ def collection_readme(col: dict, entry: dict, accessed: str) -> str:
 """
 
 
-def collection_agents(col: dict, entry: dict) -> str:
+def collection_agents(col: dict, entry: dict, part: dict) -> str:
     name = stem(col)
-    pruning = ("one row group, so the bbox covering cannot skip anything; a bbox "
-               "filter still avoids decoding geometry"
+    pruning = ("one row group, so the bbox covering cannot skip anything"
                if entry["row_groups"] == 1 else
-               f"{entry['row_groups']} row groups, so a bbox filter skips the ones "
-               f"outside the window")
+               f"{entry['row_groups']} row groups, so a bbox filter skips at best "
+               f"the ones outside the window")
     return f"""\
 # {col['title']}: agent guide
 
@@ -444,10 +494,13 @@ GAUL {VERSION}, MultiPolygon, OGC:CRS84.
 
 ## Query tips
 
-- The file has {pruning}.
+- Pick the layout by the question. One country or a small window: the
+  per-country file `{PARTITION_KEY}=<iso3>/{name}.parquet` ({part['files']} files, keyed
+  by `iso3_code`, `hive_partitioning = true` adds a `{PARTITION_KEY}` column on a
+  glob). Everything: the whole-world file, which has {pruning}.
 - Join on the GAUL codes (`gaul0_code`, `gaul1_code`, `gaul2_code`), which
   are what FAO statistics carry. `iso3_code` is ISO 3166-1 alpha-3.
-- Features are large (a country or a province): the whole file is
+- Features are large (a country or a province): the whole-world file is
   {entry['bytes'] / 1e6:,.0f} MB, so project the columns you need and let the
   `bbox` filter run before any geometry function.
 - {'This layer is a Geomermaids dissolve of L1, not an FAO product; say so when you cite it, and prefer L1 for anything where the boundary itself matters.' if name == 'L0_derived' else 'Geometry and attributes are exactly the FAO release.'}
@@ -458,17 +511,19 @@ GAUL {VERSION}, MultiPolygon, OGC:CRS84.
 
 def root_readme(root: dict, collections: list[dict], manifest: dict) -> str:
     entries = {e["name"]: e for e in manifest["files"]}
+    parts = {p["name"]: p for p in manifest["partitions"]}
     rows = "\n".join(
         f"| [{c['title']}](./{c['id']}/README.md) | `{stem(c)}.parquet` | "
-        f"{entries[stem(c)]['features']:,} | {entries[stem(c)]['bytes'] / 1e6:,.0f} MB |"
+        f"{entries[stem(c)]['features']:,} | {entries[stem(c)]['bytes'] / 1e6:,.0f} MB | "
+        f"{parts[stem(c)]['files']} |"
         for c in collections)
     return f"""\
 # {root['title']}
 
 {root['description']}
 
-| Collection | File | Rows | Size |
-|---|---|---|---|
+| Collection | Whole-world file | Rows | Size | Per-country files |
+|---|---|---|---|---|
 {rows}
 
 ## Versions
@@ -479,9 +534,14 @@ own year, with its own catalog.
 
 ## Access
 
-Files live at `{DATA_URL}/<layer>.parquet` and can be read in place with HTTP
-range requests, or as `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/<layer>.parquet` through the
-anonymous S3 endpoint `{S3_ENDPOINT}`. Each collection's README shows a query.
+Each layer comes in two layouts of the same rows: one whole-world file at
+`{DATA_URL}/<layer>.parquet` for a single download, and one file per country
+at `{DATA_URL}/{PARTITION_KEY}=<iso3>/<layer>.parquet` for small reads (the
+whole-world files have row groups of 80 to 290 MB, so a bbox filter cannot
+skip much there). Both read in place with HTTP range requests, and the same
+paths exist under `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/` on the anonymous S3 endpoint
+`{S3_ENDPOINT}`, where a glob over `{PARTITION_KEY}=*/` reads every country. Each
+collection's README shows the queries.
 
 ## Provenance
 
@@ -502,8 +562,9 @@ def root_agents(collections: list[dict]) -> str:
     return f"""\
 # {CATALOG_ID}: agent guide
 
-FAO GAUL {VERSION} as GeoParquet 2.0: one collection per level, one file per
-collection, global coverage. Static release, immutable files.
+FAO GAUL {VERSION} as GeoParquet 2.0: one collection per level, global
+coverage, each in two layouts: one whole-world file, and one file per country
+under `{PARTITION_KEY}=<iso3>/`. Static release, immutable files.
 
 ## Collections
 
@@ -511,8 +572,11 @@ collection, global coverage. Static release, immutable files.
 
 ## Access
 
-- `{DATA_URL}/<layer>.parquet` over HTTPS, no credentials. DuckDB, polars,
-  pyarrow and GDAL read it in place with range requests.
+- One country: `{DATA_URL}/{PARTITION_KEY}=<iso3>/<layer>.parquet` over HTTPS, no
+  credentials, a few MB. Prefer it for anything that is not the whole world.
+- The whole world: `{DATA_URL}/<layer>.parquet`, 290 to 490 MB with row groups
+  too large to prune. Every country at once: the collection's
+  `partition:glob` through the S3 endpoint.
 - The same path under `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/` on the anonymous S3 endpoint
   `{S3_ENDPOINT}`, path-style, empty credentials.
 - Each collection documents its columns in `table:columns` and carries
@@ -523,7 +587,9 @@ collection, global coverage. Static release, immutable files.
 - Geometry is native Parquet GEOMETRY, OGC:CRS84 lon/lat, MultiPolygon.
 - `bbox` is a per-row float32 box rounded outward, declared as the
   GeoParquet `covering`; filter on it before touching geometry.
-- GAUL codes are the join keys to FAO statistics; `iso3_code` is ISO 3166-1.
+- GAUL codes are the join keys to FAO statistics; `iso3_code` is ISO 3166-1
+  alpha-3 plus FAO pseudo-codes for disputed areas (xAB, xJK, xxx), and is
+  the partition key: a few codes group several units (AUS, PYF, xFR, xUK).
 - `L0_derived` is ours, dissolved from L1; L1 and L2 are FAO's, unchanged.
 - Data (c) FAO, CC BY 4.0. Attribution and the UN boundary disclaimer are
   required; FAO does not endorse this redistribution or any use of it.
@@ -536,9 +602,12 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     """Render the catalog tree into dest (replaced). Returns the manifest."""
     manifest = read_manifest(out_dir)
     entries = {e["name"]: e for e in manifest["files"]}
-    missing = set(LAYERS) ^ set(entries)
+    parts = {p["name"]: p for p in manifest.get("partitions", [])}
+    missing = (set(LAYERS) ^ set(entries)) | (set(LAYERS) ^ set(parts))
     if missing:
         sys.exit(f"LAYERS and the manifest disagree on: {sorted(missing)}")
+    if any(p["key"] != PARTITION_KEY for p in parts.values()):
+        sys.exit("manifest partition key differs from gaul.py's PARTITION_KEY")
     for name in LAYERS:
         if not (THUMBS / f"{name}.png").is_file():
             sys.exit(f"missing thumbnail {THUMBS / name}.png: run the thumbnails command")
@@ -552,12 +621,13 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     collections = []
     for name in LAYERS:
         columns, geo = footer(con, data_source(out_dir, name))
-        col = build_collection(name, entries[name], columns, geo, updated)
+        col = build_collection(name, entries[name], parts[name], columns, geo, updated)
         cdir = dest / col["id"]
         write_json(cdir / "collection.json", col)
         shutil.copyfile(THUMBS / f"{name}.png", cdir / "thumbnail.png")
-        (cdir / "README.md").write_text(collection_readme(col, entries[name], manifest["accessed"]))
-        (cdir / "AGENTS.md").write_text(collection_agents(col, entries[name]))
+        (cdir / "README.md").write_text(
+            collection_readme(col, entries[name], parts[name], manifest["accessed"]))
+        (cdir / "AGENTS.md").write_text(collection_agents(col, entries[name], parts[name]))
         collections.append(col)
 
     root = build_root(collections, updated)
