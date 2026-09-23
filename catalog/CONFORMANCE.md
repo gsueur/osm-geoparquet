@@ -1,7 +1,7 @@
 # Portolan conformance
 
 Two catalogs are published: the live one at
-`https://parquetry.geomermaids.com/catalog/catalog.json`, whose globs read
+`https://parquetry.geomermaids.com/osm/catalog/catalog.json`, whose globs read
 `latest/`, and a pinned copy under `catalog/<YYYY-MM-DD>/` for every snapshot
 retention keeps. Both are rendered by the same generator and validated the
 same way, and the gates below cover both. They target
@@ -22,7 +22,7 @@ the published JSON and Markdown are never edited in place.
 | `catalog.py check-data` | `nightly.yml`, every build job, before upload | rashid data pass (`PTL-DAT-*`) over that job's partitions: 150,000-row cap, spatial statistics, GeoParquet version, one schema per theme. |
 | `catalog.py` via `publish.py` finalize | `nightly.yml`, finalize, before upload | Same metadata pass on the real catalog. A failure stops the catalog upload and fails the run. |
 
-The published glob is `s3://parquetry/latest/...` or `s3://parquetry/<date>/...`,
+The published glob is `s3://parquetry/osm/latest/...` or `s3://parquetry/osm/<date>/...`,
 which rashid cannot expand from a local tree, so the data rules would never
 reach the partitions in a metadata run. `check-data` renders a throwaway
 catalog whose globs point at the job's local files instead.

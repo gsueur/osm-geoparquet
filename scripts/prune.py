@@ -3,7 +3,7 @@
 Prune dated snapshots on the R2 remote per the tiered retention policy.
 
 Rules (UTC):
-  * `latest/` and bucket-root files (snapshots.json, ATTRIBUTION.txt) are never touched.
+  * `latest/` and the prefix-root files (snapshots.json, ATTRIBUTION.txt) are never touched.
   * Last 14 days: every daily snapshot is kept.
   * 15-365 days old: keep the 1st of each month; delete the rest.
   * >365 days old: keep Dec 31 of each year; delete the rest.
@@ -17,7 +17,7 @@ snapshots.json rebuild.
 Dry-run by default. Pass --execute to actually delete.
 
 Typical use (from nightly.sh, after remote validation passes):
-  python3 scripts/prune.py --execute --remote parquetry:parquetry
+  python3 scripts/prune.py --execute --remote parquetry:parquetry/osm
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import catalog  # noqa: E402
 from publish import (  # noqa: E402
     DEFAULT_EXCLUDE,
     SNAPSHOT_RE,
@@ -66,13 +67,14 @@ def list_dated_prefixes(remote: str) -> list[str]:
 
 def pinned_catalog_dates(remote: str) -> set[str]:
     """Dates under catalog/ that carry a pinned Portolan catalog."""
-    return list_snapshot_dirs(f"{remote}/catalog/")
+    return list_snapshot_dirs(f"{remote}/{catalog.CATALOG_PREFIX}/")
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--remote", default="parquetry:parquetry",
-                   help="rclone <remote>:<bucket>. Default: parquetry:parquetry")
+    p.add_argument("--remote", default="parquetry:parquetry/osm",
+                   help="rclone <remote>:<bucket>[/<prefix>]. Default: "
+                        "parquetry:parquetry/osm")
     p.add_argument("--execute", action="store_true",
                    help="Actually delete. Default is dry-run.")
     p.add_argument("--now", default=None,
@@ -143,7 +145,7 @@ def main() -> None:
         # A pinned catalog outlives nothing: its globs point into the prefix
         # that just went away.
         if d in pinned:
-            sh(["rclone", "purge", f"{args.remote}/catalog/{d}/"])
+            sh(["rclone", "purge", f"{args.remote}/{catalog.CATALOG_PREFIX}/{d}/"])
 
     print()
     print("[snapshots.json] rebuilding")

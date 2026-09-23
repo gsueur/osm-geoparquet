@@ -28,7 +28,7 @@ from themes import THEMES  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "catalog" / "thumbnails"
-BASE = "https://parquetry.geomermaids.com"
+BASE = "https://parquetry.geomermaids.com/osm"
 
 BACKGROUND = "#f7f5f0"
 REGION_FILL = "#ebe7de"
