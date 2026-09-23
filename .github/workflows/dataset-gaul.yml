@@ -1,0 +1,119 @@
+# Build and publish FAO GAUL 2024 to parquetry:parquetry/gaul/2024/.
+#
+# GAUL is a static release, not a nightly feed, so this runs on demand rather
+# than on a schedule. It runs here rather than on a laptop because this is
+# where the R2 credentials work, and because the source is 873 MB of zipped
+# shapefile that a runner fetches faster than a home connection.
+#
+# The converter verifies its own output before anything is uploaded: one
+# `geo` footer key, a well-formed covering, a bbox that really bounds every
+# geometry, and a declared extent that matches the data. A failure there
+# fails the job with nothing published.
+#
+#   build    convert and verify, upload nothing. Use it to check a change.
+#   publish  the same, then upload to the bucket.
+#
+# Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
+
+name: dataset-gaul
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build verifies only; publish also uploads"
+        type: choice
+        options: [build, publish]
+        default: build
+      accessed:
+        description: "Access date for the required FAO citation (YYYY-MM-DD, default: today UTC)"
+        required: false
+        default: ""
+
+concurrency:
+  group: dataset-gaul
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/gaul
+  VERSION: "2024"
+  PUBLIC: https://parquetry.geomermaids.com/gaul
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  gaul:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        if: inputs.stage == 'publish'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch the FAO archives
+        run: |
+          mkdir -p work
+          for lvl in L1 L2; do
+            curl -fsSL --retry 3 -o "work/GAUL_2024_$lvl.zip" \
+              "https://storage.googleapis.com/fao-maps-catalog-data/boundaries/GAUL_2024_$lvl.zip"
+            unzip -oq "work/GAUL_2024_$lvl.zip" -d work
+            rm "work/GAUL_2024_$lvl.zip"
+          done
+          ls -la work/*.shp
+          df -h . | tail -1
+
+      # GAUL2024TermsOfUse.pdf ships inside both archives and is the document
+      # the attribution is quoted from. Publishing it beside the data means a
+      # reader can check our summary against the source.
+      - name: Convert and verify
+        run: |
+          uv run --project scripts python scripts/datasets/gaul.py \
+            --work-dir work --out-dir "out/$VERSION" \
+            ${{ inputs.accessed && format('--accessed {0}', inputs.accessed) || '' }}
+          cp work/GAUL2024TermsOfUse.pdf "out/$VERSION/"
+          ls -la "out/$VERSION"
+
+      - name: Upload
+        if: inputs.stage == 'publish'
+        run: |
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          # A static release, so the data is immutable; the manifest and the
+          # attribution are the two a correction would touch, and they get the
+          # short max-age the other datasets use for their metadata.
+          rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
+            --include "*.parquet" --include "*.pdf" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
+            --transfers 4 --stats 30s --stats-one-line
+          rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
+            --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: inputs.stage == 'publish'
+        run: |
+          set +e
+          fail=0
+          for f in L0_derived.parquet L1.parquet L2.parquet \
+                   _manifest.json ATTRIBUTION.txt GAUL2024TermsOfUse.pdf; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$VERSION/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          exit $fail
