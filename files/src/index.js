@@ -147,8 +147,44 @@ async function renderListing(prefix, env) {
   });
 }
 
-const SITE_TITLE = "North America daily OSM GeoParquet v2.0 files";
-const SITE_SUBTITLE = "Hilbert-sorted, Hive-partitioned by state and theme. Updated nightly.";
+const SITE_TITLE = "Great datasets, in GeoParquet";
+const SITE_SUBTITLE = "Open geospatial data, repacked cloud-native. Query straight from a URL.";
+
+// One entry per dataset prefix. The listing renders whichever one the path
+// falls under, so a page under clc/ describes Corine Land Cover and links
+// its licence rather than OpenStreetMap's, which is what the single
+// OSM-shaped header and footer used to do at every level of the bucket.
+//
+// `attribution` is a full path because the datasets keep theirs at
+// different depths: OSM at its prefix root, the others inside the version
+// directory. A new vintage moves that file, so it is spelled out here.
+const DATASETS = {
+  "osm/": {
+    subtitle: "OpenStreetMap, North America. Hilbert-sorted, Hive-partitioned " +
+      "by state and theme. Rebuilt nightly.",
+    attribution: "osm/ATTRIBUTION.txt",
+    snapshots: "osm/snapshots.json",
+  },
+  "clc/": {
+    subtitle: "Corine Land Cover 2018, Europe.",
+    attribution: "clc/2018/ATTRIBUTION.txt",
+    snapshots: "clc/snapshots.json",
+  },
+  "geoboundaries/": {
+    subtitle: "geoBoundaries CGAZ, global administrative boundaries, ADM0 to ADM2.",
+    attribution: "geoboundaries/6.0.0/ATTRIBUTION.txt",
+    snapshots: "geoboundaries/snapshots.json",
+  },
+  "meta/": {
+    subtitle: "Shared inputs the builds read. Not a dataset of its own.",
+  },
+};
+
+// The dataset a listed path belongs to, or null at the bucket root.
+function datasetFor(prefix) {
+  const key = Object.keys(DATASETS).find((d) => prefix.startsWith(d));
+  return key ? DATASETS[key] : null;
+}
 // Public host of the deck.gl-based parquet viewer. Lives on the website
 // (Cloudflare Pages), not this Worker — kept as a constant so the listing
 // can link "view" next to each .parquet entry.
@@ -174,6 +210,7 @@ function folderCompare(a, b) {
 }
 
 function renderListingHtml(prefix, folders, files, truncated) {
+  const dataset = datasetFor(prefix);
   const segments = prefix.split("/").filter(Boolean);
   const crumbs = [`<a href="/">ROOT</a>`];
   for (let i = 0; i < segments.length; i++) {
@@ -227,7 +264,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `</head><body>` +
     `<header>` +
     `<h1><a href="/">${SITE_TITLE}</a></h1>` +
-    `<p class="subtitle">${SITE_SUBTITLE}</p>` +
+    `<p class="subtitle">${escapeHtml(dataset?.subtitle ?? SITE_SUBTITLE)}</p>` +
     `<nav class="crumbs">${crumbs.join(" / ")}</nav>` +
     `</header>` +
     `<table>` +
@@ -237,8 +274,12 @@ function renderListingHtml(prefix, folders, files, truncated) {
     truncNote +
     `<footer>` +
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
-    `<a href="/${DATASET_PREFIX}ATTRIBUTION.txt">attribution</a> &middot; ` +
-    `<a href="/${DATASET_PREFIX}snapshots.json">snapshots.json</a> &middot; ` +
+    (dataset?.attribution
+      ? `<a href="/${escapeHtml(dataset.attribution)}">attribution</a> &middot; `
+      : "") +
+    (dataset?.snapshots
+      ? `<a href="/${escapeHtml(dataset.snapshots)}">snapshots.json</a> &middot; `
+      : "") +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
     `</footer>` +

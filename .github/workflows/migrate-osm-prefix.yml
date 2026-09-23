@@ -23,6 +23,12 @@
 #   3. purge   deletes the old root copies. Only after the Workers carry the
 #              legacy rewrite and a nightly has run green under /osm/.
 #
+# Plus one unrelated tidy-up that needs the same credentials:
+#
+#   drop-naturalearth  removes /naturalearth/, an experiment that is not
+#                      being kept. Independent of the three stages above,
+#                      run it whenever.
+#
 # Cache-Control is the thing to watch. Dated prefixes carry `immutable` and
 # `latest/` carries `stale-while-revalidate`; a CopyObject that sends the
 # REPLACE metadata directive would flatten both and pin or spoil the edge.
@@ -41,10 +47,10 @@ on:
       stage:
         description: "Which stage to run"
         type: choice
-        options: [copy, verify, purge]
+        options: [copy, verify, purge, drop-naturalearth]
         default: verify
       confirm:
-        description: "purge only: type DELETE THE OLD ROOT to authorise"
+        description: "purge: type DELETE THE OLD ROOT. drop-naturalearth: type DROP NATURALEARTH"
         required: false
         default: ""
 
@@ -231,6 +237,21 @@ jobs:
             echo "$PUBLIC/meta/ answered $code, which proves nothing."
             echo "Leaving $PREFIX/meta in place."
           fi
+
+      # Not part of the move. /naturalearth/ was an experiment (a single
+      # shaded-relief GeoTIFF) and is not being kept, and neither token on a
+      # laptop currently authenticates against R2, so it is dropped here.
+      - name: Drop the naturalearth experiment
+        if: inputs.stage == 'drop-naturalearth'
+        run: |
+          [ "${{ inputs.confirm }}" = "DROP NATURALEARTH" ] || {
+            echo "drop-naturalearth needs confirm='DROP NATURALEARTH'"; exit 1; }
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          rclone lsf "$REMOTE/naturalearth" --recursive
+          rclone purge "$REMOTE/naturalearth"
 
       - name: What the root looks like now
         run: rclone lsf "$REMOTE" --max-depth 1
