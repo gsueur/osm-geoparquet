@@ -1,0 +1,105 @@
+# Temporary: debug run for issue #5, second half (US state relations cut by
+# Geofabrik's per-state extracts). Builds the boundaries theme for every US
+# region from one parent extract, boundary relations pre-filtered, and
+# compares with what the nightly publishes. Runs on the debug/issue-5 branch
+# only; never merged.
+
+name: debug-issue-5-parent
+
+on:
+  push:
+    branches: ["debug/issue-5"]
+    paths:
+      - ".github/debug/issue5_parent.py"
+      - ".github/workflows/debug-issue-5-parent.yml"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Parent extract"
+        default: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
+
+env:
+  URL: ${{ inputs.url || 'https://download.geofabrik.de/north-america/us-latest.osm.pbf' }}
+
+jobs:
+  us-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work dir on the runner's big scratch disk
+        run: |
+          if sudo mkdir -p /mnt/work 2>/dev/null && [[ $(df -Pk /mnt | awk 'NR==2{print $4}') -gt 30000000 ]]; then
+            sudo chown "$USER" /mnt/work; work=/mnt/work
+          else
+            work="$RUNNER_TEMP/work"; mkdir -p "$work"
+          fi
+          echo "WORK=$work" >> "$GITHUB_ENV"
+          echo "work dir: $work"; df -h "$work"
+
+      - name: Tools
+        run: |
+          bash .github/scripts/install-tools.sh
+          sudo apt-get install -y -qq time
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: Python deps
+        run: uv sync --project scripts
+
+      - name: Admin regions
+        run: bash .github/scripts/admin-regions.sh
+        env:
+          ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
+
+      - name: US regions
+        id: us
+        run: |
+          states=$(python3 -c "
+          import json
+          skip = {'US-AS', 'US-GU', 'US-MP', 'US-UM'}
+          isos = sorted(f['properties']['ISO3166-2'] for f in json.load(open('data/admin_regions.geojson'))['features'])
+          print(' '.join(i for i in isos if i.startswith('US-') and i not in skip))")
+          echo "states=$states" >> "$GITHUB_OUTPUT"
+          echo "$states" | wc -w
+
+      - name: Download the parent extract
+        run: |
+          start=$(date +%s)
+          curl -fL --retry 5 --retry-delay 30 --retry-all-errors \
+            -A "osm-geoparquet-debug/1.0 (+https://geoparquet.geomermaids.com/)" \
+            -o "$WORK/parent.osm.pbf" "$URL"
+          echo "download: $(( $(date +%s) - start )) s, $(du -h "$WORK/parent.osm.pbf" | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          df -h "$WORK"
+
+      - name: Keep the boundary relations only
+        run: |
+          /usr/bin/time -v osmium tags-filter "$WORK/parent.osm.pbf" r/boundary=administrative \
+            -o "$WORK/admin.osm.pbf" --overwrite 2> "$WORK/time.txt"
+          echo "tags-filter: $(grep 'Elapsed' "$WORK/time.txt" | sed 's/.*: //'), peak RSS $(( $(grep 'Maximum resident' "$WORK/time.txt" | sed 's/.*: //') / 1024 )) MB, output $(du -h "$WORK/admin.osm.pbf" | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -f "$WORK/parent.osm.pbf"
+
+      - name: Pipeline, boundaries only, every US region
+        working-directory: ${{ env.WORK }}
+        run: |
+          start=$(date +%s)
+          uv run --project "$GITHUB_WORKSPACE/scripts" \
+            python "$GITHUB_WORKSPACE/scripts/pipeline.py" \
+            --source-pbf "$WORK/admin.osm.pbf" \
+            --states-geojson "$GITHUB_WORKSPACE/data/admin_regions.geojson" \
+            --out-dir "$WORK/out" \
+            --states ${{ steps.us.outputs.states }} \
+            --themes boundaries --workers 3
+          echo "pipeline, ${{ steps.us.outputs.states }}: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+          du -sh "$WORK/out"
+
+      - name: Compare with latest
+        run: |
+          uv run --project scripts python .github/debug/issue5_parent.py \
+            "$WORK/out" ${{ steps.us.outputs.states }}
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: us-boundaries-report
+          path: report.md
