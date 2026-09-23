@@ -58,8 +58,8 @@ jobs:
           cat > us.py <<'PY'
           import json
           skip = {"US-AS", "US-GU", "US-MP", "US-UM"}
-          isos = sorted(f["properties"]["ISO3166-2"] for f in json.load(open("data/admin_regions.geojson"))["features"])
-          print(" ".join(i for i in isos if i.startswith("US-") and i not in skip))
+          isos = {(f.get("properties") or {}).get("ISO3166-2") for f in json.load(open("data/admin_regions.geojson"))["features"]}
+          print(" ".join(sorted(i for i in isos if i and i.startswith("US-") and i not in skip)))
           PY
           states=$(python3 us.py)
           echo "states=$states" >> "$GITHUB_OUTPUT"
