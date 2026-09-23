@@ -20,7 +20,10 @@ const BUCKET_NAME = "parquetry";
 // with its own directory as the root, so neither can import from above it.
 const DATASET_PREFIX = "osm/";
 const LEGACY_DATED = /^\d{4}-\d{2}-\d{2}\//;
-const LEGACY_DIRS = ["latest/", "catalog/", "meta/"];
+// `meta/` is deliberately absent: it stays at the bucket root as a shared
+// place for cross-dataset files, so it never moved and must never be
+// rewritten. Rewriting it would send anything added there into osm/.
+const LEGACY_DIRS = ["latest/", "catalog/"];
 const LEGACY_FILES = ["snapshots.json", "ATTRIBUTION.txt"];
 
 // True for a key written under the old layout. The trailing slash is

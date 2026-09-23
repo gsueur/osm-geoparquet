@@ -6,7 +6,10 @@
 # own catalog, so each can be registered with Portolan independently:
 #
 #   /osm/latest/           /osm/<YYYY-MM-DD>/     /osm/catalog/catalog.json
-#   /osm/snapshots.json    /osm/ATTRIBUTION.txt   /osm/meta/
+#   /osm/snapshots.json    /osm/ATTRIBUTION.txt
+#
+# `meta/` stays at the bucket root. It is a shared place for cross-dataset
+# files, so it is not OSM's to move, and the Workers do not rewrite it.
 #
 # Run the stages in order, checking the log between each. They are separate
 # dispatches on purpose: `copy` is additive and reversible, `purge` is not.
@@ -87,7 +90,6 @@ jobs:
           + /latest/**
           + /2???-??-??/**
           + /catalog/**
-          + /meta/**
           + /snapshots.json
           + /ATTRIBUTION.txt
           - **
@@ -114,7 +116,7 @@ jobs:
           # Object count and byte total have to match entry by entry. A
           # whole-prefix total would hide one snapshot short by one file.
           entries=$(rclone lsjson "$REMOTE" --dirs-only \
-                    | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog|meta", e["Name"])))')
+                    | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog", e["Name"])))')
           for e in $entries; do
             old=$(rclone size --json "$REMOTE/$e")
             new=$(rclone size --json "$REMOTE/$PREFIX/$e" 2>/dev/null || echo '{"count":-1,"bytes":-1}')
@@ -190,12 +192,26 @@ jobs:
           echo "/$PREFIX holds $osm objects"
 
           for e in $(rclone lsjson "$REMOTE" --dirs-only \
-                     | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog|meta", e["Name"])))'); do
+                     | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog", e["Name"])))'); do
             echo "purge $e/"
             rclone purge "$REMOTE/$e"
           done
           rclone deletefile "$REMOTE/snapshots.json" || true
           rclone deletefile "$REMOTE/ATTRIBUTION.txt" || true
+
+          # The first copy took meta/ along, before it was settled that it
+          # stays at the root. Drop that duplicate -- but only once the
+          # deployed Workers have stopped rewriting meta/, or deleting it
+          # takes the root copy offline with it and the nightly loses its
+          # admin regions. A 301 here means the old rule is still live.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -I -H 'Accept: text/html' "$PUBLIC/meta/")
+          if [ "$code" = "301" ]; then
+            echo "$PUBLIC/meta/ still redirects: the Workers have not been redeployed."
+            echo "Leaving $PREFIX/meta in place. Deploy files/ and api/, then re-run."
+          else
+            echo "purge $PREFIX/meta/ (duplicate; meta/ lives at the root)"
+            rclone purge "$REMOTE/$PREFIX/meta" || true
+          fi
 
       - name: What the root looks like now
         run: rclone lsf "$REMOTE" --max-depth 1
