@@ -6,27 +6,29 @@ Status: exploratory MVP.
 
 ## Query the hosted data
 
-Snapshots are published at `https://parquetry.geomermaids.com/<YYYY-MM-DD>/country=<CC>/state=<ISO>/<theme>.parquet`. No download required — query straight from DuckDB:
+Snapshots are published at `https://parquetry.geomermaids.com/osm/<YYYY-MM-DD>/country=<CC>/state=<ISO>/<theme>.parquet`. No download required — query straight from DuckDB:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 INSTALL spatial; LOAD spatial;
 
 SELECT building, COUNT(*)
-FROM read_parquet('https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-RI/buildings.parquet')
+FROM read_parquet('https://parquetry.geomermaids.com/osm/2026-04-19/country=US/state=US-RI/buildings.parquet')
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
-Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/snapshots.json` for the list of available snapshots.
+Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/osm/snapshots.json` for the list of available snapshots.
 
-Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See the `ATTRIBUTION.txt` file at the bucket root for redistribution terms.
+Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See `https://parquetry.geomermaids.com/osm/ATTRIBUTION.txt` for redistribution terms.
+
+The bucket holds several datasets, each self-contained under its own prefix (`osm/`, `clc/`, `geoboundaries/`, ...), so each can be registered with Portolan on its own. URLs published before that move still resolve: the Workers serve the old bucket-root layout indefinitely.
 
 ### Portolan catalog
 
 The data is described by a [Portolan](https://github.com/portolan-sdi/portolan-spec) (STAC) catalog: one partitioned collection per theme, with column docs, extents, row counts, and a `partition:glob` that reads every region at once through the anonymous S3 endpoint `s3.geomermaids.com`. It is metadata only and copies no data.
 
-- `https://parquetry.geomermaids.com/catalog/catalog.json` is the live catalog. It reads `latest/`, so it always describes current data, and it is rebuilt nightly.
-- `https://parquetry.geomermaids.com/catalog/<YYYY-MM-DD>/catalog.json` pins one snapshot. These are published only for the snapshots retention keeps (the first of each month, plus Dec 31), never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.
+- `https://parquetry.geomermaids.com/osm/catalog/catalog.json` is the live catalog. It reads `latest/`, so it always describes current data, and it is rebuilt nightly.
+- `https://parquetry.geomermaids.com/osm/catalog/<YYYY-MM-DD>/catalog.json` pins one snapshot. These are published only for the snapshots retention keeps (the first of each month, plus Dec 31), never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.
 
 Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd.apache.parquet`) as well as through `partition:glob`, so STAC clients can reach the files directly.
 
@@ -75,10 +77,10 @@ See `scripts/pipeline.py --help` for all flags.
 
 ## Publishing
 
-`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) as a dated immutable snapshot, and maintains a bucket-root `snapshots.json` index + `ATTRIBUTION.txt`. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>`).
+`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) as a dated immutable snapshot, and maintains a `snapshots.json` index + `ATTRIBUTION.txt` at the dataset prefix. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>[/<prefix>]`).
 
 ```bash
-python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/<today>/
+python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/osm/<today>/
 python3 scripts/publish.py --dry-run     # preview
 python3 scripts/publish.py --date 2026-04-18   # backfill a specific date
 ```
@@ -101,7 +103,7 @@ The default (`--stage all`) does both, which is what a single-machine run wants.
 
 Setup:
 
-- `data/admin_regions.geojson` is too large for git (114 MB), so it is hosted at `https://parquetry.geomermaids.com/meta/admin_regions.geojson` and the repository variable `ADMIN_REGIONS_URL` points there. Update it with `rclone copyto data/admin_regions.geojson parquetry:parquetry/meta/admin_regions.geojson --header-upload "Cache-Control: public, max-age=300"`.
+- `data/admin_regions.geojson` is too large for git (114 MB), so it is hosted at `https://parquetry.geomermaids.com/osm/meta/admin_regions.geojson` and the repository variable `ADMIN_REGIONS_URL` points there. Update it with `rclone copyto data/admin_regions.geojson parquetry:parquetry/osm/meta/admin_regions.geojson --header-upload "Cache-Control: public, max-age=300"`.
 - Repository secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT` (`https://<account-id>.r2.cloudflarestorage.com`). Optional: `NTFY_TOPIC`.
 - rclone is configured from those secrets through `RCLONE_CONFIG_PARQUETRY_*` environment variables, so no config file is stored anywhere.
 

@@ -457,7 +457,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--out-dir", type=Path, default=Path("out"))
     p.add_argument("--admin-geojson", type=Path, default=Path("data/admin_regions.geojson"))
-    p.add_argument("--remote-url", default="https://parquetry.geomermaids.com")
+    p.add_argument("--remote-url", default="https://parquetry.geomermaids.com/osm")
     p.add_argument("--no-local", action="store_true", help="skip local checks")
     p.add_argument("--no-remote", action="store_true", help="skip remote checks")
     p.add_argument("--sample", type=int, default=8,

@@ -63,9 +63,16 @@ FIXTURES = REPO / "tests" / "fixtures" / "manifests"
 LOGO = REPO / "site" / "public" / "logo-192.png"
 
 PUBLIC_BASE = "https://parquetry.geomermaids.com"
-CATALOG_PREFIX = "catalog"
-CATALOG_URL = f"{PUBLIC_BASE}/{CATALOG_PREFIX}"
 BUCKET = "parquetry"
+# The bucket holds several datasets, each self-contained under its own
+# prefix, so each can be registered with Portolan on its own. Everything OSM
+# publishes -- snapshots, the alias, the catalog -- hangs off this one.
+# CATALOG_PREFIX is relative to it, which is also what the rclone remote
+# points at, so the two never have to be composed by hand.
+DATASET_PREFIX = "osm"
+PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+CATALOG_PREFIX = "catalog"
+CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 S3_ENDPOINT = "s3.geomermaids.com"
 SITE_URL = "https://geoparquet.geomermaids.com/"
 REPO_URL = "https://github.com/gsueur/osm-geoparquet"
@@ -302,7 +309,7 @@ def column_doc(theme: Theme, name: str) -> str:
 def partition_glob(theme: str, target: str, local: bool) -> str:
     if local:
         return f"./country=*/state=*/{theme}.parquet"
-    return f"s3://{BUCKET}/{target}/country=*/state=*/{theme}.parquet"
+    return f"s3://{BUCKET}/{DATASET_PREFIX}/{target}/country=*/state=*/{theme}.parquet"
 
 
 def country_list(countries: list[str]) -> str:
@@ -333,7 +340,7 @@ def data_assets(theme: str, regions: list[dict], target: str, local: bool) -> di
         return {}
     assets = {}
     for r in regions:
-        path = f"{target}/country={r['country']}/state={r['iso']}/{theme}.parquet"
+        path = f"{DATASET_PREFIX}/{target}/country={r['country']}/state={r['iso']}/{theme}.parquet"
         asset = {
             "href": f"{PUBLIC_BASE}/{path}",
             "type": PARQUET_TYPE,
@@ -425,7 +432,7 @@ def build_collection(theme: Theme, agg: dict, date: str, updated: str,
             md_link("agents", "./AGENTS.md", f"{title}: agent guide"),
             LICENSE_LINK,
             VIA_LINK,
-            {"rel": "alternate", "href": f"{PUBLIC_BASE}/{target}/", "type": "text/html",
+            {"rel": "alternate", "href": f"{PUBLIC_DATA}/{target}/", "type": "text/html",
              "title": f"Browse the {target} files"},
         ],
     }
@@ -487,7 +494,7 @@ def build_root(collections: list[dict], date: str, updated: str, countries: list
              "title": "Pipeline and catalog source"},
             {"rel": "issues", "href": f"{REPO_URL}/issues", "type": "text/html",
              "title": "Report a problem"},
-            {"rel": "related", "href": f"{PUBLIC_BASE}/snapshots.json",
+            {"rel": "related", "href": f"{PUBLIC_DATA}/snapshots.json",
              "type": "application/json", "title": "Index of every retained snapshot"},
             *version_links,
             {"rel": "alternate", "href": SITE_URL, "type": "text/html",
@@ -505,7 +512,7 @@ def fmt_bbox(b: list[float]) -> str:
 def access_section(theme: str, target: str) -> str:
     switch = (
         "Replace `latest` with a snapshot date, e.g. "
-        f"`{PUBLIC_BASE}/2026-09-01/...`, to pin data that does not move under "
+        f"`{PUBLIC_DATA}/2026-09-01/...`, to pin data that does not move under "
         "you. Monthly snapshots are kept, and each has its own catalog under "
         f"{CATALOG_URL}/<date>/catalog.json."
         if target == "latest" else
@@ -517,7 +524,7 @@ One region over plain HTTPS, no credentials:
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
 SELECT count(*)
-FROM read_parquet('{PUBLIC_BASE}/{target}/country=US/state=US-RI/{theme}.parquet');
+FROM read_parquet('{PUBLIC_DATA}/{target}/country=US/state=US-RI/{theme}.parquet');
 ```
 
 Every region at once, through the anonymous S3 endpoint (plain HTTPS cannot
@@ -527,7 +534,7 @@ expand a glob because it has no listing):
 CREATE SECRET parquetry (TYPE s3, KEY_ID '', SECRET '',
     ENDPOINT '{S3_ENDPOINT}', URL_STYLE 'path');
 SELECT state, count(*)
-FROM read_parquet('s3://{BUCKET}/{target}/country=*/state=*/{theme}.parquet')
+FROM read_parquet('s3://{BUCKET}/{DATASET_PREFIX}/{target}/country=*/state=*/{theme}.parquet')
 GROUP BY state ORDER BY 2 DESC;
 ```
 
@@ -628,7 +635,7 @@ Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
   `count(DISTINCT (osm_type, osm_id))` and deduplicate on the same pair
   before summing lengths or areas.
 - Snapshots are immutable under `/<YYYY-MM-DD>/`; `/latest/` follows the
-  nightly build. Retention: {PUBLIC_BASE}/snapshots.json.
+  nightly build. Retention: {PUBLIC_DATA}/snapshots.json.
 - Attribution is required: "(c) OpenStreetMap contributors", ODbL 1.0.
 """
 
@@ -675,11 +682,11 @@ def root_readme(root: dict, collections: list[dict], aggs: dict, date: str,
 
 ## Access
 
-Files live at `{PUBLIC_BASE}/<YYYY-MM-DD | latest>/country=<CC>/state=<ISO>/<theme>.parquet`
+Files live at `{PUBLIC_DATA}/<YYYY-MM-DD | latest>/country=<CC>/state=<ISO>/<theme>.parquet`
 and can be read in place with HTTP range requests. Each collection's README
 shows how to read one region over HTTPS and every region through the
 anonymous S3 endpoint `{S3_ENDPOINT}`. Retained snapshots are listed in
-[snapshots.json]({PUBLIC_BASE}/snapshots.json).
+[snapshots.json]({PUBLIC_DATA}/snapshots.json).
 
 ## Provenance
 
@@ -723,11 +730,11 @@ region (US states, Canadian provinces and territories, Mexican states).
 
 ## Access
 
-- One file: `{PUBLIC_BASE}/{target}/country=US/state=US-NY/buildings.parquet`
+- One file: `{PUBLIC_DATA}/{target}/country=US/state=US-NY/buildings.parquet`
   over HTTPS, no credentials. DuckDB, polars, pyarrow and GDAL read it in
   place with range requests.
 - All regions of a theme: the `partition:glob` of its collection,
-  `s3://{BUCKET}/{target}/country=*/state=*/<theme>.parquet`, through the
+  `s3://{BUCKET}/{DATASET_PREFIX}/{target}/country=*/state=*/<theme>.parquet`, through the
   anonymous S3 endpoint `{S3_ENDPOINT}` with path-style addressing and empty
   credentials. Plain HTTPS cannot expand a glob.
 - Every file of a theme shares one schema, documented in the collection's
