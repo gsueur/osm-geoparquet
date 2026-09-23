@@ -86,6 +86,7 @@ jobs:
             ${{ inputs.accessed && format('--accessed {0}', inputs.accessed) || '' }}
           cp work/GAUL2024TermsOfUse.pdf "out/$VERSION/"
           ls -la "out/$VERSION"
+          echo "per-country files: $(find "out/$VERSION" -path '*country=*' -name '*.parquet' | wc -l)"
 
       # The catalog needs a thumbnail per collection. They are committed under
       # catalog/thumbnails/gaul/ and only re-rendered here when missing (a new
@@ -150,6 +151,7 @@ jobs:
           for f in $VERSION/L0_derived.parquet $VERSION/L1.parquet $VERSION/L2.parquet \
                    $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
                    $VERSION/GAUL2024TermsOfUse.pdf \
+                   $VERSION/country=FRA/L1.parquet $VERSION/country=xAB/L2.parquet \
                    catalog/catalog.json catalog/l2/collection.json catalog/l2/thumbnail.png; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }

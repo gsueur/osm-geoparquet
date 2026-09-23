@@ -84,9 +84,11 @@ A second, smaller catalog describes the FAO GAUL 2024 release at
 `https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
 `scripts/datasets/gaul_catalog.py` with the same constants, rashid wrapper
 and uploader as the OSM one. Three collections (`l0_derived`, `l1`, `l2`),
-each one collection-level data asset: the release is static and the files
-immutable, so every asset carries `file:size` and `file:checksum` from the
-converter's manifest, and there is no partition extension.
+each describing two layouts of the same rows: the whole-world file as the
+`data` asset, and the per-country files under `country=<iso3>/` through the
+partition extension (`partition:glob`, one key) and one `data-<iso3>` asset
+each. The release is static and the files immutable, so every asset carries
+`file:size` and `file:checksum` from the converter's manifest.
 
 `.github/workflows/dataset-gaul.yml` renders and checks the catalog on every
 run (stage `build`) and uploads it after the data (stage `publish`), so the

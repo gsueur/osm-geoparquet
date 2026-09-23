@@ -51,10 +51,13 @@ Queries that mix older and newer snapshots in one glob need `union_by_name = tru
 ## Other datasets in the bucket
 
 The repository also carries the builder for FAO GAUL 2024
-(`scripts/datasets/gaul.py`, workflow `dataset-gaul.yml`): three GeoParquet
-files under `https://parquetry.geomermaids.com/gaul/2024/` (L1 and L2 as FAO
-publishes them, and a country layer L0 dissolved here), each with a bbox
-covering and a sha256 in `_manifest.json`. Its Portolan catalog is at
+(`scripts/datasets/gaul.py`, workflow `dataset-gaul.yml`): three layers under
+`https://parquetry.geomermaids.com/gaul/2024/` (L1 and L2 as FAO publishes
+them, and a country layer L0 dissolved here), each in two layouts of the same
+rows: one whole-world file (`L1.parquet`) for a single download, and one
+file per country (`country=<iso3>/L1.parquet`) for small reads, since DuckDB
+writes no row group under 2,048 rows and a whole-world L1 is two groups of
+185 MB. Every file has a bbox covering and a sha256 in `_manifest.json`. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
 `scripts/datasets/gaul_catalog.py`. The licence obligations (citation,
 disclaimers) are encoded in its `ATTRIBUTION.txt`, quoted from the Terms of
