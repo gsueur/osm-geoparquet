@@ -111,9 +111,9 @@ The default (`--stage all`) does both, which is what a single-machine run wants.
 
 `.github/workflows/nightly.yml` runs the whole pipeline on hosted runners, no server needed:
 
-1. `plan` reads `data/admin_regions.geojson` and resolves every region to the most specific Geofabrik extract via Geofabrik's index (`scripts/plan.py`). Today that is one job per US state / Canadian province and one job for Mexico's 32 states.
-2. `build` (matrix, up to 20 in parallel) downloads its extract, runs `pipeline.py` with the admin polygon so the clip semantics are unchanged, validates locally, and uploads its regions with `publish.py --stage upload`.
-3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize`, remote validation, then `prune.py --execute --purge-incomplete`.
+1. `plan` reads `data/admin_regions.geojson` and resolves every region to the most specific Geofabrik extract via Geofabrik's index (`scripts/plan.py`). Today that is one job per US state / Canadian province and one job for Mexico's 32 states, plus one `us-boundaries` job: a per-state Geofabrik extract cuts the administrative relations that touch the state edge (the state itself, border counties and towns, issue #5), so the `boundaries` theme of the fifty states and DC is built from the US country extract instead, with the boundary relations filtered out of the 12 GB download first and the clip completing boundary relations (`--complete-relations multipolygon,boundary`). Those state jobs skip the theme; Puerto Rico and the US Virgin Islands are not in Geofabrik's US file and keep building it from their own extracts. Alaska's state relation is the one that still does not assemble.
+2. `build` (matrix, up to 20 in parallel) downloads its extract, runs `pipeline.py` with the admin polygon so the clip semantics are unchanged, validates locally, and uploads its regions with `publish.py --stage upload`. The boundaries job uploads its manifests as `_manifest.boundaries.json` fragments beside the state jobs' manifests.
+3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize` folds the manifest fragments into each region's `_manifest.json`, checks completeness, syncs `latest/`, then remote validation and `prune.py --execute --purge-incomplete`.
 4. `notify` posts a recap to ntfy.sh when `NTFY_TOPIC` is set.
 
 Setup:

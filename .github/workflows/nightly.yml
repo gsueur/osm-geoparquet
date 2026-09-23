@@ -139,7 +139,18 @@ jobs:
             -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
           ls -lh "$WORK/source.osm.pbf"
 
-      - name: Pipeline (${{ matrix.states }})
+      # The parent-extract boundaries job: a country extract is 12 GB, and
+      # only its administrative relations are wanted. One osmium pass leaves a
+      # few hundred MB for the pipeline to clip per region.
+      - name: Keep only ${{ matrix.filter }}
+        if: matrix.filter != ''
+        run: |
+          osmium tags-filter "$WORK/source.osm.pbf" ${{ matrix.filter }} \
+            -o "$WORK/filtered.osm.pbf" --overwrite
+          mv "$WORK/filtered.osm.pbf" "$WORK/source.osm.pbf"
+          ls -lh "$WORK/source.osm.pbf"
+
+      - name: Pipeline (${{ matrix.states }}${{ matrix.themes && format(': {0}', matrix.themes) || '' }})
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         run: |
           uv run --project "$GITHUB_WORKSPACE/scripts" \
@@ -149,6 +160,8 @@ jobs:
             --out-dir "$WORK/out" \
             --states ${{ matrix.states }} \
             --workers ${{ matrix.workers }} \
+            ${{ matrix.themes && format('--themes {0}', matrix.themes) || '' }} \
+            ${{ matrix.complete_relations && format('--complete-relations {0}', matrix.complete_relations) || '' }} \
             --verbose
           rm -f "$WORK/source.osm.pbf"
           du -sh "$WORK/out"
@@ -158,7 +171,8 @@ jobs:
           uv run --project scripts python scripts/validate.py --no-remote \
             --out-dir "$WORK/out" \
             --admin-geojson data/admin_regions.geojson \
-            --states ${{ matrix.states }}
+            --states ${{ matrix.states }} \
+            ${{ matrix.themes && format('--themes {0}', matrix.themes) || '' }}
 
       - name: Portolan data check
         # rashid's data pass over this job's partitions before anything is
@@ -173,7 +187,8 @@ jobs:
         run: |
           uv run --project scripts python scripts/publish.py --stage upload \
             --out-dir "$WORK/out" --remote "$REMOTE" \
-            --date "${{ needs.plan.outputs.date }}"
+            --date "${{ needs.plan.outputs.date }}" \
+            ${{ matrix.fragment && format('--manifest-fragment {0}', matrix.fragment) || '' }}
 
   finalize:
     needs: [plan, build]
