@@ -1,0 +1,201 @@
+# One-shot: move OSM off the bucket root into its own `/osm/` prefix.
+#
+# The bucket hosts several datasets. `clc/`, `geoboundaries/` and
+# `naturalearth/` each own a folder; OSM alone sprawls across six root
+# entries. This makes every dataset a self-contained unit that carries its
+# own catalog, so each can be registered with Portolan independently:
+#
+#   /osm/latest/           /osm/<YYYY-MM-DD>/     /osm/catalog/catalog.json
+#   /osm/snapshots.json    /osm/ATTRIBUTION.txt   /osm/meta/
+#
+# Run the stages in order, checking the log between each. They are separate
+# dispatches on purpose: `copy` is additive and reversible, `purge` is not.
+#
+#   1. copy    server-side CopyObject root -> /osm/. Nothing is deleted and
+#              nothing is read or written by anything else, so it is safe to
+#              run against live traffic and safe to run twice.
+#   2. verify  both layouts serve the same object count, the same bytes and
+#              the same Cache-Control. Run it before and after deploying the
+#              Workers, and again after the pipeline flip.
+#   3. purge   deletes the old root copies. Only after the Workers carry the
+#              legacy rewrite and a nightly has run green under /osm/.
+#
+# Cache-Control is the thing to watch. Dated prefixes carry `immutable` and
+# `latest/` carries `stale-while-revalidate`; a CopyObject that sends the
+# REPLACE metadata directive would flatten both and pin or spoil the edge.
+# rclone only sends REPLACE when asked to set metadata, so the copy below
+# passes no --metadata flag, and `verify` asserts the result rather than
+# trusting it.
+#
+# Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
+
+name: migrate-osm-prefix
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Which stage to run"
+        type: choice
+        options: [copy, verify, purge]
+        default: verify
+      confirm:
+        description: "purge only: type DELETE THE OLD ROOT to authorise"
+        required: false
+        default: ""
+
+# Shares the nightly's concurrency group: a migration stage and a build can
+# never touch the bucket at the same time.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry
+  PREFIX: osm
+  PUBLIC: https://parquetry.geomermaids.com
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: rclone
+        # >= 1.65: the same version floor the nightly needs, and the version
+        # whose server-side copy honours the metadata directive correctly.
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # What OSM owns at the root. Everything else there (clc/, geoboundaries/,
+      # naturalearth/, test/, and osm/ itself) is left alone by omission: with
+      # only --include rules, rclone excludes whatever matches none of them.
+      - name: Filters
+        run: |
+          cat > /tmp/osm.filter <<'EOF'
+          + /latest/**
+          + /2???-??-??/**
+          + /catalog/**
+          + /meta/**
+          + /snapshots.json
+          + /ATTRIBUTION.txt
+          - **
+          EOF
+          cat /tmp/osm.filter
+
+      - name: Copy root -> /osm/
+        if: inputs.stage == 'copy'
+        run: |
+          rclone copy "$REMOTE" "$REMOTE/$PREFIX" \
+            --filter-from /tmp/osm.filter \
+            --transfers 32 --checkers 32 \
+            --stats 30s --stats-one-line
+
+      - name: Compare both layouts
+        if: inputs.stage == 'copy' || inputs.stage == 'verify'
+        run: |
+          # -e off on purpose: every entry gets checked and reported, and the
+          # step fails at the end on the accumulated result. Aborting at the
+          # first mismatch would hide the other nineteen.
+          set +e
+          fail=0
+
+          # Object count and byte total have to match entry by entry. A
+          # whole-prefix total would hide one snapshot short by one file.
+          entries=$(rclone lsjson "$REMOTE" --dirs-only \
+                    | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog|meta", e["Name"])))')
+          for e in $entries; do
+            old=$(rclone size --json "$REMOTE/$e")
+            new=$(rclone size --json "$REMOTE/$PREFIX/$e" 2>/dev/null || echo '{"count":-1,"bytes":-1}')
+            if [ "$old" != "$new" ]; then
+              echo "MISMATCH $e"
+              echo "  root: $old"
+              echo "  osm:  $new"
+              fail=1
+            else
+              echo "ok  $e  $old"
+            fi
+          done
+
+          for f in snapshots.json ATTRIBUTION.txt; do
+            if rclone lsjson "$REMOTE/$PREFIX/$f" >/dev/null 2>&1; then
+              echo "ok  $f"
+            else
+              echo "MISSING $PREFIX/$f"; fail=1
+            fi
+          done
+
+          exit $fail
+
+      # The Workers serve any prefix, so /osm/... is publicly readable the
+      # moment the copy lands. That makes the headers checkable with curl,
+      # against the live edge, before anything is flipped or deleted.
+      - name: Cache-Control survived the copy
+        if: inputs.stage == 'copy' || inputs.stage == 'verify'
+        run: |
+          set +e
+          fail=0
+          newest=$(curl -fsS "$PUBLIC/snapshots.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshots"][0]["date"])')
+          [ -n "$newest" ] || { echo "could not read snapshots.json"; exit 1; }
+          sample="country=US/state=US-RI/buildings.parquet"
+
+          check () {  # path, substring that must be present
+            got=$(curl -fsSI "$PUBLIC/$PREFIX/$1" | tr -d '\r' | awk 'tolower($1)=="cache-control:"{$1="";sub(/^ /,"");print}')
+            case "$got" in
+              *"$2"*) echo "ok  /$PREFIX/$1  ->  $got" ;;
+              *)      echo "BAD /$PREFIX/$1  ->  ${got:-<none>}  (wanted $2)"; fail=1 ;;
+            esac
+          }
+
+          check "$newest/$sample"  "immutable"
+          check "latest/$sample"   "stale-while-revalidate"
+          check "snapshots.json"   "max-age=300"
+
+          # The inverse matters just as much: `immutable` must not have
+          # leaked onto latest/, which is what a REPLACE directive would do.
+          if curl -fsSI "$PUBLIC/$PREFIX/latest/$sample" | tr -d '\r' | grep -qi 'cache-control:.*immutable'; then
+            echo "BAD latest/ came back immutable: the copy replaced metadata instead of copying it"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Refuse an unconfirmed purge
+        if: inputs.stage == 'purge' && inputs.confirm != 'DELETE THE OLD ROOT'
+        run: |
+          echo "purge needs confirm='DELETE THE OLD ROOT'"
+          exit 1
+
+      - name: Purge the old root copies
+        if: inputs.stage == 'purge' && inputs.confirm == 'DELETE THE OLD ROOT'
+        run: |
+          # Last chance to notice the copy never happened. Deleting the root
+          # while /osm/ is empty would take the whole dataset offline.
+          osm=$(rclone size --json "$REMOTE/$PREFIX" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')
+          if [ "$osm" -lt 30000 ]; then
+            echo "/$PREFIX holds only $osm objects; expected the full snapshot set. Refusing."
+            exit 1
+          fi
+          echo "/$PREFIX holds $osm objects"
+
+          for e in $(rclone lsjson "$REMOTE" --dirs-only \
+                     | python3 -c 'import json,sys,re; print("\n".join(e["Name"] for e in json.load(sys.stdin) if re.fullmatch(r"\d{4}-\d{2}-\d{2}|latest|catalog|meta", e["Name"])))'); do
+            echo "purge $e/"
+            rclone purge "$REMOTE/$e"
+          done
+          rclone deletefile "$REMOTE/snapshots.json" || true
+          rclone deletefile "$REMOTE/ATTRIBUTION.txt" || true
+
+      - name: What the root looks like now
+        run: rclone lsf "$REMOTE" --max-depth 1
