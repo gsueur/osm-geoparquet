@@ -150,7 +150,7 @@ jobs:
           mv "$WORK/filtered.osm.pbf" "$WORK/source.osm.pbf"
           ls -lh "$WORK/source.osm.pbf"
 
-      - name: Pipeline (${{ matrix.states }}${{ matrix.themes && format(': {0}', matrix.themes) || '' }})
+      - name: Pipeline (${{ matrix.states }}) ${{ matrix.themes }}
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         run: |
           uv run --project "$GITHUB_WORKSPACE/scripts" \
