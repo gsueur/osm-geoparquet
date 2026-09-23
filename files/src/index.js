@@ -8,6 +8,34 @@
 
 const BUCKET_NAME = "parquetry";
 
+// OSM used to sit at the bucket root and now lives under `osm/`, beside the
+// other datasets. Every URL published before the move still has to resolve:
+// the site, the README, the Portolan catalog, the GeoParquet distribution
+// guide and any query somebody saved all point at the old paths, and there
+// is no way to know who copied one. So the old layout is served forever.
+//
+// Duplicated in api/src/index.js rather than shared. Each Worker builds with
+// its own directory as the root, so neither can import from above it.
+const DATASET_PREFIX = "osm/";
+const LEGACY_DATED = /^\d{4}-\d{2}-\d{2}\//;
+const LEGACY_DIRS = ["latest/", "catalog/", "meta/"];
+const LEGACY_FILES = ["snapshots.json", "ATTRIBUTION.txt"];
+
+// True for a key written under the old layout. A bare `latest` with no
+// slash is not one: it would be ambiguous with a future object of that
+// name, and every client that globs sends the trailing slash.
+function isLegacyKey(key) {
+  return (
+    LEGACY_FILES.includes(key) ||
+    LEGACY_DIRS.some((d) => key.startsWith(d)) ||
+    LEGACY_DATED.test(key)
+  );
+}
+
+function currentKey(key) {
+  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -34,10 +62,20 @@ export default {
     const isDirRequest = path === "" || path.endsWith("/");
 
     if (isDirRequest) {
+      // A browsable directory moves in the open: redirect, so the address
+      // bar, the breadcrumbs and the links in the listing all agree on where
+      // the file actually is. Objects are rewritten silently instead (below),
+      // because a Range request should not have to survive a redirect.
+      if (isLegacyKey(path)) {
+        return new Response(null, {
+          status: 301,
+          headers: { Location: "/" + currentKey(path), ...corsHeaders() },
+        });
+      }
       if (wantsHtml) return renderListing(path, env);
       return new Response("Not Found", { status: 404, headers: corsHeaders() });
     }
-    return handleObject(path, request, env);
+    return handleObject(currentKey(path), request, env);
   },
 };
 
@@ -196,8 +234,8 @@ function renderListingHtml(prefix, folders, files, truncated) {
     truncNote +
     `<footer>` +
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
-    `<a href="/ATTRIBUTION.txt">attribution</a> &middot; ` +
-    `<a href="/snapshots.json">snapshots.json</a> &middot; ` +
+    `<a href="/${DATASET_PREFIX}ATTRIBUTION.txt">attribution</a> &middot; ` +
+    `<a href="/${DATASET_PREFIX}snapshots.json">snapshots.json</a> &middot; ` +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
     `</footer>` +

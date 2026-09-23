@@ -1,13 +1,43 @@
 // S3-compatible read-only facade over the `parquetry` R2 bucket.
 //
 // Purpose: let DuckDB / httpfs clients glob our public data with
-// `s3://parquetry/latest/country=*/state=*/<theme>.parquet`. Plain HTTPS
+// `s3://parquetry/osm/latest/country=*/state=*/<theme>.parquet`. Plain HTTPS
 // can't do that (no LIST), so this Worker answers path-style
 // ListObjectsV2 and GETs backed by an R2 binding.
 //
 // Everything is anonymous + read-only. No signing, no writes.
 
 const BUCKET_NAME = "parquetry";
+
+// OSM used to sit at the bucket root and now lives under `osm/`, beside the
+// other datasets. `s3://parquetry/latest/country=*/state=*/x.parquet` has
+// been the documented glob for months, so the old layout keeps answering:
+// a LIST under a legacy prefix is served from the new keys and reported back
+// under the old ones, and the GETs that follow are rewritten the same way.
+// Consistent in both directions, so a client never sees the two mixed.
+//
+// Duplicated in files/src/index.js rather than shared. Each Worker builds
+// with its own directory as the root, so neither can import from above it.
+const DATASET_PREFIX = "osm/";
+const LEGACY_DATED = /^\d{4}-\d{2}-\d{2}\//;
+const LEGACY_DIRS = ["latest/", "catalog/", "meta/"];
+const LEGACY_FILES = ["snapshots.json", "ATTRIBUTION.txt"];
+
+// True for a key written under the old layout. The trailing slash is
+// required, so an empty prefix still lists the real root and a glob that
+// stops short of one (`s3://parquetry/lat*`) is left alone. Every client
+// that globs a theme sends at least `latest/country=`.
+function isLegacyKey(key) {
+  return (
+    LEGACY_FILES.includes(key) ||
+    LEGACY_DIRS.some((d) => key.startsWith(d)) ||
+    LEGACY_DATED.test(key)
+  );
+}
+
+function currentKey(key) {
+  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+}
 
 export default {
   async fetch(request, env) {
@@ -56,7 +86,7 @@ export default {
     }
 
     const key = decodeURIComponent(afterBucket.slice(1));
-    return handleObject(key, request, env);
+    return handleObject(currentKey(key), request, env);
   },
 };
 
@@ -68,15 +98,24 @@ async function handleList(url, env) {
   const maxKeysParam = url.searchParams.get("max-keys");
   const maxKeys = Math.min(maxKeysParam ? parseInt(maxKeysParam, 10) : 1000, 1000);
 
-  const listOpts = { prefix, limit: maxKeys };
+  // A continuation token is opaque R2 state tied to the prefix that produced
+  // it. The follow-up call carries the same legacy prefix and gets rewritten
+  // the same way, so the cursor stays valid across pages.
+  const legacy = isLegacyKey(prefix);
+  const listOpts = { prefix: legacy ? DATASET_PREFIX + prefix : prefix, limit: maxKeys };
   if (delimiter) listOpts.delimiter = delimiter;
   if (continuationToken) listOpts.cursor = continuationToken;
-  if (startAfter && !continuationToken) listOpts.startAfter = startAfter;
+  if (startAfter && !continuationToken) {
+    listOpts.startAfter = legacy ? DATASET_PREFIX + startAfter : startAfter;
+  }
 
   const list = await env.BUCKET.list(listOpts);
 
   const xml = buildListXml(list, {
+    // Echoed and reported as the client wrote them: it asked about the old
+    // layout and gets an answer entirely in the old layout.
     prefix,
+    asRequested: legacy ? (k) => k.slice(DATASET_PREFIX.length) : (k) => k,
     delimiter,
     maxKeys,
     continuationToken,
@@ -94,7 +133,7 @@ async function handleList(url, env) {
 }
 
 function buildListXml(list, params) {
-  const { prefix, delimiter, maxKeys, continuationToken, startAfter } = params;
+  const { prefix, asRequested, delimiter, maxKeys, continuationToken, startAfter } = params;
   const prefixes = list.delimitedPrefixes || [];
   const keyCount = list.objects.length + prefixes.length;
 
@@ -102,7 +141,7 @@ function buildListXml(list, params) {
     .map(
       (obj) =>
         `<Contents>` +
-        `<Key>${xmlEscape(obj.key)}</Key>` +
+        `<Key>${xmlEscape(asRequested(obj.key))}</Key>` +
         `<LastModified>${obj.uploaded.toISOString()}</LastModified>` +
         `<ETag>${xmlEscape(obj.httpEtag)}</ETag>` +
         `<Size>${obj.size}</Size>` +
@@ -112,7 +151,7 @@ function buildListXml(list, params) {
     .join("");
 
   const commonPrefixes = prefixes
-    .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`)
+    .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(asRequested(p))}</Prefix></CommonPrefixes>`)
     .join("");
 
   const parts = [
@@ -240,7 +279,7 @@ function landingText() {
     `  SET s3_access_key_id='';\n` +
     `  SET s3_secret_access_key='';\n` +
     `  SELECT count(*) FROM read_parquet(\n` +
-    `    's3://${BUCKET_NAME}/latest/country=*/state=*/aeroways.parquet'\n` +
+    `    's3://${BUCKET_NAME}/${DATASET_PREFIX}latest/country=*/state=*/aeroways.parquet'\n` +
     `  );\n` +
     `\n` +
     `Fast browser-friendly downloads: https://parquetry.geomermaids.com/\n`
