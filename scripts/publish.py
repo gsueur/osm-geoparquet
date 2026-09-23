@@ -226,12 +226,94 @@ def count_remote_manifests(remote: str, date: str) -> int:
     return len(entries)
 
 
+IMMUTABLE = "Cache-Control: public, max-age=31536000, immutable"
+FRAGMENT_RE = re.compile(r"^_manifest\.([A-Za-z0-9_-]+)\.json$")
+
+
 def fetch_manifests(remote: str, date: str, dest: Path) -> None:
-    """Mirror every _manifest.json of a dated prefix into dest (same layout)."""
+    """Mirror every _manifest.json, and every _manifest.<name>.json fragment,
+    of a dated prefix into dest (same layout)."""
     subprocess.run(
-        ["rclone", "copy", "--include", "_manifest.json", f"{remote}/{date}/", str(dest)],
+        ["rclone", "copy", "--include", "_manifest*.json", f"{remote}/{date}/", str(dest)],
         check=True, capture_output=True,
     )
+
+
+def upload_manifest_fragments(out_dir: Path, dest: str, name: str, *, dry_run: bool) -> None:
+    """Each region's _manifest.json goes up as _manifest.<name>.json, beside
+    the manifest the region's main job writes. The two never collide, and
+    finalize folds the fragment in (merge_manifest_fragments)."""
+    paths = sorted(out_dir.glob("country=*/state=*/_manifest.json"))
+    for p in paths:
+        rel = p.parent.relative_to(out_dir).as_posix()
+        cmd = ["rclone", "copyto", "--header-upload", IMMUTABLE,
+               str(p), f"{dest}{rel}/_manifest.{name}.json"]
+        if dry_run:
+            print(f"  $ {' '.join(cmd)}")
+        else:
+            subprocess.run(cmd, check=True)
+    print(f"  {len(paths)} manifests -> _manifest.{name}.json")
+
+
+def merge_manifest(base: dict, fragments: dict[str, dict]) -> dict:
+    """The region manifest with each fragment's themes folded in.
+
+    A fragment is the manifest of a job that built a theme subset from another
+    source (the boundaries theme from the parent extract, for a region whose
+    own extract cuts its relations). Its counts and stats replace the base's
+    for those themes; everything else in the base stands, including the base
+    source and timestamp, which describe the other 15 themes. What came from
+    where is kept under `fragments`. Pure, so the fixture test can run it."""
+    merged = json.loads(json.dumps(base))
+    merged.setdefault("themes", {})
+    merged.setdefault("theme_stats", {})
+    merged.setdefault("fragments", {})
+    for name, frag in sorted(fragments.items()):
+        merged["themes"].update(frag.get("themes") or {})
+        merged["theme_stats"].update(frag.get("theme_stats") or {})
+        for theme, count in (frag.get("themes") or {}).items():
+            if count <= 0:
+                merged["theme_stats"].pop(theme, None)
+        merged["fragments"][name] = {
+            "themes": sorted(frag.get("themes") or {}),
+            "source_pbf": frag.get("source_pbf"),
+            "source_timestamp": frag.get("source_timestamp"),
+            "duration_s": frag.get("duration_s"),
+        }
+    merged["total_features"] = sum(c for c in merged["themes"].values() if c > 0)
+    return merged
+
+
+def merge_manifest_fragments(remote: str, date: str, manifests: Path) -> int:
+    """Fold every _manifest.<name>.json in the mirror into its region's
+    _manifest.json, in the mirror and on the remote, so the gate, the catalog
+    and validation read one complete manifest per region. Idempotent: a
+    fragment already folded in changes nothing and nothing is re-uploaded.
+    A region with fragments but no base manifest is left for the gate to
+    report. Returns the number of manifests rewritten."""
+    regions = sorted({p.parent for p in manifests.glob("country=*/state=*/_manifest.*.json")})
+    rewritten = 0
+    for region in regions:
+        base_path = region / "_manifest.json"
+        fragments = {m.group(1): json.loads(p.read_text())
+                     for p in region.glob("_manifest.*.json")
+                     if (m := FRAGMENT_RE.match(p.name))}
+        if not base_path.is_file():
+            print(f"  {region.name}: fragments {sorted(fragments)} but no _manifest.json")
+            continue
+        base = json.loads(base_path.read_text())
+        merged = merge_manifest(base, fragments)
+        if merged == base:
+            continue
+        base_path.write_text(json.dumps(merged, indent=2))
+        rel = region.relative_to(manifests).as_posix()
+        subprocess.run(["rclone", "copyto", "--header-upload", IMMUTABLE,
+                        str(base_path), f"{remote}/{date}/{rel}/_manifest.json"], check=True)
+        rewritten += 1
+    if regions:
+        print(f"\n[gate] manifest fragments: {len(regions)} regions, "
+              f"{rewritten} manifests rewritten")
+    return rewritten
 
 
 def check_snapshot_complete(remote: str, date: str, expected: set[str],
@@ -342,6 +424,12 @@ def main() -> None:
                    help="ISO codes in the geojson that are out of coverage.")
     p.add_argument("--skip-completeness", action="store_true",
                    help="Finalize without the completeness gate (partial backfills).")
+    p.add_argument("--manifest-fragment", default=None, metavar="NAME",
+                   help="Upload stage: send each region's _manifest.json as "
+                        "_manifest.<NAME>.json instead, for a job that built a theme "
+                        "subset of regions another job also builds (the parent-extract "
+                        "boundaries job). Finalize folds fragments into the region "
+                        "manifest before the completeness gate.")
     args = p.parse_args()
 
     do_upload = args.stage in ("all", "upload")
@@ -373,19 +461,24 @@ def main() -> None:
         print()
 
         print(f"[1/5] upload -> {dest}")
+        excludes = ["--exclude", "_work/**"]
+        if args.manifest_fragment:
+            excludes += ["--exclude", "_manifest.json"]
         rclone_with_progress(
             [
-                "rclone", "copy", "--exclude", "_work/**",
+                "rclone", "copy", *excludes,
                 # Dated snapshots never change — tell browsers and Cloudflare's
                 # edge cache they can pin the bytes for a year.
-                "--header-upload",
-                "Cache-Control: public, max-age=31536000, immutable",
+                "--header-upload", IMMUTABLE,
                 f"{args.out_dir}/", dest,
             ],
             label="upload",
             total_bytes=total_bytes,
             dry_run=args.dry_run,
         )
+        if args.manifest_fragment:
+            upload_manifest_fragments(args.out_dir, dest, args.manifest_fragment,
+                                      dry_run=args.dry_run)
         if not do_finalize:
             print("\nDone (upload only).")
             return
@@ -400,6 +493,7 @@ def main() -> None:
         manifests = Path(tmp)
         if not args.dry_run:
             fetch_manifests(args.remote, date, manifests)
+            merge_manifest_fragments(args.remote, date, manifests)
         gate(args, date, dest, manifests)
         if do_finalize:
             finalize(args, date, dest, total_bytes)

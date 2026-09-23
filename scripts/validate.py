@@ -137,7 +137,13 @@ def footer_key_duplicates(con, state_dir: Path) -> list[str]:
     return [f"{iso}/{Path(f).stem}: footer key {k!r} appears {n} times" for f, k, n in rows]
 
 
-def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> Suite:
+def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None,
+                themes: set[str] | None = None) -> Suite:
+    """`themes` narrows what a complete manifest is, for a build job that runs
+    a theme subset (the parent-extract boundaries job, and the per-region jobs
+    of a country whose boundaries it builds). The published snapshot is still
+    held to all of them by publish.py's gate."""
+    expected_themes = themes or set(EXPECTED_THEMES)
     s = Suite(f"Local checks — {out_dir}/")
     s.header()
 
@@ -185,7 +191,7 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
         state_dir = mpath.parent
         m = json.loads(mpath.read_text())
         themes_present = set(m.get("themes", {}))
-        if themes_present != set(EXPECTED_THEMES):
+        if themes_present != expected_themes:
             incomplete_themes.append((iso, len(themes_present)))
 
         # File existence + row count consistency for non-zero themes
@@ -238,11 +244,12 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None) -> S
     con.close()
 
     if incomplete_themes:
-        snippets = ", ".join(f"{iso} ({n}/16)" for iso, n in incomplete_themes[:5])
+        snippets = ", ".join(f"{iso} ({n}/{len(expected_themes)})"
+                             for iso, n in incomplete_themes[:5])
         more = "" if len(incomplete_themes) <= 5 else f" (+{len(incomplete_themes)-5} more)"
         s.fail(f"{len(incomplete_themes)} states missing themes: {snippets}{more}")
     else:
-        s.ok("every state manifest lists all 16 themes")
+        s.ok(f"every state manifest lists all {len(expected_themes)} expected themes")
 
     if failed_themes:
         s.fail(f"{len(failed_themes)} themes failed in the pipeline: "
@@ -464,6 +471,9 @@ def main() -> None:
                    help="state count to sample for remote HEAD checks (default 8)")
     p.add_argument("--states", nargs="*", default=None,
                    help="Local checks: only these ISO codes (per-region CI jobs).")
+    p.add_argument("--themes", nargs="*", default=None,
+                   help="Themes this build ran (local checks expect exactly these). "
+                        "Default: all in themes.py.")
     args = p.parse_args()
 
     suites: list[Suite] = []
@@ -474,7 +484,8 @@ def main() -> None:
             print(f"skip local checks: {args.admin_geojson} not found")
         else:
             suites.append(check_local(args.out_dir, args.admin_geojson,
-                                      only=set(args.states) if args.states else None))
+                                      only=set(args.states) if args.states else None,
+                                      themes=set(args.themes) if args.themes else None))
 
     if not args.no_remote:
         suites.append(check_remote(args.remote_url, args.sample))
