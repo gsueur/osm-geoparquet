@@ -286,8 +286,11 @@ function landingText() {
     `  osm/            OpenStreetMap, North America, nightly. Partitioned; glob it:\n` +
     `    SELECT count(*) FROM read_parquet(\n` +
     `      's3://${BUCKET_NAME}/${DATASET_PREFIX}latest/country=*/state=*/aeroways.parquet');\n` +
-    `  gaul/           FAO GAUL 2024, global admin units. One file per level:\n` +
-    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/gaul/2024/L2.parquet');\n` +
+    `  gaul/           FAO GAUL 2024, global admin units. Per level, one whole-world\n` +
+    `                  file (L2.parquet, 490 MB) and one file per country to glob:\n` +
+    `    SELECT country, count(*) FROM read_parquet(\n` +
+    `      's3://${BUCKET_NAME}/gaul/2024/country=*/L2.parquet', hive_partitioning = true)\n` +
+    `    GROUP BY 1;\n` +
     `  clc/            Corine Land Cover 2018, Europe:\n` +
     `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/clc/2018/clc_2018.parquet');\n` +
     `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
