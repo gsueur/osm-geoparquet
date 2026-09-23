@@ -369,7 +369,10 @@ async function handleObject(key, request, env) {
   headers.set("Accept-Ranges", "bytes");
 
   if (parsedRange && object.range) {
-    const { offset, length } = computeRangeBounds(object.range, object.size);
+    // Bounds come from the request we parsed, not from `object.range`: R2
+    // hands that back in its own shape, and reading `.offset`/`.length`
+    // off it produced `Content-Range: bytes NaN-NaN/<size>`.
+    const { offset, length } = computeRangeBounds(parsedRange, object.size);
     const end = offset + length - 1;
     headers.set("Content-Range", `bytes ${offset}-${end}/${object.size}`);
     headers.set("Content-Length", length.toString());
@@ -404,7 +407,8 @@ function computeRangeBounds(range, size) {
     return { offset: size - length, length };
   }
   const offset = range.offset ?? 0;
-  const length = range.length ?? size - offset;
+  // A request past the end is clamped to what R2 actually returned.
+  const length = Math.min(range.length ?? size - offset, size - offset);
   return { offset, length };
 }
 
