@@ -51,7 +51,14 @@ MAX_WORKERS = 3
 # (Geofabrik id on the right), with the boundary relations filtered out of
 # it first so the pipeline only ever sees a few hundred MB. The per-region
 # jobs of that country skip the theme, so no two jobs write the same file.
-PARENT_BOUNDARIES = {"US": "us"}
+#
+# `except`: regions the parent extract does not contain. Geofabrik's US file
+# stops at the fifty states and DC; Puerto Rico and the US Virgin Islands
+# came out empty from it (debug run 35911394050), so they keep building
+# their boundaries from their own extracts, which do hold their relations.
+PARENT_BOUNDARIES = {
+    "US": {"extract": "us", "except": ["US-PR", "US-VI"]},
+}
 BOUNDARY_THEME = "boundaries"
 BOUNDARY_FILTER = "r/boundary=administrative"
 # The clip completes boundary relations too on that job: a state relation
@@ -149,12 +156,16 @@ def main() -> None:
 
     include = []
     # The parent-extract boundary jobs first: the largest downloads.
-    for cc, parent in sorted(PARENT_BOUNDARIES.items()):
-        states = [i for i in isos if i.startswith(f"{cc}-")]
+    parented_states: set[str] = set()
+    for cc, spec in sorted(PARENT_BOUNDARIES.items()):
+        parent = spec["extract"]
+        states = [i for i in isos
+                  if i.startswith(f"{cc}-") and i not in set(spec.get("except", []))]
         if not states:
             continue
         if parent not in by_id:
             sys.exit(f"parent extract {parent!r} for {cc} not in the Geofabrik index")
+        parented_states |= set(states)
         include.append({
             "id": f"{cc.lower()}-{BOUNDARY_THEME}",
             "url": by_id[parent]["urls"]["pbf"],
@@ -167,8 +178,9 @@ def main() -> None:
         })
     # Then the biggest groups, so the long-running multi-region jobs start early.
     for g in sorted(groups.values(), key=lambda g: (-len(g["states"]), g["id"])):
-        countries = {i.split("-")[0] for i in g["states"]}
-        parented = countries <= set(PARENT_BOUNDARIES)
+        # A job skips the theme only if the parent job builds it for every one
+        # of its regions; a mixed group would need per-region themes.
+        parented = set(g["states"]) <= parented_states
         include.append({
             "id": g["id"],
             "url": g["url"],
