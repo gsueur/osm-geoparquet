@@ -308,7 +308,11 @@ def filter_predicate(expr: str) -> str:
             tag = f"map_contains(tags, '{key}')"
         else:
             tag = f"tags['{key}'] IN ({', '.join(repr(v) for v in values.split(','))})"
-        clauses.append(f"(osm_type IN ({type_list}) AND {tag})")
+        # coalesce: `tags['k'] IN (...)` is NULL when the key is absent, and
+        # osm_type or tags can be NULL too. WHERE treats NULL as false, but
+        # NOT (predicate) would silently skip those rows; the stray counts
+        # reported on PR #4 missed 127,941 water rows that way.
+        clauses.append(f"coalesce(osm_type IN ({type_list}) AND {tag}, false)")
     return " OR ".join(clauses)
 
 

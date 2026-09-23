@@ -1,0 +1,160 @@
+# Build and publish FAO GAUL 2024 to parquetry:parquetry/gaul/2024/.
+#
+# GAUL is a static release, not a nightly feed, so this runs on demand rather
+# than on a schedule. It runs here rather than on a laptop because this is
+# where the R2 credentials work, and because the source is 873 MB of zipped
+# shapefile that a runner fetches faster than a home connection.
+#
+# The converter verifies its own output before anything is uploaded: one
+# `geo` footer key, a well-formed covering, a bbox that really bounds every
+# geometry, and a declared extent that matches the data. A failure there
+# fails the job with nothing published.
+#
+#   build    convert and verify, upload nothing. Use it to check a change.
+#   publish  the same, then upload to the bucket.
+#
+# Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
+
+name: dataset-gaul
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build converts and renders the catalog, verifying both; publish also uploads them"
+        type: choice
+        options: [build, publish]
+        default: build
+      accessed:
+        description: "Access date for the required FAO citation (YYYY-MM-DD, default: today UTC)"
+        required: false
+        default: ""
+
+concurrency:
+  group: dataset-gaul
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/gaul
+  VERSION: "2024"
+  PUBLIC: https://parquetry.geomermaids.com/gaul
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  gaul:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        if: inputs.stage == 'publish'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch the FAO archives
+        run: |
+          mkdir -p work
+          for lvl in L1 L2; do
+            curl -fsSL --retry 3 -o "work/GAUL_2024_$lvl.zip" \
+              "https://storage.googleapis.com/fao-maps-catalog-data/boundaries/GAUL_2024_$lvl.zip"
+            unzip -oq "work/GAUL_2024_$lvl.zip" -d work
+            rm "work/GAUL_2024_$lvl.zip"
+          done
+          ls -la work/*.shp
+          df -h . | tail -1
+
+      # GAUL2024TermsOfUse.pdf ships inside both archives and is the document
+      # the attribution is quoted from. Publishing it beside the data means a
+      # reader can check our summary against the source.
+      - name: Convert and verify
+        run: |
+          uv run --project scripts python scripts/datasets/gaul.py \
+            --work-dir work --out-dir "out/$VERSION" \
+            ${{ inputs.accessed && format('--accessed {0}', inputs.accessed) || '' }}
+          cp work/GAUL2024TermsOfUse.pdf "out/$VERSION/"
+          ls -la "out/$VERSION"
+          echo "per-country files: $(find "out/$VERSION" -path '*country=*' -name '*.parquet' | wc -l)"
+
+      # The catalog needs a thumbnail per collection. They are committed under
+      # catalog/thumbnails/gaul/ and only re-rendered here when missing (a new
+      # layer, or a fresh checkout after they were removed), then attached as
+      # an artifact so they can be committed.
+      - name: Thumbnails, when missing
+        run: |
+          missing=$(for l in L0_derived L1 L2; do
+            [ -f "catalog/thumbnails/gaul/$l.png" ] || echo "$l"; done)
+          if [ -n "$missing" ]; then
+            uv run --project scripts --with matplotlib \
+              python scripts/datasets/gaul_catalog.py thumbnails \
+              --out-dir "out/$VERSION" --layers $missing
+          fi
+          ls -la catalog/thumbnails/gaul/
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: gaul-thumbnails
+          path: catalog/thumbnails/gaul/
+          if-no-files-found: error
+
+      # rashid over the rendered tree, before anything is uploaded. The data
+      # assets are remote hrefs, so this is the metadata pass plus the bytes
+      # of the thumbnails; the parquet files were verified by gaul.py above.
+      - name: Portolan catalog, rendered and checked
+        run: |
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            build --out-dir "out/$VERSION" --dest build/catalog
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            check build/catalog
+
+      - name: Upload
+        if: inputs.stage == 'publish'
+        run: |
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          # A static release, so the data is immutable; the manifest and the
+          # attribution are the two a correction would touch, and they get the
+          # short max-age the other datasets use for their metadata.
+          rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
+            --include "*.parquet" --include "*.pdf" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
+            --transfers 4 --stats 30s --stats-one-line
+          rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
+            --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: Portolan catalog, published
+        if: inputs.stage == 'publish'
+        run: |
+          uv run --project scripts python scripts/datasets/gaul_catalog.py \
+            publish --out-dir "out/$VERSION" --remote "$REMOTE"
+
+      - name: Check what is live
+        if: inputs.stage == 'publish'
+        run: |
+          set +e
+          fail=0
+          for f in $VERSION/L0_derived.parquet $VERSION/L1.parquet $VERSION/L2.parquet \
+                   $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
+                   $VERSION/GAUL2024TermsOfUse.pdf \
+                   $VERSION/country=FRA/L1.parquet $VERSION/country=xAB/L2.parquet \
+                   catalog/catalog.json catalog/l2/collection.json catalog/l2/thumbnail.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          exit $fail

@@ -1,11 +1,11 @@
 # Portolan conformance
 
 Two catalogs are published: the live one at
-`https://parquetry.geomermaids.com/catalog/catalog.json`, whose globs read
+`https://parquetry.geomermaids.com/osm/catalog/catalog.json`, whose globs read
 `latest/`, and a pinned copy under `catalog/<YYYY-MM-DD>/` for every snapshot
 retention keeps. Both are rendered by the same generator and validated the
 same way, and the gates below cover both. They target
-[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and is
+[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and are
 validated with rashid 0.1.8, pinned in `scripts/pyproject.toml`. Where rashid
 and the spec disagree, the spec decides; file the disagreement against rashid
 with the `PORTO` id and record it here.
@@ -22,7 +22,7 @@ the published JSON and Markdown are never edited in place.
 | `catalog.py check-data` | `nightly.yml`, every build job, before upload | rashid data pass (`PTL-DAT-*`) over that job's partitions: 150,000-row cap, spatial statistics, GeoParquet version, one schema per theme. |
 | `catalog.py` via `publish.py` finalize | `nightly.yml`, finalize, before upload | Same metadata pass on the real catalog. A failure stops the catalog upload and fails the run. |
 
-The published glob is `s3://parquetry/latest/...` or `s3://parquetry/<date>/...`,
+The published glob is `s3://parquetry/osm/latest/...` or `s3://parquetry/osm/<date>/...`,
 which rashid cannot expand from a local tree, so the data rules would never
 reach the partitions in a metadata run. `check-data` renders a throwaway
 catalog whose globs point at the job's local files instead.
@@ -41,8 +41,18 @@ expected on every run:
 | Rule | Severity | Why |
 |---|---|---|
 | `PTL-PRO-002` | info | No `canonical` link. OpenStreetMap publishes no STAC catalog to point at; the `via` link names the source. |
-| `PTL-DAT-007` | warning | Per-row-group spatial statistics come from native Parquet `GEOMETRY` statistics (allowed for GeoParquet 2.x), not a declared `bbox` covering. The `bbox` column exists with min/max statistics, but declaring it as a covering needs a rewrite that drops DuckDB's bloom filters (see `write_theme_parquet` in `scripts/pipeline.py`). |
-| `PTL-DAT-006` | info | rashid evaluates spatial ordering from the covering column, so with none declared it cannot score it. Rows are Hilbert-ordered on each file's own extent. |
+| `PTL-AST-003` | warning | The live catalog's data assets carry `file:size` but no `file:checksum`. Their hrefs point at `latest/`, which the next build replaces, and a checksum that does not match the bytes is a conformance failure, so the spec says to omit it. Pinned catalogs address an immutable snapshot and do carry checksums; they validate with no warnings. |
+
+Until 2026-09-21 this list also held `PTL-DAT-006` and `PTL-DAT-007`: the
+`bbox` column was not declared as a GeoParquet `covering`, so rashid could not
+evaluate spatial ordering and recommended a covering. `pipeline.py` now writes
+the `geo` metadata itself, covering included, and both findings are gone; the
+spatial-ordering check runs and passes.
+
+Each collection lists one data asset per region (`data-<iso>`, media type
+`application/vnd.apache.parquet`) alongside the partition glob, so a STAC
+client can reach the files without expanding an s3 pattern. Each asset carries
+an `alternate` s3 href per PORTO-CORE-024.
 
 No PMTiles are published, so the collections have no visualization
 derivative and no style assets (`PTL-VIZ-002` does not apply). Each carries a
@@ -64,5 +74,35 @@ Run on 2026-09-15 with rashid 0.1.8:
 
 rashid's live probe (`--live`) against `parquetry.geomermaids.com` found range
 requests conformant and one CORS gap: `Access-Control-Expose-Headers` omitted
-`Content-Type` (`PTL-LIV-004`). Fixed in `files/` and `api/`; takes effect
-once both Workers are redeployed.
+`Content-Type` (`PTL-LIV-004`). Fixed in `files/` and `api/` and deployed on
+2026-09-16. On 2026-09-17, rashid 0.1.8 with `--schema --live` over a mirror of
+the published live catalog reported no errors and no warnings.
+
+## GAUL 2024 catalog
+
+A second, smaller catalog describes the FAO GAUL 2024 release at
+`https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
+`scripts/datasets/gaul_catalog.py` with the same constants, rashid wrapper
+and uploader as the OSM one. Three collections (`l0_derived`, `l1`, `l2`),
+each describing two layouts of the same rows: the whole-world file as the
+`data` asset, and the per-country files under `country=<iso3>/` through the
+partition extension (`partition:glob`, one key) and one `data-<iso3>` asset
+each. The release is static and the files immutable, so every asset carries
+`file:size` and `file:checksum` from the converter's manifest.
+
+`.github/workflows/dataset-gaul.yml` renders and checks the catalog on every
+run (stage `build`) and uploads it after the data (stage `publish`), so the
+check is the gate. It is the metadata pass plus the thumbnail bytes; the
+parquet files themselves are verified by `gaul.py` (footer, covering,
+declared extent, bbox bounds) before upload.
+
+Findings accepted as they stand, on top of `PTL-PRO-002` above (FAO publishes
+no STAC catalog to link as canonical):
+
+| Rule | Severity | Why |
+|---|---|---|
+| `PTL-VIZ-004` | info | Each data asset is 286 to 489 MB with no PMTiles derivative. The layers are a join target for FAO statistics rather than a map layer; a visual derivative is not planned. |
+
+Rendered from the published files on 2026-09-23 with rashid 0.1.8: 0
+errors, 3 warnings (`PTL-COL-003`, fixed by lower-casing the ids) and the
+info findings above.

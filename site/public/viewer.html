@@ -179,7 +179,7 @@
 
 <div class="toolbar">
   <h1><a href="/">geomermaids</a> &middot; viewer</h1>
-  <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/latest/...">
+  <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/osm/latest/...">
   <button id="load" disabled>Load</button>
   <a id="download" class="btn-link" download hidden>Download</a>
   <span id="counter" class="counter" hidden></span>
@@ -217,7 +217,7 @@
     SolidPolygonLayer, PathLayer, FlyToInterpolator,
   } = window.deck;
 
-  const DEFAULT_URL = 'https://parquetry.geomermaids.com/latest/country=US/state=US-DC/buildings.parquet';
+  const DEFAULT_URL = 'https://parquetry.geomermaids.com/osm/latest/country=US/state=US-DC/buildings.parquet';
   const MAX_FEATURES = 25000;
   const VIEWPORT_DEBOUNCE_MS = 300;
   const ACCENT = [210, 85, 58];

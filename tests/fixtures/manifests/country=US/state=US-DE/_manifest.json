@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "country": "US",
   "state_iso": "US-DE",
   "state_name": "Delaware",
@@ -106,7 +106,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 8845958,
+      "sha256": "77192c540675e68b038d99774fc33f843185258d1d3cb2c15fc7b6c728cb9df4"
     },
     "roads": {
       "bbox": [
@@ -200,7 +202,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 11157643,
+      "sha256": "ef607255ad6e0fba9580ddce9a545dd494aa7b7a4aac16dc40c5226b76695683"
     },
     "railways": {
       "bbox": [
@@ -274,7 +278,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 271918,
+      "sha256": "1002ded84fe187a6befe18af5a954902dd225058277da60d97d579c93fc071e9"
     },
     "waterways": {
       "bbox": [
@@ -336,7 +342,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 1154346,
+      "sha256": "dcacf339685548243741cdbbea42388698f47291c75934508847222880fdbe3e"
     },
     "water": {
       "bbox": [
@@ -398,7 +406,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 1775834,
+      "sha256": "c0aa9e79cf93299d6f362bfb891c48c1d5d71804256d87fafa8d96a6b54936f3"
     },
     "landuse": {
       "bbox": [
@@ -452,7 +462,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 2917572,
+      "sha256": "43cc91e770449211422493220b4451d189e55c0bb08ec8154b1f2fe62ad24d53"
     },
     "natural_areas": {
       "bbox": [
@@ -506,7 +518,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 3377644,
+      "sha256": "c691826991143b30b39b41501d449db5dcd8fa78166c39a83a55c635d5f4a5be"
     },
     "natural_features": {
       "bbox": [
@@ -564,7 +578,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 99160,
+      "sha256": "1eee630381c45d22069dd7b68e47e459c000601a261af052bcc2e4a0437f4944"
     },
     "places": {
       "bbox": [
@@ -630,7 +646,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 74338,
+      "sha256": "fc97780dc0001c6fd0e9762ced545400eb49e30786a39c49211e9a8b10a764cf"
     },
     "boundaries": {
       "bbox": [
@@ -696,7 +714,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 250947,
+      "sha256": "d9e764afbd50f5c06bbc0cbf0baaadbe4365bd5ab43286d4251ec356cebba3af"
     },
     "pois": {
       "bbox": [
@@ -790,7 +810,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 358650,
+      "sha256": "3e976063603d03a11987d7b9ef0a98e592a99bec6fe79fb6947c3800a70fbd4d"
     },
     "amenities_polygons": {
       "bbox": [
@@ -884,7 +906,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 2615333,
+      "sha256": "bfd95b5abc94bbdeab313f4d13d9b51a4ab7659e8bb13e2cce93136861a61409"
     },
     "power": {
       "bbox": [
@@ -950,7 +974,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 529782,
+      "sha256": "589a2ea67479d61d9a585f6345ed3b447d8d2505842bc37c4d2ea7c05d474a3e"
     },
     "aeroways": {
       "bbox": [
@@ -1016,7 +1042,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 87868,
+      "sha256": "86ca293edc18350eac7c5aa5f962cef34ad11eb9fab03f6fccfdc72a83dd5b28"
     },
     "barriers": {
       "bbox": [
@@ -1078,7 +1106,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 478177,
+      "sha256": "834e9145bf5a0a102a6ebf9c6b0c61af133401c79234b6fe54a172f2d63fe8e2"
     },
     "public_transport": {
       "bbox": [
@@ -1156,7 +1186,9 @@
           "geometry",
           "GEOMETRY"
         ]
-      ]
+      ],
+      "size_bytes": 10821,
+      "sha256": "60fa226acfab70fa54c07396dd0e138ff86433e7e34ba9e9d57bd35252c8fbc0"
     }
   }
 }

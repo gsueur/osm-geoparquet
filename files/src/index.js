@@ -8,6 +8,37 @@
 
 const BUCKET_NAME = "parquetry";
 
+// OSM used to sit at the bucket root and now lives under `osm/`, beside the
+// other datasets. Every URL published before the move still has to resolve:
+// the site, the README, the Portolan catalog, the GeoParquet distribution
+// guide and any query somebody saved all point at the old paths, and there
+// is no way to know who copied one. So the old layout is served forever.
+//
+// Duplicated in api/src/index.js rather than shared. Each Worker builds with
+// its own directory as the root, so neither can import from above it.
+const DATASET_PREFIX = "osm/";
+const LEGACY_DATED = /^\d{4}-\d{2}-\d{2}\//;
+// `meta/` is deliberately absent: it stays at the bucket root as a shared
+// place for cross-dataset files, so it never moved and must never be
+// rewritten. Rewriting it would send anything added there into osm/.
+const LEGACY_DIRS = ["latest/", "catalog/"];
+const LEGACY_FILES = ["snapshots.json", "ATTRIBUTION.txt"];
+
+// True for a key written under the old layout. A bare `latest` with no
+// slash is not one: it would be ambiguous with a future object of that
+// name, and every client that globs sends the trailing slash.
+function isLegacyKey(key) {
+  return (
+    LEGACY_FILES.includes(key) ||
+    LEGACY_DIRS.some((d) => key.startsWith(d)) ||
+    LEGACY_DATED.test(key)
+  );
+}
+
+function currentKey(key) {
+  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -34,10 +65,20 @@ export default {
     const isDirRequest = path === "" || path.endsWith("/");
 
     if (isDirRequest) {
+      // A browsable directory moves in the open: redirect, so the address
+      // bar, the breadcrumbs and the links in the listing all agree on where
+      // the file actually is. Objects are rewritten silently instead (below),
+      // because a Range request should not have to survive a redirect.
+      if (isLegacyKey(path)) {
+        return new Response(null, {
+          status: 301,
+          headers: { Location: "/" + currentKey(path), ...corsHeaders() },
+        });
+      }
       if (wantsHtml) return renderListing(path, env);
       return new Response("Not Found", { status: 404, headers: corsHeaders() });
     }
-    return handleObject(path, request, env);
+    return handleObject(currentKey(path), request, env);
   },
 };
 
@@ -106,8 +147,49 @@ async function renderListing(prefix, env) {
   });
 }
 
-const SITE_TITLE = "North America daily OSM GeoParquet v2.0 files";
-const SITE_SUBTITLE = "Hilbert-sorted, Hive-partitioned by state and theme. Updated nightly.";
+const SITE_TITLE = "Great datasets, in GeoParquet";
+const SITE_SUBTITLE = "Open geospatial data, repacked cloud-native. Query straight from a URL.";
+
+// One entry per dataset prefix. The listing renders whichever one the path
+// falls under, so a page under clc/ describes Corine Land Cover and links
+// its licence rather than OpenStreetMap's, which is what the single
+// OSM-shaped header and footer used to do at every level of the bucket.
+//
+// `attribution` is a full path because the datasets keep theirs at
+// different depths: OSM at its prefix root, the others inside the version
+// directory. A new vintage moves that file, so it is spelled out here.
+const DATASETS = {
+  "osm/": {
+    subtitle: "OpenStreetMap, North America. Hilbert-sorted, Hive-partitioned " +
+      "by state and theme. Rebuilt nightly.",
+    attribution: "osm/ATTRIBUTION.txt",
+    snapshots: "osm/snapshots.json",
+  },
+  "clc/": {
+    subtitle: "Corine Land Cover 2018, Europe.",
+    attribution: "clc/2018/ATTRIBUTION.txt",
+    snapshots: "clc/snapshots.json",
+  },
+  "geoboundaries/": {
+    subtitle: "geoBoundaries CGAZ, global administrative boundaries, ADM0 to ADM2.",
+    attribution: "geoboundaries/6.0.0/ATTRIBUTION.txt",
+    snapshots: "geoboundaries/snapshots.json",
+  },
+  "gaul/": {
+    subtitle: "FAO GAUL 2024, global administrative units, L1 and L2 as published " +
+      "and a country layer (L0) dissolved here.",
+    attribution: "gaul/2024/ATTRIBUTION.txt",
+  },
+  "meta/": {
+    subtitle: "Shared inputs the builds read. Not a dataset of its own.",
+  },
+};
+
+// The dataset a listed path belongs to, or null at the bucket root.
+function datasetFor(prefix) {
+  const key = Object.keys(DATASETS).find((d) => prefix.startsWith(d));
+  return key ? DATASETS[key] : null;
+}
 // Public host of the deck.gl-based parquet viewer. Lives on the website
 // (Cloudflare Pages), not this Worker — kept as a constant so the listing
 // can link "view" next to each .parquet entry.
@@ -133,6 +215,7 @@ function folderCompare(a, b) {
 }
 
 function renderListingHtml(prefix, folders, files, truncated) {
+  const dataset = datasetFor(prefix);
   const segments = prefix.split("/").filter(Boolean);
   const crumbs = [`<a href="/">ROOT</a>`];
   for (let i = 0; i < segments.length; i++) {
@@ -186,7 +269,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `</head><body>` +
     `<header>` +
     `<h1><a href="/">${SITE_TITLE}</a></h1>` +
-    `<p class="subtitle">${SITE_SUBTITLE}</p>` +
+    `<p class="subtitle">${escapeHtml(dataset?.subtitle ?? SITE_SUBTITLE)}</p>` +
     `<nav class="crumbs">${crumbs.join(" / ")}</nav>` +
     `</header>` +
     `<table>` +
@@ -196,10 +279,21 @@ function renderListingHtml(prefix, folders, files, truncated) {
     truncNote +
     `<footer>` +
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
-    `<a href="/ATTRIBUTION.txt">attribution</a> &middot; ` +
-    `<a href="/snapshots.json">snapshots.json</a> &middot; ` +
+    (dataset?.attribution
+      ? `<a href="/${escapeHtml(dataset.attribution)}">attribution</a> &middot; `
+      : "") +
+    (dataset?.snapshots
+      ? `<a href="/${escapeHtml(dataset.snapshots)}">snapshots.json</a> &middot; `
+      : "") +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
+    // The same folder on the S3 endpoint, so a page deep inside any dataset
+    // shows its own s3:// path rather than sending the reader to the
+    // endpoint's landing text for a generic example.
+    (prefix
+      ? `<br>this folder over S3: <code>s3://parquetry/${escapeHtml(prefix)}</code>` +
+        ` on <code>s3.geomermaids.com</code>, path style, empty credentials`
+      : "") +
     `</footer>` +
     `<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "662d86a95662419abf6b79622cf413dc"}'></script><!-- End Cloudflare Web Analytics -->` +
     `</body></html>`
@@ -275,7 +369,10 @@ async function handleObject(key, request, env) {
   headers.set("Accept-Ranges", "bytes");
 
   if (parsedRange && object.range) {
-    const { offset, length } = computeRangeBounds(object.range, object.size);
+    // Bounds come from the request we parsed, not from `object.range`: R2
+    // hands that back in its own shape, and reading `.offset`/`.length`
+    // off it produced `Content-Range: bytes NaN-NaN/<size>`.
+    const { offset, length } = computeRangeBounds(parsedRange, object.size);
     const end = offset + length - 1;
     headers.set("Content-Range", `bytes ${offset}-${end}/${object.size}`);
     headers.set("Content-Length", length.toString());
@@ -310,7 +407,8 @@ function computeRangeBounds(range, size) {
     return { offset: size - length, length };
   }
   const offset = range.offset ?? 0;
-  const length = range.length ?? size - offset;
+  // A request past the end is clamped to what R2 actually returned.
+  const length = Math.min(range.length ?? size - offset, size - offset);
   return { offset, length };
 }
 

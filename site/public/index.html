@@ -6,7 +6,7 @@
 <title>geomermaids · GeoParquet</title>
 <!-- build: force redeploy -->
 
-<meta name="description" content="Free cloud-native snapshots of OpenStreetMap data for North America. Query over 20 million map features directly from your laptop — no downloads, no setup, no account.">
+<meta name="description" content="Free cloud-native snapshots of OpenStreetMap data for North America, alongside Corine Land Cover and geoBoundaries. Query them directly from your laptop — no downloads, no setup, no account.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -197,7 +197,7 @@ footer a { color: var(--muted); }
 </picture>
 <h1><span class="brand">geomermaids</span> · GeoParquet</h1>
 <p class="sub">
-<a href="https://parquetry.geomermaids.com" target=_blank>Free daily snapshots</a> of OpenStreetMap data for North America, packaged so you can <strong>query them straight from a URL</strong> — no downloads, no account, no setup beyond DuckDB.
+<a href="https://parquetry.geomermaids.com/osm/" target=_blank>Free daily snapshots</a> of OpenStreetMap data for North America, packaged so you can <strong>query them straight from a URL</strong> — no downloads, no account, no setup beyond DuckDB.
 </p>
 
 <div class="stats">
@@ -208,10 +208,10 @@ footer a { color: var(--muted); }
 
 <h2>What is this?</h2>
 
-<p>This site publishes OpenStreetMap data in <strong>GeoParquet 2.0</strong> — a modern, open, columnar file format — split by country, by state/province/region, and by <em>theme</em> (buildings, roads, water, etc.). Every file is small enough to use on a laptop, and the format is <strong>cloud-native</strong>: your query engine can read just the columns and rows it needs over HTTP, without downloading the whole file.</p>
+<p>This page covers our <strong>OpenStreetMap</strong> snapshots, the largest of the datasets we host. They are published in <strong>GeoParquet 2.0</strong> — a modern, open, columnar file format — split by country, by state/province/region, and by <em>theme</em> (buildings, roads, water, etc.). Every file is small enough to use on a laptop, and the format is <strong>cloud-native</strong>: your query engine can read just the columns and rows it needs over HTTP, without downloading the whole file.</p>
 
 <h2>Coverage</h2>
-<p>Currently spans three countries — <strong>98 admin regions × 16 themes = 1,568 files</strong> per daily snapshot, roughly 15 GB altogether:</p>
+<p>Currently spans three countries — <strong>98 admin regions × 16 themes, about 1,565 files</strong> per daily snapshot, roughly 27 GB altogether:</p>
 <ul>
 <li><strong>United States</strong> — 50 states, the District of Columbia, Puerto Rico, and US Virgin Islands <em>(53 regions)</em></li>
 <li><strong>Canada</strong> — 10 provinces and 3 territories <em>(13 regions)</em></li>
@@ -246,30 +246,74 @@ footer a { color: var(--muted); }
 <p>Every file also ships the full OSM <code>tags</code> as a <code>MAP&lt;VARCHAR, VARCHAR&gt;</code> — anything not promoted to a typed column is still there, just a <code>tags['key']</code> lookup away.</p>
 
 <h2>Browse it like a directory</h2>
-<p>Open <a href="https://parquetry.geomermaids.com/">our File Explorer</a> in a browser to walk the bucket as a tree — every snapshot, country, and state listed with sizes and modified times. Click any <code>.parquet</code> to download it, or hit the adjacent <em>view</em> link to preview it on a map. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
+<p>Open <a href="https://parquetry.geomermaids.com/">our File Explorer</a> in a browser to walk the bucket as a tree. The root lists every dataset; <a href="https://parquetry.geomermaids.com/osm/">under <code>osm/</code></a> you get every snapshot, country, and state with sizes and modified times. Click any <code>.parquet</code> to download it, or hit the adjacent <em>view</em> link to preview it on a map. CLI tools (DuckDB httpfs, <code>curl</code>, <code>rclone</code>) get the raw bytes exactly as before; the HTML listing only renders for clients that send <code>Accept: text/html</code>.</p>
 
 <h2>Preview a file on a map</h2>
 <p>Don't want to write SQL just to see what a file contains? The <a href="/viewer.html">map viewer</a> opens any GeoParquet from the bucket directly in your browser — DuckDB-WASM streams just the row groups your viewport overlaps, deck.gl renders them on a basemap. Paste a URL or click <em>view</em> from the File Explorer; pan and zoom to load other areas. Useful for spot-checking shape, density, and admin-region coverage before committing to a download.</p>
 
 
 
+<h2 id="other-datasets">Other datasets on the same bucket</h2>
+<p>OpenStreetMap is the one that rebuilds nightly, but it is not the only thing here. Each dataset sits under its own prefix, carries its own licence, and is read exactly the same way — same endpoint, same anonymous access, same <code>read_parquet</code>. Every file carries a <code>bbox</code> column, so spatial filters prune row groups on all of them.</p>
+<table>
+<thead><tr><th>dataset</th><th>what it is</th><th>size</th></tr></thead>
+<tbody>
+<tr>
+  <td><a href="https://parquetry.geomermaids.com/osm/"><code>osm/</code></a></td>
+  <td>OpenStreetMap, North America, by region and theme. Rebuilt nightly, dated snapshots kept.</td>
+  <td>~1,565 files, 27 GB per snapshot</td>
+</tr>
+<tr>
+  <td><a href="https://parquetry.geomermaids.com/clc/"><code>clc/</code></a></td>
+  <td>Corine Land Cover 2018, Europe. One file, 2.4 million land-cover polygons with their CLC class and area.</td>
+  <td>3.8 GB</td>
+</tr>
+<tr>
+  <td><a href="https://parquetry.geomermaids.com/geoboundaries/"><code>geoboundaries/</code></a></td>
+  <td>geoBoundaries CGAZ 6.0.0, global administrative boundaries: 218 countries, 3,224 first-level and 49,349 second-level units.</td>
+  <td>260 MB across three files</td>
+</tr>
+</tbody>
+</table>
+
+<p>The <code>bbox</code> column is what makes a 3.8 GB file usable over HTTP. Filtering on it lets the engine skip row groups before fetching them — this breaks down land cover around Paris in a few seconds, reading a small fraction of the file:</p>
+
+<div class="code-block"><pre><code>-- Corine is EPSG:3035 (ETRS89-LAEA), so the bbox is in metres, not degrees
+SELECT Code_18, count(*) AS polygons, round(sum(Area_Ha)) AS hectares
+FROM read_parquet('https://parquetry.geomermaids.com/clc/2018/clc_2018.parquet')
+WHERE bbox.xmin BETWEEN 3735650 AND 3785650
+  AND bbox.ymin BETWEEN 2864878 AND 2914878
+GROUP BY 1 ORDER BY hectares DESC LIMIT 5;</code></pre><button class="copy-btn" type="button">Copy</button></div>
+
+<p class="callout">Watch the coordinate reference system: Corine is in <strong>EPSG:3035</strong> while geoBoundaries and our OpenStreetMap files are in <strong>EPSG:4326</strong>. Reproject before you join them. And scan the whole Corine geometry column only from a machine with real bandwidth — over a home connection, a full pass on 3.8 GB of polygons will time out.</p>
+
+<p>Licences differ per dataset: each prefix carries its own <code>ATTRIBUTION.txt</code>, linked from the footer of its <a href="https://parquetry.geomermaids.com/">File Explorer</a> pages. The recipes below are OpenStreetMap-specific.</p>
+
+<h2 id="catalog">Described by a STAC catalog</h2>
+<p>The OpenStreetMap snapshots ship a <a href="https://github.com/portolan-sdi/portolan-spec">Portolan</a> (STAC) catalog: one partitioned collection per theme, with column documentation, spatial and temporal extents, row counts, and a <code>partition:glob</code> that reads every region at once through the anonymous S3 endpoint. It is metadata only and copies no data.</p>
+<ul>
+<li><a href="https://parquetry.geomermaids.com/osm/catalog/catalog.json"><code>osm/catalog/catalog.json</code></a> is the live catalog. It reads <code>latest/</code>, so it always describes current data, and it is rebuilt nightly.</li>
+<li><code>osm/catalog/&lt;YYYY-MM-DD&gt;/catalog.json</code> pins one snapshot. Published only for the snapshots retention keeps, never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.</li>
+</ul>
+<p>It is registered in the <a href="https://www.portolan-sdi.org">Portolan registry</a>, which crawls and revalidates it, so you can find it alongside other cloud-native catalogs rather than only from here. Open it in the <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/osm/catalog/catalog.json">STAC browser</a> to walk the collections without writing any code.</p>
+
 <h2>URL pattern</h2>
-<pre><code>https://parquetry.geomermaids.com/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
+<pre><code>https://parquetry.geomermaids.com/osm/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
 <p>A few concrete examples:</p>
 <pre><code># Every building in New York State (latest snapshot)
-https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet
+https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.parquet
 
 # Ontario's entire road network
-https://parquetry.geomermaids.com/latest/country=CA/state=CA-ON/roads.parquet
+https://parquetry.geomermaids.com/osm/latest/country=CA/state=CA-ON/roads.parquet
 
 # Points of interest in Jalisco, Mexico
-https://parquetry.geomermaids.com/latest/country=MX/state=MX-JAL/pois.parquet
+https://parquetry.geomermaids.com/osm/latest/country=MX/state=MX-JAL/pois.parquet
 
 # Pinned to a specific date — immutable, reproducible
-https://parquetry.geomermaids.com/2026-04-19/country=US/state=US-CA/waterways.parquet
+https://parquetry.geomermaids.com/osm/2026-04-19/country=US/state=US-CA/waterways.parquet
 
 # Machine-readable index of every snapshot ever published
-https://parquetry.geomermaids.com/snapshots.json</code></pre>
+https://parquetry.geomermaids.com/osm/snapshots.json</code></pre>
 <p>Dated snapshots are immutable — safe to pin in reproducible pipelines. The <code>latest/</code> alias always resolves to the most recent.</p>
 
 <h3>Retention</h3>
@@ -279,7 +323,7 @@ https://parquetry.geomermaids.com/snapshots.json</code></pre>
 <li><strong>15 days to 12 months</strong> — only the <strong>first day of each month</strong> is kept.</li>
 <li><strong>Older than 12 months</strong> — only <strong>December 31 of each year</strong> is kept, forever.</li>
 </ul>
-<p>Yearly anchors survive the monthly-pruning window, so Dec 31 snapshots are always reachable. The current set is listed in <a href="https://parquetry.geomermaids.com/snapshots.json"><code>snapshots.json</code></a>. Need a specific date kept indefinitely? <a href="#custom">Get in touch</a>.</p>
+<p>Yearly anchors survive the monthly-pruning window, so Dec 31 snapshots are always reachable. The current set is listed in <a href="https://parquetry.geomermaids.com/osm/snapshots.json"><code>snapshots.json</code></a>. Need a specific date kept indefinitely? <a href="#custom">Get in touch</a>.</p>
 
 <h2>Build a URL</h2>
 <p>Pick a region and theme; we'll assemble the URL for you.</p>
@@ -377,7 +421,7 @@ Spec validation        27 of 27 checks pass  (gpio check 1.1; two advisories,
 <div class="code-block">
 <pre><code>-- Without the macro, just pass the full URL directly:
 SELECT COUNT(*) FROM read_parquet(
-  'https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet'
+  'https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.parquet'
 );</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
@@ -390,7 +434,7 @@ INSTALL spatial; LOAD spatial;
 SET geometry_always_xy = true;
 
 CREATE OR REPLACE MACRO url(state, theme) AS
-  'https://parquetry.geomermaids.com/latest/country=' ||
+  'https://parquetry.geomermaids.com/osm/latest/country=' ||
   split_part(state, '-', 1) || '/state=' || state || '/' || theme || '.parquet';</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
@@ -476,7 +520,7 @@ ORDER BY pois DESC;</code></pre>
 <pre><code>import geopandas as gpd
 
 gdf = gpd.read_parquet(
-    "https://parquetry.geomermaids.com/latest/country=US/state=US-RI/buildings.parquet"
+    "https://parquetry.geomermaids.com/osm/latest/country=US/state=US-RI/buildings.parquet"
 )
 print(f"{len(gdf):,} Rhode Island buildings")
 print(gdf[["building", "name", "height"]].head())</code></pre>
@@ -486,7 +530,7 @@ print(gdf[["building", "name", "height"]].head())</code></pre>
 <h3>8 · Load into QGIS</h3>
 <p>Open a file visually in <a href="https://qgis.org/">QGIS</a> (3.28 LTR or newer — needs GDAL ≥ 3.5 with the Parquet driver). In <strong>Data Source Manager → Vector</strong>, paste the URL prefixed with <code>/vsicurl/</code> so GDAL streams it via HTTP range requests instead of downloading the whole file:</p>
 <div class="code-block">
-<pre><code>/vsicurl/https://parquetry.geomermaids.com/latest/country=US/state=US-NY/buildings.parquet</code></pre>
+<pre><code>/vsicurl/https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.parquet</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
 <p>Only the row groups your viewport overlaps get fetched. For catalog-wide queries ("every airport in North America"), use DuckDB — QGIS loads one file at a time.</p>
@@ -513,7 +557,7 @@ SET s3_access_key_id=''; SET s3_secret_access_key='';</code></pre>
 <p>One query, ~100 files. Parquet stores row counts in metadata, so DuckDB answers this without reading a single data page:</p>
 <div class="code-block">
 <pre><code>SELECT count(*) AS features
-FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet');</code></pre>
+FROM read_parquet('s3://parquetry/osm/latest/country=*/state=*/aeroways.parquet');</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
 
@@ -521,7 +565,7 @@ FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet');</
 <p>Wildcard the path, group by <code>state_iso</code>. The column is inside every file as a literal — no path-parsing needed:</p>
 <div class="code-block">
 <pre><code>SELECT state_iso, count(*) AS aerodromes
-FROM read_parquet('s3://parquetry/latest/country=*/state=*/aeroways.parquet')
+FROM read_parquet('s3://parquetry/osm/latest/country=*/state=*/aeroways.parquet')
 WHERE aeroway = 'aerodrome'
 GROUP BY state_iso
 ORDER BY aerodromes DESC
@@ -533,7 +577,7 @@ LIMIT 10;</code></pre>
 <p>Pin any path segment to a literal and the glob prunes at list time. This one only fetches Canadian files:</p>
 <div class="code-block">
 <pre><code>SELECT state_iso, count(*) AS stations
-FROM read_parquet('s3://parquetry/latest/country=CA/state=*/public_transport.parquet')
+FROM read_parquet('s3://parquetry/osm/latest/country=CA/state=*/public_transport.parquet')
 WHERE railway = 'station'
 GROUP BY state_iso
 ORDER BY stations DESC;</code></pre>
@@ -544,7 +588,7 @@ ORDER BY stations DESC;</code></pre>
 <p>The <code>power</code> theme is small, so a continent-wide scan is cheap. Group by country to see where wind is concentrated:</p>
 <div class="code-block">
 <pre><code>SELECT country, count(*) AS turbines
-FROM read_parquet('s3://parquetry/latest/country=*/state=*/power.parquet')
+FROM read_parquet('s3://parquetry/osm/latest/country=*/state=*/power.parquet')
 WHERE power = 'generator'
   AND tags['generator:source'] = 'wind'
 GROUP BY country
@@ -635,7 +679,7 @@ ORDER BY turbines DESC;</code></pre>
 // --- Live snapshot stats (CORS-dependent; silent fallback) ---
 (async () => {
   try {
-    const r = await fetch('https://parquetry.geomermaids.com/snapshots.json', { cache: 'no-store' });
+    const r = await fetch('https://parquetry.geomermaids.com/osm/snapshots.json', { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const latest = (j.snapshots || [])[0];
@@ -660,8 +704,8 @@ const THEMES = [
   "aeroways","barriers","public_transport"
 ];
 const BASES = {
-  https: "https://parquetry.geomermaids.com/latest",
-  s3: "s3://parquetry/latest"
+  https: "https://parquetry.geomermaids.com/osm/latest",
+  s3: "s3://parquetry/osm/latest"
 };
 
 const $modes = document.querySelectorAll('input[name="br-mode"]');

@@ -23,7 +23,7 @@ Stages (--stage):
 
 Usage:
   python3 scripts/publish.py
-  python3 scripts/publish.py --remote parquetry:parquetry --out-dir out/
+  python3 scripts/publish.py --remote parquetry:parquetry/osm --out-dir out/
   python3 scripts/publish.py --date 2026-04-18        # backfill
   python3 scripts/publish.py --dry-run                # preview only
   python3 scripts/publish.py --stage upload --out-dir out/ --date 2026-09-14
@@ -322,8 +322,11 @@ def build_snapshot_manifest(remote: str) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--out-dir", type=Path, default=Path("out"))
-    p.add_argument("--remote", default="parquetry:parquetry",
-                   help="rclone <remote>:<bucket>. Default: parquetry:parquetry")
+    p.add_argument("--remote", default="parquetry:parquetry/osm",
+                   help="rclone <remote>:<bucket>[/<prefix>]. The bucket holds "
+                        "several datasets, each self-contained under its own "
+                        "prefix, so everything below is relative to this one. "
+                        "Default: parquetry:parquetry/osm")
     p.add_argument("--date", default=None,
                    help="Snapshot date YYYY-MM-DD. Default: today (UTC).")
     p.add_argument("--dry-run", action="store_true")

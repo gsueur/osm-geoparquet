@@ -1,13 +1,46 @@
 // S3-compatible read-only facade over the `parquetry` R2 bucket.
 //
 // Purpose: let DuckDB / httpfs clients glob our public data with
-// `s3://parquetry/latest/country=*/state=*/<theme>.parquet`. Plain HTTPS
+// `s3://parquetry/osm/latest/country=*/state=*/<theme>.parquet`. Plain HTTPS
 // can't do that (no LIST), so this Worker answers path-style
 // ListObjectsV2 and GETs backed by an R2 binding.
 //
 // Everything is anonymous + read-only. No signing, no writes.
 
 const BUCKET_NAME = "parquetry";
+
+// OSM used to sit at the bucket root and now lives under `osm/`, beside the
+// other datasets. `s3://parquetry/latest/country=*/state=*/x.parquet` has
+// been the documented glob for months, so the old layout keeps answering:
+// a LIST under a legacy prefix is served from the new keys and reported back
+// under the old ones, and the GETs that follow are rewritten the same way.
+// Consistent in both directions, so a client never sees the two mixed.
+//
+// Duplicated in files/src/index.js rather than shared. Each Worker builds
+// with its own directory as the root, so neither can import from above it.
+const DATASET_PREFIX = "osm/";
+const LEGACY_DATED = /^\d{4}-\d{2}-\d{2}\//;
+// `meta/` is deliberately absent: it stays at the bucket root as a shared
+// place for cross-dataset files, so it never moved and must never be
+// rewritten. Rewriting it would send anything added there into osm/.
+const LEGACY_DIRS = ["latest/", "catalog/"];
+const LEGACY_FILES = ["snapshots.json", "ATTRIBUTION.txt"];
+
+// True for a key written under the old layout. The trailing slash is
+// required, so an empty prefix still lists the real root and a glob that
+// stops short of one (`s3://parquetry/lat*`) is left alone. Every client
+// that globs a theme sends at least `latest/country=`.
+function isLegacyKey(key) {
+  return (
+    LEGACY_FILES.includes(key) ||
+    LEGACY_DIRS.some((d) => key.startsWith(d)) ||
+    LEGACY_DATED.test(key)
+  );
+}
+
+function currentKey(key) {
+  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+}
 
 export default {
   async fetch(request, env) {
@@ -56,7 +89,7 @@ export default {
     }
 
     const key = decodeURIComponent(afterBucket.slice(1));
-    return handleObject(key, request, env);
+    return handleObject(currentKey(key), request, env);
   },
 };
 
@@ -68,15 +101,24 @@ async function handleList(url, env) {
   const maxKeysParam = url.searchParams.get("max-keys");
   const maxKeys = Math.min(maxKeysParam ? parseInt(maxKeysParam, 10) : 1000, 1000);
 
-  const listOpts = { prefix, limit: maxKeys };
+  // A continuation token is opaque R2 state tied to the prefix that produced
+  // it. The follow-up call carries the same legacy prefix and gets rewritten
+  // the same way, so the cursor stays valid across pages.
+  const legacy = isLegacyKey(prefix);
+  const listOpts = { prefix: legacy ? DATASET_PREFIX + prefix : prefix, limit: maxKeys };
   if (delimiter) listOpts.delimiter = delimiter;
   if (continuationToken) listOpts.cursor = continuationToken;
-  if (startAfter && !continuationToken) listOpts.startAfter = startAfter;
+  if (startAfter && !continuationToken) {
+    listOpts.startAfter = legacy ? DATASET_PREFIX + startAfter : startAfter;
+  }
 
   const list = await env.BUCKET.list(listOpts);
 
   const xml = buildListXml(list, {
+    // Echoed and reported as the client wrote them: it asked about the old
+    // layout and gets an answer entirely in the old layout.
     prefix,
+    asRequested: legacy ? (k) => k.slice(DATASET_PREFIX.length) : (k) => k,
     delimiter,
     maxKeys,
     continuationToken,
@@ -94,7 +136,7 @@ async function handleList(url, env) {
 }
 
 function buildListXml(list, params) {
-  const { prefix, delimiter, maxKeys, continuationToken, startAfter } = params;
+  const { prefix, asRequested, delimiter, maxKeys, continuationToken, startAfter } = params;
   const prefixes = list.delimitedPrefixes || [];
   const keyCount = list.objects.length + prefixes.length;
 
@@ -102,7 +144,7 @@ function buildListXml(list, params) {
     .map(
       (obj) =>
         `<Contents>` +
-        `<Key>${xmlEscape(obj.key)}</Key>` +
+        `<Key>${xmlEscape(asRequested(obj.key))}</Key>` +
         `<LastModified>${obj.uploaded.toISOString()}</LastModified>` +
         `<ETag>${xmlEscape(obj.httpEtag)}</ETag>` +
         `<Size>${obj.size}</Size>` +
@@ -112,7 +154,7 @@ function buildListXml(list, params) {
     .join("");
 
   const commonPrefixes = prefixes
-    .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`)
+    .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(asRequested(p))}</Prefix></CommonPrefixes>`)
     .join("");
 
   const parts = [
@@ -232,17 +274,29 @@ function landingText() {
     `Bucket:   ${BUCKET_NAME}\n` +
     `Endpoint: https://s3.geomermaids.com\n` +
     `\n` +
-    `Example (DuckDB):\n` +
+    `Setup (DuckDB):\n` +
     `  INSTALL httpfs; LOAD httpfs;\n` +
     `  SET s3_endpoint='s3.geomermaids.com';\n` +
     `  SET s3_url_style='path';\n` +
     `  SET s3_use_ssl=true;\n` +
     `  SET s3_access_key_id='';\n` +
     `  SET s3_secret_access_key='';\n` +
-    `  SELECT count(*) FROM read_parquet(\n` +
-    `    's3://${BUCKET_NAME}/latest/country=*/state=*/aeroways.parquet'\n` +
-    `  );\n` +
     `\n` +
+    `Datasets, one prefix each (browse them at https://parquetry.geomermaids.com/):\n` +
+    `  osm/            OpenStreetMap, North America, nightly. Partitioned; glob it:\n` +
+    `    SELECT count(*) FROM read_parquet(\n` +
+    `      's3://${BUCKET_NAME}/${DATASET_PREFIX}latest/country=*/state=*/aeroways.parquet');\n` +
+    `  gaul/           FAO GAUL 2024, global admin units. Per level, one whole-world\n` +
+    `                  file (L2.parquet, 490 MB) and one file per country to glob:\n` +
+    `    SELECT country, count(*) FROM read_parquet(\n` +
+    `      's3://${BUCKET_NAME}/gaul/2024/country=*/L2.parquet', hive_partitioning = true)\n` +
+    `    GROUP BY 1;\n` +
+    `  clc/            Corine Land Cover 2018, Europe:\n` +
+    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/clc/2018/clc_2018.parquet');\n` +
+    `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
+    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/geoboundaries/6.0.0/cgaz_adm1.parquet');\n` +
+    `\n` +
+    `Every https://parquetry.geomermaids.com/<key> is s3://${BUCKET_NAME}/<key> here.\n` +
     `Fast browser-friendly downloads: https://parquetry.geomermaids.com/\n`
   );
 }
