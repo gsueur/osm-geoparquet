@@ -16,10 +16,11 @@ Usage:
   python3 scripts/plan.py ... --output matrix.json        # for $GITHUB_OUTPUT
 
 Output (stdout or --output): {"include": [{id, url, states, workers, themes,
-filter, fragment}, ...]}. `themes` narrows a job to a theme subset, `filter`
-is an osmium tags-filter expression applied to the download before the
-pipeline, and `fragment` names the manifest fragment the job uploads
-(publish.py --manifest-fragment); all three are empty for an ordinary job.
+filter, fragment, complete_relations}, ...]}. `themes` narrows a job to a
+theme subset, `filter` is an osmium tags-filter expression applied to the
+download before the pipeline, `fragment` names the manifest fragment the job
+uploads (publish.py --manifest-fragment), and `complete_relations` is passed
+to pipeline.py --complete-relations; all four are empty for an ordinary job.
 """
 
 from __future__ import annotations
@@ -53,6 +54,11 @@ MAX_WORKERS = 3
 PARENT_BOUNDARIES = {"US": "us"}
 BOUNDARY_THEME = "boundaries"
 BOUNDARY_FILTER = "r/boundary=administrative"
+# The clip completes boundary relations too on that job: a state relation
+# whose member ways have no node inside the region polygon would otherwise
+# lose them and never assemble. Cheap there, since the source holds only
+# administrative relations; unmeasured on a full extract, so only there.
+BOUNDARY_RELATIONS = "multipolygon,boundary"
 
 
 def load_isos(geojson: Path) -> list[str]:
@@ -157,6 +163,7 @@ def main() -> None:
             "themes": BOUNDARY_THEME,
             "filter": BOUNDARY_FILTER,
             "fragment": BOUNDARY_THEME,
+            "complete_relations": BOUNDARY_RELATIONS,
         })
     # Then the biggest groups, so the long-running multi-region jobs start early.
     for g in sorted(groups.values(), key=lambda g: (-len(g["states"]), g["id"])):
@@ -170,6 +177,7 @@ def main() -> None:
             "themes": other_themes if parented else "",
             "filter": "",
             "fragment": "",
+            "complete_relations": "",
         })
 
     matrix = {"include": include}

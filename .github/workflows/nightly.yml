@@ -161,6 +161,7 @@ jobs:
             --states ${{ matrix.states }} \
             --workers ${{ matrix.workers }} \
             ${{ matrix.themes && format('--themes {0}', matrix.themes) || '' }} \
+            ${{ matrix.complete_relations && format('--complete-relations {0}', matrix.complete_relations) || '' }} \
             --verbose
           rm -f "$WORK/source.osm.pbf"
           du -sh "$WORK/out"
