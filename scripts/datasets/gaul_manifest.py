@@ -89,6 +89,8 @@ def main() -> None:
         print(f"  {layer}: -> {name}")
 
     manifest["total_features"] = sum(e["features"] for e in manifest["files"])
+    # `themes` names files (see gaul.py), so a rename moves its key.
+    manifest["themes"] = {Path(e["file"]).stem: e["features"] for e in manifest["files"]}
     (args.out or args.manifest).write_text(json.dumps(manifest, indent=2) + "\n")
 
 
