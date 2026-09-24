@@ -207,6 +207,21 @@ BASE_COLUMN_DOCS = {
                 "OGC:CRS84 longitude/latitude.",
 }
 
+# Promoted columns whose expression is more than a single-tag cast, so their
+# doc cannot be derived from it.
+THEME_COLUMN_DOCS = {
+    ("power", "voltage"): "Highest voltage in the OSM voltage tag, in volts, "
+                          "as an integer. The tag lists one value per circuit "
+                          "separated by semicolons; NULL when absent or when "
+                          "no entry is a valid number. See "
+                          "https://wiki.openstreetmap.org/wiki/Key:voltage",
+    ("power", "voltages"): "Every voltage in the OSM voltage tag, in volts, as "
+                           "a list of integers in tag order, one per circuit; "
+                           "entries that are not valid numbers are left out, "
+                           "NULL when none is. See "
+                           "https://wiki.openstreetmap.org/wiki/Key:voltage",
+}
+
 GEOMETRY_TYPES = {"point": "Point", "linestring": "LineString", "polygon": "MultiPolygon"}
 _TAG_RE = re.compile(r"tags\['([^']+)'\]\s+AS\s+(\w+)")
 CAST_NAMES = {"VARCHAR": "text", "INT": "an integer", "DOUBLE": "a number"}
@@ -295,6 +310,8 @@ def column_doc(theme: Theme, name: str) -> str:
             kinds = [GEOMETRY_TYPES[g] for g in theme.geometry_types.split(",")]
             doc += f" Geometry types: {', '.join(kinds)}."
         return doc
+    if (theme.name, name) in THEME_COLUMN_DOCS:
+        return THEME_COLUMN_DOCS[(theme.name, name)]
     expr = dict(theme.typed_columns).get(name)
     m = _TAG_RE.search(expr or "")
     if not m:

@@ -43,6 +43,15 @@ def _d(key: str) -> str:
     return f"TRY_CAST(tags['{key}'] AS DOUBLE)"
 
 
+# OSM lists one voltage per circuit, separated by semicolons: a line carrying
+# a 345 kV and a 138 kV circuit reads `345000;138000`. A plain cast turned
+# every such value into NULL (in Texas, 1,658 lines and a fifth of the
+# substations that carry a voltage). Unparseable entries (`medium`, `?`) are
+# dropped from the list rather than voiding it.
+_VOLTAGES = ("list_filter(list_transform(string_split(tags['voltage'], ';'), "
+             "v -> TRY_CAST(trim(v) AS INT)), v -> v IS NOT NULL)")
+
+
 THEMES: list[Theme] = [
     Theme(
         name="buildings",
@@ -224,7 +233,8 @@ THEMES: list[Theme] = [
         typed_columns=[
             ("power",     _s("power")),
             ("name",      _s("name")),
-            ("voltage",   _i("voltage")),
+            ("voltage",   f"list_max({_VOLTAGES})"),
+            ("voltages",  f"nullif({_VOLTAGES}, [])"),
             ("frequency", _d("frequency")),
             ("operator",  _s("operator")),
             ("cables",    _i("cables")),
@@ -314,6 +324,19 @@ def filter_predicate(expr: str) -> str:
         # reported on PR #4 missed 127,941 water rows that way.
         clauses.append(f"coalesce(osm_type IN ({type_list}) AND {tag}, false)")
     return " OR ".join(clauses)
+
+
+# `osmium export` writes a closed way twice when the theme asks for both lines
+# and polygons: once as a LineString and once as the area built from it. That
+# doubled every substation, solar panel, hangar and apron (a fifth of the rows
+# of power and aeroways in Texas). The pipeline keeps one of the pair: the
+# line when this predicate holds for the way's tags, the polygon otherwise.
+# Only themes exporting both linestring and polygon need an entry.
+LINEAR_WHEN_CLOSED: dict[str, str] = {
+    "power": "coalesce(tags['power'] IN ('line', 'minor_line', 'cable'), false)",
+    "aeroways": ("coalesce(tags['aeroway'] IN ('runway', 'taxiway', 'taxilane', "
+                 "'stopway', 'parking_position', 'holding_position'), false)"),
+}
 
 
 # SQL predicates applied AFTER osmium export, before parquet write.

@@ -34,6 +34,13 @@ Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd
 
 `publish.py` finalize regenerates both from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
 
+### Schema 0.5.0
+
+- A closed way in `power` or `aeroways` is one row. Until 0.4.0 `osmium export` wrote it twice, as a LineString and as the polygon built from it, so every substation, solar panel, hangar and apron was counted twice (a fifth of the rows of both themes in Texas). It is now the polygon, or the line when the tags are linear (`power=line/minor_line/cable`, runways, taxiways).
+- `power.voltage` is the highest value of the OSM `voltage` tag, which lists one voltage per circuit (`345000;138000`). A plain integer cast made every such value NULL. The new `power.voltages` column (`INT[]`) keeps all of them in tag order.
+
+Queries that mix older and newer snapshots in one glob need `union_by_name = true`, and counts over older snapshots include the duplicates.
+
 ### Schema 0.4.0
 
 - The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`, with `GEOPARQUET_VERSION 'NONE'` so that DuckDB does not add a second `geo` block of its own beside it. That setting governs the metadata only: the geometry column keeps the native `GEOMETRY` logical type and its per-column geo statistics, and file size, row groups and bloom filters are unchanged.
