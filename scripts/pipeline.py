@@ -43,8 +43,11 @@ from queue import Empty
 
 import duckdb
 
-from themes import THEMES, POST_FILTERS, Theme, filter_predicate
+from themes import THEMES, LINEAR_WHEN_CLOSED, POST_FILTERS, Theme, filter_predicate
 
+# 0.5.0: a closed way in power or aeroways is one feature, not a LineString
+# plus a polygon (see themes.LINEAR_WHEN_CLOSED). power.voltage is the highest
+# of a multi-circuit list instead of NULL, and power.voltages lists them all.
 # 0.4.0: the `geo` metadata now declares the bbox column as a GeoParquet
 # covering, and each manifest records every file's size and sha256 so the
 # catalog can publish file:size and file:checksum.
@@ -53,7 +56,7 @@ from themes import THEMES, POST_FILTERS, Theme, filter_predicate
 # silently replaced the column with the path value on globbed reads).
 # osm_id / osm_type are populated (they were NULL / 'Feature' before). The
 # manifest gains `source_timestamp` and `theme_stats` for the catalog.
-SCHEMA_VERSION = "0.4.0"
+SCHEMA_VERSION = "0.5.0"
 
 # ST_GeometryType spelling -> the GeoParquet `geometry_types` spelling.
 GEOMETRY_TYPE_NAMES = {
@@ -220,6 +223,23 @@ def write_state_polygon(state: State, dest: Path) -> None:
 
 # ---------- per-theme writer ----------
 
+def closed_way_qualify(theme: Theme) -> str:
+    """QUALIFY clause keeping one geometry per closed way (see
+    themes.LINEAR_WHEN_CLOSED): of a line and polygon sharing an osm id, the
+    line when the tags say linear, the polygon otherwise. Features that come
+    out once are untouched, so an unclosable ring keeps its line."""
+    kinds = set(theme.geometry_types.split(","))
+    if not {"linestring", "polygon"} <= kinds:
+        return ""
+    linear = LINEAR_WHEN_CLOSED.get(theme.name)
+    if linear is None:
+        raise ValueError(f"{theme.name} exports lines and polygons but has "
+                         "no LINEAR_WHEN_CLOSED entry")
+    is_line = "ST_GeometryType(geometry)::VARCHAR IN ('LINESTRING', 'MULTILINESTRING')"
+    return (f"QUALIFY count(*) OVER (PARTITION BY osm_type, osm_id) = 1 "
+            f"OR ({is_line}) = ({linear})")
+
+
 def write_theme_parquet(
     con: duckdb.DuckDBPyConnection,
     theme: Theme,
@@ -279,6 +299,7 @@ def write_theme_parquet(
     # the theme's own filter to each row; see filter_predicate.
     where = (f"({filter_predicate(theme.osmium_filter)}) "
              f"AND ({POST_FILTERS.get(theme.name, 'TRUE')})")
+    qualify = closed_way_qualify(theme)
 
     # One pass over the JSON view gives the row count, the extent (for both the
     # Hilbert box and the `geo` metadata) and the geometry types the file will
@@ -289,7 +310,7 @@ def write_theme_parquet(
                MIN(ST_XMin(geometry)), MIN(ST_YMin(geometry)),
                MAX(ST_XMax(geometry)), MAX(ST_YMax(geometry)),
                list(DISTINCT ST_GeometryType(geometry)::VARCHAR)
-        FROM src WHERE {where}
+        FROM (SELECT * FROM src WHERE {where} {qualify})
     """).fetchone()
     if count == 0:
         if VERBOSE:
@@ -367,6 +388,7 @@ def write_theme_parquet(
                 geometry
             FROM src
             WHERE {where}
+            {qualify}
             ORDER BY ST_Hilbert(geometry, {hilbert_box})
         ) TO '{out_parquet}' (
             FORMAT PARQUET,
