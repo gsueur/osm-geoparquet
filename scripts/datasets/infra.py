@@ -742,7 +742,7 @@ def layer_select(layer: Layer) -> str:
             f"{BBOX} AS bbox, geometry FROM {layer.source} WHERE {layer.where}")
 
 
-def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, out: Path) -> dict:
+def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> dict:
     con.execute(f"CREATE OR REPLACE TEMP TABLE l AS {layer_select(layer)}")
     n, types, xmin, ymin, xmax, ymax = con.execute("""
         SELECT count(*), list(DISTINCT ST_GeometryType(geometry)::VARCHAR),
@@ -762,17 +762,80 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, out: Path) -> dict
                                   "xmax": ["bbox", "xmax"], "ymax": ["bbox", "ymax"]}},
         }},
     }).replace("'", "''")
-    dest = out / layer.name
+    dest = staging / layer.name
     con.execute(f"""
         COPY (SELECT * FROM l ORDER BY country,
               ST_Hilbert(geometry, ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
         TO '{dest}' (FORMAT PARQUET, PARTITION_BY (country), WRITE_PARTITION_COLUMNS true,
                      OVERWRITE_OR_IGNORE, GEOPARQUET_VERSION 'NONE',
-                     COMPRESSION ZSTD, COMPRESSION_LEVEL 15, ROW_GROUP_SIZE 50000,
+                     COMPRESSION ZSTD, COMPRESSION_LEVEL 15, ROW_GROUP_SIZE 1048576,
                      KV_METADATA {{geo: '{geo}'}})
     """)
     countries = con.execute("SELECT count(DISTINCT country) FROM l").fetchone()[0]
     return {"layer": layer.name, "group": layer.group, "rows": n, "countries": countries}
+
+
+ROW_GROUP_ROWS = 32_000
+
+
+def rewrite(src: Path, dest: Path) -> None:
+    """Re-cut a DuckDB-written file into row groups of exactly ROW_GROUP_ROWS.
+
+    DuckDB only writes row groups in multiples of its 2,048-row vector size
+    (ROW_GROUP_SIZE 32000 gives 32,768). pyarrow 22 with geoarrow-pyarrow
+    registered keeps the native Parquet GEOMETRY logical type, its geospatial
+    statistics and the `geo` footer. Encodings are set to match what DuckDB
+    gets for free: byte-stream-split floats, delta-packed ids. Measured on
+    83k NL generators: +3% for 32k groups over ~50k, +8% for pyarrow's writer.
+    """
+    import geoarrow.pyarrow  # noqa: F401  registers the geoarrow.wkb extension type
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(src)
+    leaves = [pf.metadata.schema.column(i) for i in range(pf.metadata.num_columns)]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pf.read(), dest, row_group_size=ROW_GROUP_ROWS,
+        compression="zstd", compression_level=15, write_statistics=True,
+        use_dictionary=[c.path for c in leaves
+                        if c.physical_type == "BYTE_ARRAY" and c.path != "geometry"],
+        use_byte_stream_split=[c.path for c in leaves
+                               if c.physical_type in ("FLOAT", "DOUBLE")],
+        column_encoding={"osm_id": "DELTA_BINARY_PACKED"},
+        data_page_size=1 << 20)
+
+
+def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
+    """Fail loudly unless a written file is what the `geo` footer says it is."""
+    kv = con.execute("SELECT key::VARCHAR, value FROM parquet_kv_metadata(?)",
+                     [str(path)]).fetchall()
+    geos = [v for k, v in kv if k == "geo"]
+    assert len(geos) == 1, f"{path}: {len(geos)} geo keys"
+    col = json.loads(geos[0])["columns"]["geometry"]
+    # The covering must name real FLOAT fields of a real struct column.
+    cov = col["covering"]["bbox"]
+    assert {k: v for k, v in cov.items()} == {
+        k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}, f"{path}: covering {cov}"
+    fields = dict(con.execute("""
+        SELECT name, type FROM parquet_schema(?) WHERE name IN ('xmin', 'ymin', 'xmax', 'ymax', 'geometry')
+    """, [str(path)]).fetchall())
+    assert all(fields.get(k) == "FLOAT" for k in ("xmin", "ymin", "xmax", "ymax")), f"{path}: {fields}"
+    logical = con.execute("SELECT logical_type FROM parquet_schema(?) WHERE name = 'geometry'",
+                          [str(path)]).fetchone()[0]
+    assert logical and logical.startswith("GeometryType"), f"{path}: geometry is {logical}"
+    groups = [n for _, n in con.execute("""
+        SELECT DISTINCT row_group_id, row_group_num_rows FROM parquet_metadata(?)
+        ORDER BY row_group_id""", [str(path)]).fetchall()]
+    assert all(n == ROW_GROUP_ROWS for n in groups[:-1]) and groups[-1] <= ROW_GROUP_ROWS, \
+        f"{path}: row groups {groups}"
+    # Every bbox really holds its geometry, and every type is declared.
+    bad, types = con.execute(f"""
+        SELECT count(*) FILTER (WHERE bbox.xmin > ST_XMin(geometry) OR bbox.ymin > ST_YMin(geometry)
+                                   OR bbox.xmax < ST_XMax(geometry) OR bbox.ymax < ST_YMax(geometry)),
+               list(DISTINCT ST_GeometryType(geometry)::VARCHAR)
+        FROM read_parquet('{path}')""").fetchone()
+    assert bad == 0, f"{path}: {bad} bboxes do not contain their geometry"
+    undeclared = {GEOMETRY_TYPE_NAMES[t] for t in types} - set(col["geometry_types"])
+    assert not undeclared, f"{path}: undeclared geometry types {undeclared}"
 
 
 STATS = {
@@ -823,7 +886,15 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     load_countries(con, land, eez)
     for table in ("feat", "circuit", "substation", "generator", "plant"):
         assign_country(con, table)
-    report = [write_layer(con, layer, out) for layer in LAYERS]
+    staging = work / "staging"
+    staging.mkdir(exist_ok=True)
+    report = [write_layer(con, layer, staging) for layer in LAYERS]
+    files = sorted(staging.rglob("*.parquet"))
+    for f in files:
+        dest = out / f.relative_to(staging)
+        rewrite(f, dest)
+        verify(con, dest)
+    print(f"  {len(files)} files rewritten to {ROW_GROUP_ROWS:,}-row groups and verified")
     write_stats(con, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
