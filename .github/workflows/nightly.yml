@@ -26,7 +26,10 @@ name: nightly
 on:
   schedule:
     # Geofabrik refreshes its North America extracts around 21:00-02:00 UTC.
-    - cron: "0 4 * * *"
+    # Off the hour on purpose: GitHub queues scheduled runs late when many
+    # repos fire at :00. At "0 4" this ran as late as 08:54 UTC (2026-09-24),
+    # and on 2026-09-15 it was not queued at all.
+    - cron: "23 4 * * *"
   workflow_dispatch:
     inputs:
       date:
