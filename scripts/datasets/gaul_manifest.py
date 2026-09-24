@@ -14,6 +14,17 @@ the catalog publishes a checksum that does not match the bytes.
   python3 scripts/datasets/gaul_manifest.py --manifest _manifest.json \\
       --replace L1=GAUL_2024_L1.parquet --replace L2=GAUL_2024_L2.parquet \\
       --rename L0_derived=GAUL_2024_L0_derived.parquet --note "..." --out _manifest.json
+
+The procedure followed on 2026-09-23, with rclone's `parquetry` remote:
+  1. rclone copyto the new files to <remote>/2024/, with
+     --header-upload "Cache-Control: public, max-age=31536000, immutable"
+     and "Content-Type: application/vnd.apache.parquet". A server-side copy
+     drops both headers on R2, so a rename goes through the local disk.
+  2. rclone copyto the live _manifest.json down, edit it with this script,
+     copyto it back with "Cache-Control: public, max-age=300".
+  3. gaul_catalog.py publish --remote <remote>: rebuilds the catalog from the
+     published files and the live manifest, runs rashid, uploads.
+  4. Only then delete the old names.
 """
 
 from __future__ import annotations
