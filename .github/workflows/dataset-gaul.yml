@@ -31,6 +31,13 @@ on:
         required: false
         default: ""
 
+# GAUL 2024 is a static release, published once (2026-09-23). The whole-world
+# L1 and L2 files online are NOT this workflow's output: they were rewritten
+# by hand with pyarrow + geoarrow into 15 and 24 row groups of at most 42 MB
+# (DuckDB writes none under 2,048 rows). Re-running stage=publish would put
+# the converter's larger-grouped files back and rewrite the manifest to
+# match. Do not, unless gaul.py has learned to write them the same way.
+
 concurrency:
   group: dataset-gaul
   cancel-in-progress: false
@@ -148,7 +155,8 @@ jobs:
         run: |
           set +e
           fail=0
-          for f in $VERSION/L0_derived.parquet $VERSION/L1.parquet $VERSION/L2.parquet \
+          for f in $VERSION/GAUL_${VERSION}_L0_derived.parquet $VERSION/GAUL_${VERSION}_L1.parquet \
+                   $VERSION/GAUL_${VERSION}_L2.parquet \
                    $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
                    $VERSION/GAUL2024TermsOfUse.pdf \
                    $VERSION/country=FRA/L1.parquet $VERSION/country=xAB/L2.parquet \

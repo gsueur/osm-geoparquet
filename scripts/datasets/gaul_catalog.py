@@ -170,9 +170,9 @@ COLUMN_DOCS = {
     "disp_en": "Display name in English, the label FAO uses on maps.",
     "derived_by": "Who derived the row and how. Constant: this layer is a "
                   "Geomermaids dissolve of FAO's L1, not an FAO product.",
-    "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax) as float32, rounded "
-            "outward, declared as the GeoParquet covering. Filter on it to prune "
-            "row groups before touching geometry.",
+    "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax), declared as the "
+            "GeoParquet covering. Filter on it to prune row groups before "
+            "touching geometry.",
     "geometry": "Unit outline as native Parquet GEOMETRY (WKB), OGC:CRS84 lon/lat, "
                 "MultiPolygon.",
 }
@@ -180,12 +180,17 @@ COLUMN_DOCS = {
 
 # ---------- measured inputs ----------
 
-def data_source(out_dir: Path | None, name: str) -> str:
+def whole_file(entry: dict) -> str:
+    """The whole-world file name a manifest entry describes (GAUL_2024_L1.parquet)."""
+    return entry.get("file") or f"{entry['name']}.parquet"
+
+
+def data_source(out_dir: Path | None, entry: dict) -> str:
     """Local file when the build reads a gaul.py output dir, else the
     published URL. Both are Parquet footers to DuckDB."""
     if out_dir is not None:
-        return str(out_dir / f"{name}.parquet")
-    return f"{DATA_URL}/{name}.parquet"
+        return str(out_dir / whole_file(entry))
+    return f"{DATA_URL}/{whole_file(entry)}"
 
 
 def read_manifest(out_dir: Path | None) -> dict:
@@ -249,7 +254,7 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
     x0, y0, x1, y1 = geo["columns"]["geometry"]["bbox"]
     bbox = [max(-180.0, round(x0, 6)), max(-90.0, round(y0, 6)),
             min(180.0, round(x1, 6)), min(90.0, round(y1, 6))]
-    path = f"{DATASET_PREFIX}/{VERSION}/{name}.parquet"
+    path = f"{DATASET_PREFIX}/{VERSION}/{whole_file(entry)}"
     thumb = THUMBS / f"{name}.png"
     undocumented = [c for c, _ in columns if c not in COLUMN_DOCS]
     if undocumented:
@@ -266,8 +271,8 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
             f"GeoParquet 2.0 file ({entry['features']:,} rows, {entry['bytes'] / 1e6:,.0f} MB, "
             f"the data asset) for anyone who wants a single download, and one file per "
             f"country under {PARTITION_KEY}=<iso3>/ ({part['files']} files, the data-<iso3> "
-            f"assets and the partition glob {glob}) for small reads. Both are "
-            f"Hilbert-ordered with a bbox covering and readable in place over HTTPS or "
+            f"assets and the partition glob {glob}) for small reads. Both carry a "
+            f"bbox covering and read in place over HTTPS or "
             f"through the anonymous S3 endpoint {S3_ENDPOINT}. Data (c) FAO {VERSION}, "
             f"CC BY 4.0, attribution required. {NOT_ENDORSED} {UN_DISCLAIMER}"
         ),
@@ -303,8 +308,8 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
                 "type": PARQUET_TYPE,
                 "title": f"{title}, whole world in one file",
                 "description": f"{entry['features']:,} features in {entry['row_groups']} "
-                               f"row group(s). Large: a bbox filter cannot skip much, "
-                               f"so prefer the per-country files for small reads.",
+                               f"row group(s), the largest "
+                               f"{entry['largest_row_group_bytes'] / 1e6:,.0f} MB.",
                 "roles": ["data"],
                 "file:size": entry["bytes"],
                 "file:checksum": "1220" + entry["sha256"],
@@ -387,7 +392,7 @@ def citation(accessed: str) -> str:
             f"Licence: CC-BY-4.0")
 
 
-def access_section(name: str) -> str:
+def access_section(name: str, entry: dict) -> str:
     return f"""\
 Two layouts of the same rows, both immutable and readable in place with
 HTTP range requests. One country, a small file:
@@ -398,10 +403,9 @@ SELECT gaul0_name, ST_Area(geometry) AS area
 FROM read_parquet('{DATA_URL}/{PARTITION_KEY}=FRA/{name}.parquet');
 ```
 
-The whole world in one download, `{DATA_URL}/{name}.parquet`. Its row groups
-are large (DuckDB writes none under 2,048 rows), so a bbox filter reads most
-of the file; use it when you want everything, or the per-country files when
-you do not. Every country at once, through the anonymous S3 endpoint
+The whole world in one download, `{DATA_URL}/{whole_file(entry)}`,
+{entry['row_groups']} row groups of at most {entry['largest_row_group_bytes'] / 1e6:,.0f} MB,
+so a bbox filter reads only the groups it needs. Every country at once, through the anonymous S3 endpoint
 `{S3_ENDPOINT}` (path-style, empty credentials):
 
 ```sql
@@ -430,11 +434,13 @@ PROVENANCE = f"""\
 FAO ships GAUL {VERSION} as ESRI shapefiles in [GAUL_2024_L1.zip]({SOURCE_ZIPS['L1']})
 and [GAUL_2024_L2.zip]({SOURCE_ZIPS['L2']}). The [converter]({REPO_URL})
 reads each with DuckDB, keeps every FAO attribute column under its FAO name,
-adds a float32 `bbox` per row, orders rows on a Hilbert curve, and writes
-GeoParquet 2.0 (zstd) with the bbox declared as the `covering`. L0 is
-`ST_Union_Agg` of the L1 units per `gaul0_code`; its total area equals L1's.
-Each file's footer is verified after writing, and the manifest records size
-and sha256, which this catalog publishes as `file:size` and `file:checksum`."""
+adds a `bbox` per row and writes GeoParquet 2.0 (zstd) with the bbox declared
+as the `covering`. L0 is `ST_Union_Agg` of the L1 units per `gaul0_code`; its
+total area equals L1's. The whole-world L1 and L2 files were then rewritten
+with pyarrow and geoarrow into 15 and 24 row groups of at most 42 MB (DuckDB
+writes none under 2,048 rows), same rows, GAUL codes as BIGINT. Each file's
+footer is verified, and the manifest records size and sha256, which this
+catalog publishes as `file:size` and `file:checksum`."""
 
 
 def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
@@ -449,7 +455,7 @@ def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
 | | |
 |---|---|
 | Rows | {entry['features']:,} |
-| Whole-world file | {entry['bytes'] / 1e6:,.0f} MB, {entry['row_groups']} row group(s), sha256 `{entry['sha256'][:12]}...` |
+| Whole-world file | `{whole_file(entry)}`, {entry['bytes'] / 1e6:,.0f} MB, {entry['row_groups']} row group(s), sha256 `{entry['sha256'][:12]}...` |
 | Per-country files | {part['files']} under `{PARTITION_KEY}=<iso3>/`, {part['bytes'] / 1e6:,.0f} MB in all |
 | Extent | {shared.fmt_bbox(col['extent']['spatial']['bbox'][0])} (lon/lat) |
 | Vintage | GAUL {VERSION}, accessed {accessed} |
@@ -458,7 +464,7 @@ def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
 
 ## Access
 
-{access_section(name)}
+{access_section(name, entry)}
 
 ## Schema
 
@@ -480,8 +486,9 @@ def collection_agents(col: dict, entry: dict, part: dict) -> str:
     name = stem(col)
     pruning = ("one row group, so the bbox covering cannot skip anything"
                if entry["row_groups"] == 1 else
-               f"{entry['row_groups']} row groups, so a bbox filter skips at best "
-               f"the ones outside the window")
+               f"{entry['row_groups']} row groups of at most "
+               f"{entry['largest_row_group_bytes'] / 1e6:,.0f} MB, so a bbox filter "
+               f"reads only the ones touching the window")
     return f"""\
 # {col['title']}: agent guide
 
@@ -490,7 +497,7 @@ GAUL {VERSION}, MultiPolygon, OGC:CRS84.
 
 ## Access
 
-{access_section(name)}
+{access_section(name, entry)}
 
 ## Query tips
 
@@ -513,7 +520,7 @@ def root_readme(root: dict, collections: list[dict], manifest: dict) -> str:
     entries = {e["name"]: e for e in manifest["files"]}
     parts = {p["name"]: p for p in manifest["partitions"]}
     rows = "\n".join(
-        f"| [{c['title']}](./{c['id']}/README.md) | `{stem(c)}.parquet` | "
+        f"| [{c['title']}](./{c['id']}/README.md) | `{whole_file(entries[stem(c)])}` | "
         f"{entries[stem(c)]['features']:,} | {entries[stem(c)]['bytes'] / 1e6:,.0f} MB | "
         f"{parts[stem(c)]['files']} |"
         for c in collections)
@@ -535,10 +542,9 @@ own year, with its own catalog.
 ## Access
 
 Each layer comes in two layouts of the same rows: one whole-world file at
-`{DATA_URL}/<layer>.parquet` for a single download, and one file per country
-at `{DATA_URL}/{PARTITION_KEY}=<iso3>/<layer>.parquet` for small reads (the
-whole-world files have row groups of 80 to 290 MB, so a bbox filter cannot
-skip much there). Both read in place with HTTP range requests, and the same
+`{DATA_URL}/GAUL_{VERSION}_<layer>.parquet` for a single download, and one file
+per country at `{DATA_URL}/{PARTITION_KEY}=<iso3>/<layer>.parquet` for small
+reads. Both read in place with HTTP range requests, and the same
 paths exist under `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/` on the anonymous S3 endpoint
 `{S3_ENDPOINT}`, where a glob over `{PARTITION_KEY}=*/` reads every country. Each
 collection's README shows the queries.
@@ -574,9 +580,9 @@ under `{PARTITION_KEY}=<iso3>/`. Static release, immutable files.
 
 - One country: `{DATA_URL}/{PARTITION_KEY}=<iso3>/<layer>.parquet` over HTTPS, no
   credentials, a few MB. Prefer it for anything that is not the whole world.
-- The whole world: `{DATA_URL}/<layer>.parquet`, 290 to 490 MB with row groups
-  too large to prune. Every country at once: the collection's
-  `partition:glob` through the S3 endpoint.
+- The whole world: `{DATA_URL}/GAUL_{VERSION}_<layer>.parquet`, 290 to 490 MB;
+  the collection's data asset gives the row-group count. Every country at
+  once: the collection's `partition:glob` through the S3 endpoint.
 - The same path under `s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/` on the anonymous S3 endpoint
   `{S3_ENDPOINT}`, path-style, empty credentials.
 - Each collection documents its columns in `table:columns` and carries
@@ -585,8 +591,8 @@ under `{PARTITION_KEY}=<iso3>/`. Static release, immutable files.
 ## Conventions
 
 - Geometry is native Parquet GEOMETRY, OGC:CRS84 lon/lat, MultiPolygon.
-- `bbox` is a per-row float32 box rounded outward, declared as the
-  GeoParquet `covering`; filter on it before touching geometry.
+- `bbox` is a per-row box declared as the GeoParquet `covering`; filter
+  on it before touching geometry.
 - GAUL codes are the join keys to FAO statistics; `iso3_code` is ISO 3166-1
   alpha-3 plus FAO pseudo-codes for disputed areas (xAB, xJK, xxx), and is
   the partition key: a few codes group several units (AUS, PYF, xFR, xUK).
@@ -620,7 +626,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
 
     collections = []
     for name in LAYERS:
-        columns, geo = footer(con, data_source(out_dir, name))
+        columns, geo = footer(con, data_source(out_dir, entries[name]))
         col = build_collection(name, entries[name], parts[name], columns, geo, updated)
         cdir = dest / col["id"]
         write_json(cdir / "collection.json", col)
