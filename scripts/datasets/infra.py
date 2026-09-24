@@ -5,7 +5,7 @@ and gas, water. The content of Open Infrastructure Map (openinframap.org),
 built from OSM extracts rather than a live PostGIS.
 
 Parity is with openinframap/openinframap as of 2026-09: every table of its
-imposm mapping (imposm/*.py) is a layer here, every attribute its tile layers
+imposm mapping (imposm/*.py) is a layer here but one, every attribute its tile layers
 serve (tegola/layers.yml) is a column, and its derived values (schema/
 functions.sql, views.sql: voltages in kV, outputs in MW, solar estimates,
 pipeline categories, site relations merged from their members, circuit
@@ -13,6 +13,11 @@ lengths) are computed the same way. Their code is BSD-licensed; the rules are
 credited in ATTRIBUTION.txt. Where they drop data we keep it: every geometry
 type of a layer (not only the one their tiles draw), all name:* variants, the
 full tag map, and a power_other layer for power=* values they do not map.
+
+The exception is their water_reservoir table (water=reservoir,
+man_made=reservoir_covered), left out on purpose: water=reservoir is mostly
+ponds and lakes, not infrastructure (61,933 of them in Florida alone, next to
+14 covered reservoirs), and it dwarfed every other water layer.
 
 Two stages, so the worldwide build can fan out over Geofabrik regions:
 
@@ -69,8 +74,8 @@ FILTER = [
     "oil_sands,gas,gas_storage,natural_gas,wellsite,well_cluster,refinery",
     # water
     "nwr/man_made=water_works,desalination_plant,wastewater_plant,"
-    "pumping_station,water_tower,water_well,reservoir_covered",
-    "w/waterway=pressurised", "wr/water=reservoir",
+    "pumping_station,water_tower,water_well",
+    "w/waterway=pressurised",
 ]
 
 
@@ -397,10 +402,6 @@ LAYERS: list[Layer] = [
           "tags['waterway'] = 'pressurised'", [
               ("length_km", "length_km(geometry)"),
           ]),
-    Layer("water_reservoir", "water", "man_made",
-          "tags['man_made'] = 'reservoir_covered' OR tags['water'] = 'reservoir'", [
-              ("area_m2", "area_m2(geometry)"),
-          ]),
 ]
 
 # The value that names what the feature is, per layer (OIM's `type` column).
@@ -408,7 +409,7 @@ TYPE_EXPR = {
     "power": "lc_val(tags, 'power')",
     "communication": "lc_val(tags, 'communication')",
     "telecom": "coalesce(tags['telecom'], tags['building'], tags['office'], tags['man_made'])",
-    "man_made": "coalesce(lc_val(tags, 'man_made'), tags['water'])",
+    "man_made": "lc_val(tags, 'man_made')",
     "industrial": "coalesce(tags['industrial'], tags['pipeline'])",
     "pipeline": "tags['pipeline']",
     "marker": "coalesce(tags['pipeline'], tags['power'], tags['marker'])",
