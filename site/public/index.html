@@ -6,7 +6,7 @@
 <title>geomermaids · GeoParquet</title>
 <!-- build: force redeploy -->
 
-<meta name="description" content="Free cloud-native snapshots of OpenStreetMap data for North America, alongside Corine Land Cover and geoBoundaries. Query them directly from your laptop — no downloads, no setup, no account.">
+<meta name="description" content="Free cloud-native snapshots of OpenStreetMap data for North America, alongside Corine Land Cover, geoBoundaries and FAO GAUL 2024. Query them directly from your laptop — no downloads, no setup, no account.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -273,6 +273,11 @@ footer a { color: var(--muted); }
   <td>geoBoundaries CGAZ 6.0.0, global administrative boundaries: 218 countries, 3,224 first-level and 49,349 second-level units.</td>
   <td>260 MB across three files</td>
 </tr>
+<tr>
+  <td><a href="https://parquetry.geomermaids.com/gaul/"><code>gaul/</code></a></td>
+  <td>FAO GAUL 2024, global administrative units: 3,110 first-level and 45,524 second-level units as FAO publishes them, plus a 272-country layer (L0) dissolved here from L1, which is ours, not FAO's. Whole-world files, and the same three layers split one folder per country.</td>
+  <td>~1 GB whole-world, a few MB per country</td>
+</tr>
 </tbody>
 </table>
 
@@ -285,7 +290,14 @@ WHERE bbox.xmin BETWEEN 3735650 AND 3785650
   AND bbox.ymin BETWEEN 2864878 AND 2914878
 GROUP BY 1 ORDER BY hectares DESC LIMIT 5;</code></pre><button class="copy-btn" type="button">Copy</button></div>
 
-<p class="callout">Watch the coordinate reference system: Corine is in <strong>EPSG:3035</strong> while geoBoundaries and our OpenStreetMap files are in <strong>EPSG:4326</strong>. Reproject before you join them. And scan the whole Corine geometry column only from a machine with real bandwidth — over a home connection, a full pass on 3.8 GB of polygons will time out.</p>
+<p class="callout">Watch the coordinate reference system: Corine is in <strong>EPSG:3035</strong> while geoBoundaries, GAUL and our OpenStreetMap files are in <strong>EPSG:4326</strong>. Reproject before you join them. And scan the whole Corine geometry column only from a machine with real bandwidth — over a home connection, a full pass on 3.8 GB of polygons will time out.</p>
+
+<p>GAUL has the opposite shape: few features, some of them huge, so whole-world files have few row groups and the <code>bbox</code> column prunes little. When you only need one country, read its own folder instead. France's regions and départements come back in under a second:</p>
+
+<div class="code-block"><pre><code>-- country=&lt;ISO3&gt;/ holds L0_derived, L1 and L2 for that country only
+SELECT gaul1_name, count(*) AS departements
+FROM read_parquet('https://parquetry.geomermaids.com/gaul/2024/country=FRA/L2.parquet')
+GROUP BY 1 ORDER BY departements DESC LIMIT 5;</code></pre><button class="copy-btn" type="button">Copy</button></div>
 
 <p>Licences differ per dataset: each prefix carries its own <code>ATTRIBUTION.txt</code>, linked from the footer of its <a href="https://parquetry.geomermaids.com/">File Explorer</a> pages. The recipes below are OpenStreetMap-specific.</p>
 
@@ -296,6 +308,7 @@ GROUP BY 1 ORDER BY hectares DESC LIMIT 5;</code></pre><button class="copy-btn" 
 <li><code>osm/catalog/&lt;YYYY-MM-DD&gt;/catalog.json</code> pins one snapshot. Published only for the snapshots retention keeps, never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.</li>
 </ul>
 <p>It is registered in the <a href="https://www.portolan-sdi.org">Portolan registry</a>, which crawls and revalidates it, so you can find it alongside other cloud-native catalogs rather than only from here. Open it in the <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/osm/catalog/catalog.json">STAC browser</a> to walk the collections without writing any code.</p>
+<p>GAUL has its own catalog, <a href="https://parquetry.geomermaids.com/gaul/catalog/catalog.json"><code>gaul/catalog/catalog.json</code></a>, also viewable in the <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/gaul/catalog/catalog.json">STAC browser</a>.</p>
 
 <h2>URL pattern</h2>
 <pre><code>https://parquetry.geomermaids.com/osm/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO&gt;/&lt;theme&gt;.parquet</code></pre>
