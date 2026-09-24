@@ -431,7 +431,9 @@ def main() -> None:
     (args.out_dir / "_manifest.json").write_text(json.dumps({
         "state_name": f"FAO Global Administrative Unit Layers (GAUL) {VERSION}",
         "total_features": sum(l["features"] for l in layers),
-        "themes": {l["name"]: l["features"] for l in layers},
+        # Keyed by file, not layer: a parquetry repository browser (GeoPQ
+        # Workbench) turns each key into `<key>.parquet` beside this file.
+        "themes": {Path(l["file"]).stem: l["features"] for l in layers},
         "accessed": accessed.isoformat(),
         "licence": "CC-BY-4.0",
         "files": layers,
