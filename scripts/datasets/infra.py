@@ -22,18 +22,25 @@ ponds and lakes, not infrastructure (61,933 of them in Florida alone, next to
 Two stages, so the worldwide build can fan out over Geofabrik regions:
 
   filter  one extract -> the infrastructure subset (about 0.4% of the input)
-  build   one (merged) subset -> <out>/country=<ISO3>/<layer>.parquet, a
-          _manifest.json per country, <out>/stats/, and index.json in
-          <out>'s parent (the repository base; <out> is a snapshot)
+  build   one (merged) subset ->
+          <out>/country=<ISO2>/state=<GAUL L1 code>/<layer>.parquet, a
+          _manifest.json per folder, <out>/stats/, and index.json in
+          <out>'s parent (the repository base; <out> is `latest`, the only
+          version published: no snapshots.json)
 
 The layout is the parquetry one the OSM dataset uses and GeoPQ Workbench's
-repository browser reads (index.json lists the country folders, each
-_manifest.json its layers): picking a country there loads every layer. One
-layer across countries is `country=*/<layer>.parquet`.
+repository browser reads (index.json lists the folders, each _manifest.json
+its layers): picking a state there loads every layer, picking a country
+loads all its states. One layer everywhere is
+`country=*/state=*/<layer>.parquet`.
 
-Countries: a feature goes to exactly one country, the one holding a point on
-it (ST_PointOnSurface), from FAO GAUL 2024 L0 on land, else from Marine
-Regions' union of land and EEZ offshore, else `_intl` (high seas).
+Regions: a feature goes to exactly one folder, the one holding a point on it
+(ST_PointOnSurface). On land that is its FAO GAUL 2024 L1 unit: GAUL has no
+ISO 3166-2 codes, so `state` is the GAUL L1 code and index.json carries the
+name. Offshore it is the country of Marine Regions' union of land and EEZ,
+with `state=_offshore`; elsewhere `country=_intl/state=_intl` (high seas).
+Countries are ISO 3166-1 alpha-2 like the OSM dataset; GAUL's non-ISO codes
+for disputed areas (xJK, xAB, ...) are kept as they are.
 """
 
 from __future__ import annotations
@@ -661,75 +668,93 @@ def build_sources(con: duckdb.DuckDBPyConnection) -> None:
 # grid: every candidate is then small and local.
 SUBDIVIDE = """
     WITH parts AS (
-        SELECT country, unnest(ST_Dump(geometry)).geom AS geometry FROM {src}
+        SELECT region, unnest(ST_Dump(geometry)).geom AS geometry FROM {src}
     ), big AS (
-        SELECT country, geometry,
+        SELECT region, geometry,
                floor(ST_XMin(geometry))::INT AS x0, ceil(ST_XMax(geometry))::INT AS x1,
                floor(ST_YMin(geometry))::INT AS y0, ceil(ST_YMax(geometry))::INT AS y1
         FROM parts WHERE ST_NPoints(geometry) > 2000
     )
-    SELECT country, geometry FROM parts WHERE ST_NPoints(geometry) <= 2000
+    SELECT region, geometry FROM parts WHERE ST_NPoints(geometry) <= 2000
     UNION ALL
-    SELECT country, piece AS geometry FROM (
-        SELECT country, ST_Intersection(geometry, ST_MakeEnvelope(x, y, x + 1, y + 1)) AS piece
+    SELECT region, piece AS geometry FROM (
+        SELECT region, ST_Intersection(geometry, ST_MakeEnvelope(x, y, x + 1, y + 1)) AS piece
         FROM big, range(x0, x1) AS gx(x), range(y0, y1) AS gy(y)
         WHERE ST_Intersects(geometry, ST_MakeEnvelope(x, y, x + 1, y + 1))
     ) WHERE NOT ST_IsEmpty(piece) AND ST_Dimension(piece) = 2
 """
 
 
-def load_countries(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
+def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
+    import pycountry
+    con.execute("CREATE TEMP TABLE iso (iso3 VARCHAR, iso2 VARCHAR)")
+    con.executemany("INSERT INTO iso VALUES (?, ?)",
+                    [(c.alpha_3, c.alpha_2) for c in pycountry.countries])
     xmin, ymin, xmax, ymax = con.execute("""
         SELECT min(ST_XMin(geometry)), min(ST_YMin(geometry)),
                max(ST_XMax(geometry)), max(ST_YMax(geometry)) FROM feat
     """).fetchone()
     env = f"ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax})"
+    # `region` is `<country>/<state>`, the folder a feature lands in.
     con.execute(f"""
         CREATE TEMP TABLE land_src AS
-        SELECT iso3_code AS country, gaul0_name AS name,
-               ST_Intersection(geometry, {env}) AS geometry
-        FROM read_parquet('{land}')
-        WHERE bbox.xmax >= {xmin} AND bbox.xmin <= {xmax}
-          AND bbox.ymax >= {ymin} AND bbox.ymin <= {ymax}
-          AND ST_Intersects(geometry, {env})
+        SELECT coalesce(iso.iso2, l.iso3_code) || '/' || l.gaul1_code AS region,
+               l.gaul0_name AS country_name, l.gaul1_name AS state_name,
+               ST_Intersection(l.geometry, {env}) AS geometry
+        FROM read_parquet('{land}') l LEFT JOIN iso ON iso.iso3 = l.iso3_code
+        WHERE l.bbox.xmax >= {xmin} AND l.bbox.xmin <= {xmax}
+          AND l.bbox.ymax >= {ymin} AND l.bbox.ymin <= {ymax}
+          AND ST_Intersects(l.geometry, {env})
     """)
     con.execute(f"""
         CREATE TEMP TABLE sea_src AS
-        SELECT coalesce(iso_ter1, iso_sov1) AS country,
-               coalesce(territory1, "union") AS name,
-               ST_Intersection(ST_MakeValid(geom), {env}) AS geometry
-        FROM ST_Read('{eez}')
-        WHERE ST_Intersects(geom, {env})
+        SELECT coalesce(iso.iso2, e.code) || '/_offshore' AS region,
+               e.name AS country_name, e.name || ' (offshore)' AS state_name,
+               e.geometry
+        FROM (SELECT coalesce(iso_ter1, iso_sov1) AS code,
+                     coalesce(territory1, "union") AS name,
+                     ST_Intersection(ST_MakeValid(geom), {env}) AS geometry
+              FROM ST_Read('{eez}') WHERE ST_Intersects(geom, {env})) e
+        LEFT JOIN iso ON iso.iso3 = e.code
+        WHERE e.code IS NOT NULL
     """)
-    # Land names first: a code both layers know is named the GAUL way.
+    # Land names first: a country both layers know is named the GAUL way.
     con.execute("""
-        CREATE TABLE country_name AS
-        SELECT country, arg_min(name, src) AS name FROM (
-            SELECT DISTINCT country, name, 0 AS src FROM land_src
-            UNION ALL SELECT DISTINCT country, name, 1 FROM sea_src
-            UNION ALL SELECT '_intl', 'High seas', 2)
-        WHERE country IS NOT NULL GROUP BY country
+        CREATE TABLE region_name AS
+        WITH r AS (
+            SELECT DISTINCT region, country_name, state_name, 0 AS src FROM land_src
+            UNION ALL SELECT DISTINCT region, country_name, state_name, 1 FROM sea_src
+        ), c AS (
+            SELECT split_part(region, '/', 1) AS country, arg_min(country_name, src) AS name
+            FROM r GROUP BY 1
+        )
+        SELECT r.region, c.name AS country_name,
+               CASE WHEN r.src = 1 THEN c.name || ' (offshore)' ELSE r.state_name END AS state_name
+        FROM r JOIN c ON c.country = split_part(r.region, '/', 1)
+        UNION ALL SELECT '_intl/_intl', 'High seas', 'High seas'
     """)
     con.execute(f"CREATE TABLE land AS {SUBDIVIDE.format(src='land_src')}")
     con.execute(f"CREATE TABLE sea AS {SUBDIVIDE.format(src='sea_src')}")
 
 
-def assign_country(con: duckdb.DuckDBPyConnection, table: str) -> None:
-    """Add `country` to a source table: GAUL on land, else EEZ, else _intl.
-    Each step joins plain tables so DuckDB plans a SPATIAL_JOIN."""
+def assign_region(con: duckdb.DuckDBPyConnection, table: str) -> None:
+    """Add `country` and `state` to a source table: GAUL L1 on land, else
+    EEZ, else _intl. Each step joins plain tables so DuckDB plans a
+    SPATIAL_JOIN."""
     con.execute(f"""CREATE OR REPLACE TEMP TABLE pt AS
         SELECT osm_type, osm_id, ST_PointOnSurface(geometry) AS g FROM {table}""")
     con.execute("""CREATE OR REPLACE TEMP TABLE hit AS
-        SELECT pt.osm_type, pt.osm_id, min(land.country) AS country
+        SELECT pt.osm_type, pt.osm_id, min(land.region) AS region
         FROM pt JOIN land ON ST_Contains(land.geometry, pt.g) GROUP BY ALL""")
     con.execute("""CREATE OR REPLACE TEMP TABLE pt AS
         SELECT pt.* FROM pt ANTI JOIN hit USING (osm_type, osm_id)""")
     con.execute("""INSERT INTO hit
-        SELECT pt.osm_type, pt.osm_id, min(sea.country)
+        SELECT pt.osm_type, pt.osm_id, min(sea.region)
         FROM pt JOIN sea ON ST_Contains(sea.geometry, pt.g) GROUP BY ALL""")
     con.execute(f"""CREATE OR REPLACE TABLE {table} AS
-        SELECT t.*, coalesce(hit.country, '_intl') AS country
-        FROM {table} t LEFT JOIN hit USING (osm_type, osm_id)""")
+        SELECT t.* EXCLUDE (r), split_part(r, '/', 1) AS country, split_part(r, '/', 2) AS state
+        FROM (SELECT t.*, coalesce(hit.region, '_intl/_intl') AS r
+              FROM {table} t LEFT JOIN hit USING (osm_type, osm_id)) t""")
 
 
 # --------------------------------------------------------------------------
@@ -756,7 +781,7 @@ def layer_select(layer: Layer) -> str:
             expr = f"lifecycle(tags, '{layer.key}')"
         cols.append(f"{expr} AS {name}")
     cols += [f"{expr} AS {name}" for name, expr in layer.columns]
-    return (f"SELECT osm_id, osm_type, country, {', '.join(cols)}, tags, "
+    return (f"SELECT osm_id, osm_type, country, state, {', '.join(cols)}, tags, "
             f"{BBOX} AS bbox, geometry FROM {layer.source} WHERE {layer.where}")
 
 
@@ -782,15 +807,17 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
     }).replace("'", "''")
     dest = staging / layer.name
     con.execute(f"""
-        COPY (SELECT * FROM l ORDER BY country,
+        COPY (SELECT * FROM l ORDER BY country, state,
               ST_Hilbert(geometry, ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
-        TO '{dest}' (FORMAT PARQUET, PARTITION_BY (country), WRITE_PARTITION_COLUMNS true,
+        TO '{dest}' (FORMAT PARQUET, PARTITION_BY (country, state), WRITE_PARTITION_COLUMNS true,
                      OVERWRITE_OR_IGNORE, GEOPARQUET_VERSION 'NONE',
                      COMPRESSION ZSTD, COMPRESSION_LEVEL 15, ROW_GROUP_SIZE 1048576,
                      KV_METADATA {{geo: '{geo}'}})
     """)
-    countries = con.execute("SELECT count(DISTINCT country) FROM l").fetchone()[0]
-    return {"layer": layer.name, "group": layer.group, "rows": n, "countries": countries}
+    countries, regions = con.execute(
+        "SELECT count(DISTINCT country), count(DISTINCT (country, state)) FROM l").fetchone()
+    return {"layer": layer.name, "group": layer.group, "rows": n,
+            "countries": countries, "regions": regions}
 
 
 ROW_GROUP_ROWS = 32_000
@@ -857,27 +884,33 @@ def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
 
 
 def write_manifests(con: duckdb.DuckDBPyConnection, out: Path) -> None:
-    """A _manifest.json per country folder (its layers and row counts, in
-    LAYERS order) and index.json at the root listing the folders: what the
-    parquetry repository protocol reads."""
-    names = dict(con.execute("SELECT country, name FROM country_name").fetchall())
+    """A _manifest.json per folder (its layers and row counts, in LAYERS
+    order) and index.json at the repository base listing the folders by
+    country and name: what the parquetry repository protocol reads."""
+    names = {r: (c, s) for r, c, s in con.execute(
+        "SELECT region, country_name, state_name FROM region_name").fetchall()}
     order = {layer.name: i for i, layer in enumerate(LAYERS)}
     datasets = []
-    for folder in sorted(out.glob("country=*")):
-        code = folder.name.split("=", 1)[1]
+    for folder in out.glob("country=*/state=*"):
+        country = folder.parent.name.split("=", 1)[1]
+        state = folder.name.split("=", 1)[1]
+        country_name, state_name = names.get(f"{country}/{state}", (country, state))
         themes = {}
         for f in sorted(folder.glob("*.parquet"), key=lambda f: order.get(f.stem, 99)):
             themes[f.stem] = con.execute(
                 "SELECT sum(row_group_num_rows) FROM (SELECT DISTINCT row_group_id, "
                 "row_group_num_rows FROM parquet_metadata(?))", [str(f)]).fetchone()[0]
-        name = names.get(code, code)
         (folder / "_manifest.json").write_text(json.dumps({
-            "country": code, "state_name": name,
+            "country": country, "country_name": country_name,
+            "state": state, "state_name": state_name,
             "total_features": sum(themes.values()), "themes": themes,
         }, indent=2))
-        datasets.append({"path": folder.name, "code": code, "name": name})
-    # index.json belongs to the repository, not the snapshot: the browser
-    # reads it at the base, next to snapshots.json.
+        datasets.append({"path": f"{folder.parent.name}/{folder.name}",
+                         "code": state, "name": state_name,
+                         "country": country, "country_name": country_name})
+    datasets.sort(key=lambda d: (d["country"], d["name"]))
+    # index.json belongs to the repository, not to `latest`: the browser
+    # reads it at the base.
     (out.parent / "index.json").write_text(json.dumps({"datasets": datasets}, indent=2))
 
 
@@ -885,25 +918,25 @@ STATS = {
     # OIM stats.power_line: length by country and (highest) voltage.
     "power_line_length": """
         SELECT country, voltage_kv, count(*) AS lines, round(sum(length_km), 3) AS length_km
-        FROM read_parquet('{out}/country=*/power_line.parquet')
+        FROM read_parquet('{out}/country=*/state=*/power_line.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.power_plant / power_generator: count and output by source.
     "power_plant_by_source": """
         SELECT country, source, count(*) AS plants,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/country=*/power_plant.parquet')
+        FROM read_parquet('{out}/country=*/state=*/power_plant.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     "power_generator_by_source": """
         SELECT country, source, count(*) AS generators,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/country=*/power_generator.parquet')
+        FROM read_parquet('{out}/country=*/state=*/power_generator.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.substation: count by country and highest voltage.
     "power_substation_by_voltage": """
         SELECT country, voltage_kv, count(*) AS substations
-        FROM read_parquet('{out}/country=*/power_substation.parquet')
+        FROM read_parquet('{out}/country=*/state=*/power_substation.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
 }
 
@@ -926,17 +959,17 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     con.execute(MACROS)
     load(con, pbf, work)
     build_sources(con)
-    load_countries(con, land, eez)
+    load_regions(con, land, eez)
     for table in ("feat", "circuit", "substation", "generator", "plant"):
-        assign_country(con, table)
+        assign_region(con, table)
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
-    # DuckDB partitions as <layer>/country=X/data_0.parquet; the published
-    # layout is country first.
-    files = sorted(staging.glob("*/country=*/*.parquet"))
+    # DuckDB partitions as <layer>/country=X/state=Y/data_0.parquet; the
+    # published layout is region first.
+    files = sorted(staging.glob("*/country=*/state=*/*.parquet"))
     for f in files:
-        dest = out / f.parent.name / f"{f.parent.parent.name}.parquet"
+        dest = out / f.parent.parent.name / f.parent.name / f"{f.parent.parent.parent.name}.parquet"
         rewrite(f, dest)
         verify(con, dest)
     print(f"  {len(files)} files rewritten to {ROW_GROUP_ROWS:,}-row groups and verified")
@@ -944,7 +977,8 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     write_stats(con, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
-        print(f"  {r['layer']:24} {r['rows']:>9,} rows  {r.get('countries', 0):>3} countries")
+        print(f"  {r['layer']:24} {r['rows']:>9,} rows  {r.get('countries', 0):>3} countries"
+              f"  {r.get('regions', 0):>4} regions")
 
 
 def main() -> None:
@@ -958,7 +992,7 @@ def main() -> None:
     b.add_argument("--out-dir", type=Path, required=True)
     b.add_argument("--work-dir", type=Path, required=True)
     b.add_argument("--land", required=True,
-                   help="GAUL 2024 L0 parquet (path or URL)")
+                   help="GAUL 2024 L1 parquet (path or URL)")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
     a = p.parse_args()
