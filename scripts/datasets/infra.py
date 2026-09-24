@@ -17,8 +17,14 @@ full tag map, and a power_other layer for power=* values they do not map.
 Two stages, so the worldwide build can fan out over Geofabrik regions:
 
   filter  one extract -> the infrastructure subset (about 0.4% of the input)
-  build   one (merged) subset -> <out>/<layer>/country=<ISO3>/data_0.parquet
-          plus <out>/stats/*.parquet
+  build   one (merged) subset -> <out>/country=<ISO3>/<layer>.parquet, a
+          _manifest.json per country, <out>/stats/, and index.json in
+          <out>'s parent (the repository base; <out> is a snapshot)
+
+The layout is the parquetry one the OSM dataset uses and GeoPQ Workbench's
+repository browser reads (index.json lists the country folders, each
+_manifest.json its layers): picking a country there loads every layer. One
+layer across countries is `country=*/<layer>.parquet`.
 
 Countries: a feature goes to exactly one country, the one holding a point on
 it (ST_PointOnSurface), from FAO GAUL 2024 L0 on land, else from Marine
@@ -679,7 +685,8 @@ def load_countries(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
     env = f"ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax})"
     con.execute(f"""
         CREATE TEMP TABLE land_src AS
-        SELECT iso3_code AS country, ST_Intersection(geometry, {env}) AS geometry
+        SELECT iso3_code AS country, gaul0_name AS name,
+               ST_Intersection(geometry, {env}) AS geometry
         FROM read_parquet('{land}')
         WHERE bbox.xmax >= {xmin} AND bbox.xmin <= {xmax}
           AND bbox.ymax >= {ymin} AND bbox.ymin <= {ymax}
@@ -688,9 +695,19 @@ def load_countries(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
     con.execute(f"""
         CREATE TEMP TABLE sea_src AS
         SELECT coalesce(iso_ter1, iso_sov1) AS country,
+               coalesce(territory1, "union") AS name,
                ST_Intersection(ST_MakeValid(geom), {env}) AS geometry
         FROM ST_Read('{eez}')
         WHERE ST_Intersects(geom, {env})
+    """)
+    # Land names first: a code both layers know is named the GAUL way.
+    con.execute("""
+        CREATE TABLE country_name AS
+        SELECT country, arg_min(name, src) AS name FROM (
+            SELECT DISTINCT country, name, 0 AS src FROM land_src
+            UNION ALL SELECT DISTINCT country, name, 1 FROM sea_src
+            UNION ALL SELECT '_intl', 'High seas', 2)
+        WHERE country IS NOT NULL GROUP BY country
     """)
     con.execute(f"CREATE TABLE land AS {SUBDIVIDE.format(src='land_src')}")
     con.execute(f"CREATE TABLE sea AS {SUBDIVIDE.format(src='sea_src')}")
@@ -838,29 +855,54 @@ def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
     assert not undeclared, f"{path}: undeclared geometry types {undeclared}"
 
 
+def write_manifests(con: duckdb.DuckDBPyConnection, out: Path) -> None:
+    """A _manifest.json per country folder (its layers and row counts, in
+    LAYERS order) and index.json at the root listing the folders: what the
+    parquetry repository protocol reads."""
+    names = dict(con.execute("SELECT country, name FROM country_name").fetchall())
+    order = {layer.name: i for i, layer in enumerate(LAYERS)}
+    datasets = []
+    for folder in sorted(out.glob("country=*")):
+        code = folder.name.split("=", 1)[1]
+        themes = {}
+        for f in sorted(folder.glob("*.parquet"), key=lambda f: order.get(f.stem, 99)):
+            themes[f.stem] = con.execute(
+                "SELECT sum(row_group_num_rows) FROM (SELECT DISTINCT row_group_id, "
+                "row_group_num_rows FROM parquet_metadata(?))", [str(f)]).fetchone()[0]
+        name = names.get(code, code)
+        (folder / "_manifest.json").write_text(json.dumps({
+            "country": code, "state_name": name,
+            "total_features": sum(themes.values()), "themes": themes,
+        }, indent=2))
+        datasets.append({"path": folder.name, "code": code, "name": name})
+    # index.json belongs to the repository, not the snapshot: the browser
+    # reads it at the base, next to snapshots.json.
+    (out.parent / "index.json").write_text(json.dumps({"datasets": datasets}, indent=2))
+
+
 STATS = {
     # OIM stats.power_line: length by country and (highest) voltage.
     "power_line_length": """
         SELECT country, voltage_kv, count(*) AS lines, round(sum(length_km), 3) AS length_km
-        FROM read_parquet('{out}/power_line/*/*.parquet')
+        FROM read_parquet('{out}/country=*/power_line.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.power_plant / power_generator: count and output by source.
     "power_plant_by_source": """
         SELECT country, source, count(*) AS plants,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/power_plant/*/*.parquet')
+        FROM read_parquet('{out}/country=*/power_plant.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     "power_generator_by_source": """
         SELECT country, source, count(*) AS generators,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/power_generator/*/*.parquet')
+        FROM read_parquet('{out}/country=*/power_generator.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.substation: count by country and highest voltage.
     "power_substation_by_voltage": """
         SELECT country, voltage_kv, count(*) AS substations
-        FROM read_parquet('{out}/power_substation/*/*.parquet')
+        FROM read_parquet('{out}/country=*/power_substation.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
 }
 
@@ -889,12 +931,15 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
-    files = sorted(staging.rglob("*.parquet"))
+    # DuckDB partitions as <layer>/country=X/data_0.parquet; the published
+    # layout is country first.
+    files = sorted(staging.glob("*/country=*/*.parquet"))
     for f in files:
-        dest = out / f.relative_to(staging)
+        dest = out / f.parent.name / f"{f.parent.parent.name}.parquet"
         rewrite(f, dest)
         verify(con, dest)
     print(f"  {len(files)} files rewritten to {ROW_GROUP_ROWS:,}-row groups and verified")
+    write_manifests(con, out)
     write_stats(con, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
