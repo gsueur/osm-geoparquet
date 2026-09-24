@@ -12,13 +12,21 @@ covering, so a reader can prune row groups instead of downloading 775 MB.
   L2  45,524 units   second-level (districts, departments)
   L0  countries      DERIVED HERE, see below
 
-Each layer is written twice: once as a single whole-world file, for anyone
-who wants one download, and once split per country under
-country=<iso3_code>/, for readers that want a small file (the map viewer,
-a bbox query on one country). DuckDB will not write row groups under 2,048
-rows, so a whole-world L1 is two groups of ~185 MB and L0 is one group of
-286 MB; a bbox filter cannot skip anything, and a browser has to fetch the
-whole group. The per-country files are the answer to that.
+Each layer is written twice: once as a single whole-world file
+(GAUL_2024_<layer>.parquet), for anyone who wants one download, and once
+split per country under country=<iso3_code>/, for readers that want a small
+file (the map viewer, a bbox query on one country). DuckDB will not write
+row groups under 2,048 rows, so a whole-world L1 from here is two groups of
+~185 MB and L0 one group of 286 MB, and a bbox filter cannot skip anything.
+
+The published whole-world L1 and L2 are therefore NOT this script's output:
+on 2026-09-23 they were replaced by hand with files written by
+geopq-workbench (pyarrow + geoarrow, 15 and 24 row groups of at most 42 MB,
+same rows, GAUL codes cast back to BIGINT). GAUL 2024 is a static release
+and this workflow is dispatch-only: re-running it with stage=publish would
+put this script's larger-grouped files back. Writing the whole-world files
+through pyarrow + geoarrow-pyarrow here, one small row group at a time,
+is the way to make a re-run safe; it is not done yet.
 
 FAO does not publish an L0. The GAUL 2024 package stops at L1, and a country
 layer is a boundary statement rather than a statistical convenience, so its
@@ -204,6 +212,12 @@ def row_group_rows(feature_count: int, source_bytes: int) -> int:
     return max(SMALLEST_GROUP_REQUEST, min(20_000, int(48 * 1024 * 1024 / avg)))
 
 
+def whole_world_file(name: str) -> str:
+    """GAUL_2024_L1.parquet: the whole-world file of a layer. The per-country
+    files keep the bare layer name inside their country=<iso3>/ directory."""
+    return f"GAUL_{VERSION}_{name}.parquet"
+
+
 def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
                 feature_count: int, source_bytes: int, *,
                 out: Path | None = None, quiet: bool = False) -> dict:
@@ -217,7 +231,7 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
     if count == 0:
         sys.exit(f"{name}: no features, refusing to write an empty layer")
 
-    out = out or out_dir / f"{name}.parquet"
+    out = out or out_dir / whole_world_file(name)
     out.parent.mkdir(parents=True, exist_ok=True)
     cols = [c for c in con.execute("DESCRIBE layer").fetchall() if c[0] != "geom"]
     attrs = ",\n                ".join(c[0] for c in cols)
@@ -255,7 +269,7 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
     if not quiet:
         print(f"  {name}: {count:,} features, {size/1e6:.1f} MB, "
               f"{groups} row group(s), largest {largest/1e6:.1f} MB{note}")
-    return {"name": name, "features": count, "bytes": size,
+    return {"name": name, "file": out.name, "features": count, "bytes": size,
             "row_groups": groups, "largest_row_group_bytes": largest,
             "sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
             "source": source}
@@ -409,7 +423,7 @@ def main() -> None:
                                        args.out_dir))
 
     verify(con, args.out_dir,
-           [l["name"] for l in layers]
+           [Path(l["file"]).stem for l in layers]
            + [f"{p['key']}={e['country']}/{p['name']}"
               for p in partitions for e in p["entries"]])
 
