@@ -23,7 +23,7 @@ Two stages, so the worldwide build can fan out over Geofabrik regions:
 
   filter  one extract -> the infrastructure subset (about 0.4% of the input)
   build   one (merged) subset ->
-          <out>/country=<ISO2>/state=<GAUL L1 code>/<layer>.parquet, a
+          <out>/country=<ISO2>/state=<GAUL L1 name slug>/<layer>.parquet, a
           _manifest.json per folder, <out>/stats/, and index.json in
           <out>'s parent (the repository base; <out> is `latest`, the only
           version published: no snapshots.json)
@@ -35,9 +35,10 @@ loads all its states. One layer everywhere is
 `country=*/state=*/<layer>.parquet`.
 
 Regions: a feature goes to exactly one folder, the one holding a point on it
-(ST_PointOnSurface). On land that is its FAO GAUL 2024 L1 unit: GAUL has no
-ISO 3166-2 codes, so `state` is the GAUL L1 code and index.json carries the
-name. Offshore it is the country of Marine Regions' union of land and EEZ,
+(ST_PointOnSurface). On land that is its FAO GAUL 2024 L1 unit, the
+folder named after it so a listing reads (`state=texas`; GAUL has no ISO
+3166-2 codes, and matching names to them fails for a third of the units),
+with the GAUL L1 code in index.json and the manifest. Offshore it is the country of Marine Regions' union of land and EEZ,
 with `state=_offshore`; elsewhere `country=_intl/state=_intl` (high seas).
 Countries are ISO 3166-1 alpha-2 like the OSM dataset; GAUL's non-ISO codes
 for disputed areas (xJK, xAB, ...) are kept as they are.
@@ -695,13 +696,34 @@ def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
                max(ST_XMax(geometry)), max(ST_YMax(geometry)) FROM feat
     """).fetchone()
     env = f"ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax})"
+    # State folders are named after the unit, so a listing reads: ASCII,
+    # lower case, hyphens (`provence-alpes-cote-d-azur`). Slugged over all
+    # of GAUL, not only this extract, so a unit's folder does not depend on
+    # what else was built; the few names repeated within a country (GAUL's
+    # "Administrative unit not available", two Saint-Louis) take their GAUL
+    # code as a suffix.
+    con.execute(f"""
+        CREATE TEMP TABLE state_slug AS
+        WITH s AS (
+            SELECT DISTINCT iso3_code, gaul1_code,
+                   trim(regexp_replace(strip_accents(lower(gaul1_name)), '[^a-z0-9]+', '-', 'g'),
+                        '-') AS slug
+            FROM read_parquet('{land}')
+        )
+        SELECT gaul1_code,
+               CASE WHEN count(*) OVER (PARTITION BY iso3_code, slug) > 1
+                    THEN slug || '-' || gaul1_code ELSE slug END AS slug
+        FROM s
+    """)
     # `region` is `<country>/<state>`, the folder a feature lands in.
     con.execute(f"""
         CREATE TEMP TABLE land_src AS
-        SELECT coalesce(iso.iso2, l.iso3_code) || '/' || l.gaul1_code AS region,
+        SELECT coalesce(iso.iso2, l.iso3_code) || '/' || ss.slug AS region,
                l.gaul0_name AS country_name, l.gaul1_name AS state_name,
+               l.gaul1_code AS gaul1_code,
                ST_Intersection(l.geometry, {env}) AS geometry
         FROM read_parquet('{land}') l LEFT JOIN iso ON iso.iso3 = l.iso3_code
+        JOIN state_slug ss USING (gaul1_code)
         WHERE l.bbox.xmax >= {xmin} AND l.bbox.xmin <= {xmax}
           AND l.bbox.ymax >= {ymin} AND l.bbox.ymin <= {ymax}
           AND ST_Intersects(l.geometry, {env})
@@ -710,7 +732,7 @@ def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
         CREATE TEMP TABLE sea_src AS
         SELECT coalesce(iso.iso2, e.code) || '/_offshore' AS region,
                e.name AS country_name, e.name || ' (offshore)' AS state_name,
-               e.geometry
+               NULL::BIGINT AS gaul1_code, e.geometry
         FROM (SELECT coalesce(iso_ter1, iso_sov1) AS code,
                      coalesce(territory1, "union") AS name,
                      ST_Intersection(ST_MakeValid(geom), {env}) AS geometry
@@ -722,16 +744,17 @@ def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
     con.execute("""
         CREATE TABLE region_name AS
         WITH r AS (
-            SELECT DISTINCT region, country_name, state_name, 0 AS src FROM land_src
-            UNION ALL SELECT DISTINCT region, country_name, state_name, 1 FROM sea_src
+            SELECT DISTINCT region, country_name, state_name, gaul1_code, 0 AS src FROM land_src
+            UNION ALL SELECT DISTINCT region, country_name, state_name, gaul1_code, 1 FROM sea_src
         ), c AS (
             SELECT split_part(region, '/', 1) AS country, arg_min(country_name, src) AS name
             FROM r GROUP BY 1
         )
         SELECT r.region, c.name AS country_name,
-               CASE WHEN r.src = 1 THEN c.name || ' (offshore)' ELSE r.state_name END AS state_name
+               CASE WHEN r.src = 1 THEN c.name || ' (offshore)' ELSE r.state_name END AS state_name,
+               r.gaul1_code
         FROM r JOIN c ON c.country = split_part(r.region, '/', 1)
-        UNION ALL SELECT '_intl/_intl', 'High seas', 'High seas'
+        UNION ALL SELECT '_intl/_intl', 'High seas', 'High seas', NULL
     """)
     con.execute(f"CREATE TABLE land AS {SUBDIVIDE.format(src='land_src')}")
     con.execute(f"CREATE TABLE sea AS {SUBDIVIDE.format(src='sea_src')}")
@@ -887,14 +910,15 @@ def write_manifests(con: duckdb.DuckDBPyConnection, out: Path) -> None:
     """A _manifest.json per folder (its layers and row counts, in LAYERS
     order) and index.json at the repository base listing the folders by
     country and name: what the parquetry repository protocol reads."""
-    names = {r: (c, s) for r, c, s in con.execute(
-        "SELECT region, country_name, state_name FROM region_name").fetchall()}
+    names = {r: (c, s, g) for r, c, s, g in con.execute(
+        "SELECT region, country_name, state_name, gaul1_code FROM region_name").fetchall()}
     order = {layer.name: i for i, layer in enumerate(LAYERS)}
     datasets = []
     for folder in out.glob("country=*/state=*"):
         country = folder.parent.name.split("=", 1)[1]
         state = folder.name.split("=", 1)[1]
-        country_name, state_name = names.get(f"{country}/{state}", (country, state))
+        country_name, state_name, gaul1_code = names.get(
+            f"{country}/{state}", (country, state, None))
         themes = {}
         for f in sorted(folder.glob("*.parquet"), key=lambda f: order.get(f.stem, 99)):
             themes[f.stem] = con.execute(
@@ -902,12 +926,13 @@ def write_manifests(con: duckdb.DuckDBPyConnection, out: Path) -> None:
                 "row_group_num_rows FROM parquet_metadata(?))", [str(f)]).fetchone()[0]
         (folder / "_manifest.json").write_text(json.dumps({
             "country": country, "country_name": country_name,
-            "state": state, "state_name": state_name,
+            "state": state, "state_name": state_name, "gaul1_code": gaul1_code,
             "total_features": sum(themes.values()), "themes": themes,
         }, indent=2))
         datasets.append({"path": f"{folder.parent.name}/{folder.name}",
                          "code": state, "name": state_name,
-                         "country": country, "country_name": country_name})
+                         "country": country, "country_name": country_name,
+                         "gaul1_code": gaul1_code})
     datasets.sort(key=lambda d: (d["country"], d["name"]))
     # index.json belongs to the repository, not to `latest`: the browser
     # reads it at the base.
