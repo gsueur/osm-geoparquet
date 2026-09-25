@@ -10,9 +10,12 @@ authors = [
 ]
 dependencies = [
     "duckdb>=1.1.0",
+    "geoarrow-pyarrow>=0.2",
     "geoparquet-io>=0.2.0",
     # Portolan validator for the catalog (scripts/catalog.py). Pinned exactly:
     # a newer rashid can add or retire rules, which should be a deliberate bump.
+    "pyarrow>=22",
+    "pycountry>=24",
     "rashid==0.1.8",
     "rich>=13.0",
 ]
