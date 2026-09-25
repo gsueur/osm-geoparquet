@@ -1,0 +1,273 @@
+# Build and publish OSM infrastructure (power, telecoms, oil and gas, water:
+# the content of Open Infrastructure Map) for the whole planet, to
+# parquetry:parquetry/osm-infrastructure/latest/.
+#
+# The planet (~89 GB) does not fit a hosted runner, and osmium tags-filter
+# reads its input twice, so it cannot stream. So:
+#
+#   plan    Geofabrik's top-level regions (africa ... south-america).
+#   filter  one job per region: download, keep the infrastructure (~0.5%),
+#           upload the subset as an artifact.
+#   build   merge the subsets (osmium merge writes an object present in two
+#           regions once), build every layer, verify every file, and with
+#           stage=publish replace latest/.
+#
+# Only latest/ is published: no dated snapshots, no snapshots.json. Features
+# that touch no Geofabrik region (mid-ocean cable nodes, some far-offshore
+# platforms) are missing; Geofabrik keeps complete ways, so a cable that
+# lands somewhere arrives whole.
+#
+#   build    everything but the upload; the output is kept as an artifact.
+#   publish  the same, then replace latest/ and the repository files.
+#
+# Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
+
+name: dataset-osm-infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build verifies and keeps the output as an artifact; publish also replaces latest/"
+        type: choice
+        options: [build, publish]
+        default: build
+      regions:
+        description: "Space-separated Geofabrik region ids to limit the run to, e.g. 'central-america' (default: all). Never publish a partial run."
+        required: false
+        default: ""
+
+concurrency:
+  group: dataset-osm-infrastructure
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/osm-infrastructure
+  PUBLIC: https://parquetry.geomermaids.com/osm-infrastructure
+  GAUL_L1: https://parquetry.geomermaids.com/gaul/2024/GAUL_2024_L1.parquet
+  EEZ_WFS: https://geo.vliz.be/geoserver/MarineRegions/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=MarineRegions:eez_land&outputFormat=application/json
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Geofabrik top-level regions
+        id: plan
+        run: |
+          curl -fsSL --retry 3 https://download.geofabrik.de/index-v1-nogeom.json -o index.json
+          python3 - "${{ inputs.regions }}" <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, sys
+          only = set(sys.argv[1].split())
+          regions = [{"id": p["id"], "url": p["urls"]["pbf"]}
+                     for p in (f["properties"] for f in json.load(open("index.json"))["features"])
+                     if "parent" not in p and (not only or p["id"] in only)]
+          missing = only - {r["id"] for r in regions}
+          if missing or not regions:
+              sys.exit(f"unknown regions: {sorted(missing)}")
+          print("matrix=" + json.dumps({"include": regions}))
+          EOF
+          cat "$GITHUB_OUTPUT"
+
+  filter:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    name: filter ${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work dir on the runner's big scratch disk
+        # / has ~14 GB free on hosted runners; /mnt has ~65 GB. Europe is 35 GB.
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends osmium-tool
+          osmium --version | sed -n 1p
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Download ${{ matrix.id }} from Geofabrik
+        run: |
+          curl -fL --retry 5 --retry-delay 30 --retry-all-errors -sS \
+            -A "osm-geoparquet-infrastructure/1.0 (+https://geoparquet.geomermaids.com/)" \
+            -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
+          ls -lh "$WORK/source.osm.pbf"
+          osmium fileinfo -g header.option.osmosis_replication_timestamp "$WORK/source.osm.pbf" \
+            | tee "$WORK/${{ matrix.id }}.timestamp"
+
+      - name: Keep the infrastructure
+        run: |
+          start=$(date +%s)
+          uv run --project scripts python scripts/datasets/infra.py filter \
+            "$WORK/source.osm.pbf" "$WORK/${{ matrix.id }}.osm.pbf"
+          echo "filtered in $(( $(date +%s) - start )) s"
+          ls -lh "$WORK/${{ matrix.id }}.osm.pbf"
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: infra-${{ matrix.id }}
+          path: |
+            ${{ env.WORK }}/${{ matrix.id }}.osm.pbf
+            ${{ env.WORK }}/${{ matrix.id }}.timestamp
+          retention-days: 3
+          compression-level: 0   # already compressed
+          if-no-files-found: error
+
+  build:
+    needs: filter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work dir on the runner's big scratch disk
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends osmium-tool
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          osmium --version | sed -n 1p; rclone version | sed -n 1p
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: infra-*
+          path: ${{ env.WORK }}/subsets
+          merge-multiple: true
+
+      - name: Merge the regions
+        run: |
+          ls -lh "$WORK/subsets"
+          osmium merge "$WORK"/subsets/*.osm.pbf -o "$WORK/planet-infra.osm.pbf" --overwrite
+          ls -lh "$WORK/planet-infra.osm.pbf"
+          osmium fileinfo -e "$WORK/planet-infra.osm.pbf" | grep -E "Number of (nodes|ways|relations)"
+
+      - name: Marine Regions land + EEZ union
+        run: |
+          curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors -o "$WORK/eez_land.json" "$EEZ_WFS"
+          ls -lh "$WORK/eez_land.json"
+
+      - name: Build and verify every file
+        working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
+        run: |
+          /usr/bin/time -v uv run --project "$GITHUB_WORKSPACE/scripts" \
+            python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" build "$WORK/planet-infra.osm.pbf" \
+            --out-dir "$WORK/out/latest" --work-dir "$WORK/build" \
+            --land "$GAUL_L1" --eez "$WORK/eez_land.json" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
+          rm -rf "$WORK/build"
+          du -sh "$WORK/out/latest"
+          echo "files: $(find "$WORK/out/latest" -name '*.parquet' -path '*country=*' | wc -l)"
+          echo "folders: $(find "$WORK/out/latest" -name _manifest.json | wc -l)"
+
+      - name: ATTRIBUTION.txt
+        run: |
+          stamps=$(for f in "$WORK"/subsets/*.timestamp; do
+            printf '    %-18s %s\n' "$(basename "$f" .timestamp)" "$(cat "$f")"; done)
+          cat > "$WORK/out/ATTRIBUTION.txt" <<EOF
+          OpenStreetMap infrastructure in GeoParquet: PREVIEW
+          ===================================================
+
+          Worldwide power, telecoms, oil and gas, and water infrastructure from
+          OpenStreetMap. A preview: layout, columns and values may still change.
+
+          Data
+            (c) OpenStreetMap contributors, available under the Open Database
+            License (ODbL) 1.0: https://www.openstreetmap.org/copyright
+            This is a derived database and is itself available under the ODbL.
+            Source: Geofabrik's top-level extracts (https://download.geofabrik.de/),
+            as of:
+          $stamps
+
+          Layers, attributes and derived values
+            Follow the data model of Open Infrastructure Map
+            (https://openinframap.org, code at github.com/openinframap/openinframap,
+            BSD-style licence): its layers, the attributes its map serves, and its
+            rules for voltages, outputs, solar estimates and pipeline categories.
+            Not affiliated with or endorsed by Open Infrastructure Map.
+
+          Partitions (the country= and state= keys)
+            Land: FAO GAUL 2024 level 1; state= is the unit's name as a slug
+            (state=texas), and index.json and each _manifest.json give its GAUL code
+            (https://parquetry.geomermaids.com/gaul/2024/ATTRIBUTION.txt).
+              FAO. 2024. Global Administrative Unit Layers (GAUL).
+              [Accessed on $(date -u +'%-d %B %Y')]. https://data.apps.fao.org/?lang=en.
+              Licence: CC-BY-4.0
+            Offshore (state=_offshore): Flanders Marine Institute (2024). Union of
+            the ESRI Country shapefile and the Exclusive Economic Zones, via the
+            Marine Regions WFS (MarineRegions:eez_land). https://www.marineregions.org.
+            Licence: CC BY 4.0.
+            High seas: country=_intl/state=_intl.
+            The keys are a convenience for partitioning, assigned from one point on
+            each feature. They are not a statement on any boundary or claim.
+          EOF
+          cat "$WORK/out/ATTRIBUTION.txt"
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.stage == 'build'
+        with:
+          name: osm-infrastructure
+          path: ${{ env.WORK }}/out
+          retention-days: 3
+
+      - name: Publish
+        if: inputs.stage == 'publish'
+        run: |
+          [ -z "${{ inputs.regions }}" ] || { echo "Refusing to publish a partial run."; exit 1; }
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          # latest/ is the only version: sync replaces it, removing folders
+          # the new build no longer has. Data first, then the files that
+          # point at it.
+          rclone sync "$WORK/out/latest" "$REMOTE/latest" \
+            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
+            --transfers 16 --checkers 32 --stats 60s --stats-one-line
+          rclone copy "$WORK/out" "$REMOTE" --max-depth 1 \
+            --include index.json --include ATTRIBUTION.txt --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: inputs.stage == 'publish'
+        run: |
+          set +e
+          fail=0
+          for f in index.json ATTRIBUTION.txt \
+                   latest/country=US/state=texas/_manifest.json \
+                   latest/country=US/state=texas/power_line.parquet \
+                   latest/country=DE/state=bayern/power_generator.parquet \
+                   latest/country=FR/state=ile-de-france/power_substation.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          exit $fail

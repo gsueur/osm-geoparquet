@@ -454,12 +454,13 @@ def relations_jsonl(pbf: Path, dest: Path) -> int:
     """Circuit and site relations, with their members, as JSON lines.
     osmium export builds no geometry for them (only multipolygons), so they
     are read from OPL and assembled in SQL."""
-    out = subprocess.run([OSMIUM, "cat", str(pbf), "-t", "relation", "-f",
-                          "opl,add_metadata=false"],
-                         check=True, capture_output=True, text=True).stdout
+    # Streamed: worldwide, the relations' OPL is too big to hold as one string.
+    proc = subprocess.Popen([OSMIUM, "cat", str(pbf), "-t", "relation", "-f",
+                             "opl,add_metadata=false"], stdout=subprocess.PIPE, text=True)
     n = 0
     with dest.open("w") as f:
-        for line in out.splitlines():
+        for line in proc.stdout:
+            line = line.rstrip("\n")
             parts = line.split(" ")
             rid = int(parts[0][1:])
             tags, members = {}, []
@@ -477,6 +478,8 @@ def relations_jsonl(pbf: Path, dest: Path) -> int:
                 continue
             f.write(json.dumps({"osm_id": rid, "tags": tags, "members": members}) + "\n")
             n += 1
+    if proc.wait():
+        raise subprocess.CalledProcessError(proc.returncode, proc.args)
     return n
 
 
