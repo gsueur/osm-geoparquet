@@ -48,9 +48,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -503,6 +505,7 @@ def load(con: duckdb.DuckDBPyConnection, pbf: Path, work: Path) -> None:
                                         'geometry': 'JSON'}}))
         WHERE geometry IS NOT NULL
     """)
+    jsonseq.unlink()   # tens of GB worldwide, and loaded now
     # One geometry per element: see LINEAR.
     con.execute(f"""
         CREATE TABLE feat AS SELECT * FROM raw
@@ -599,7 +602,8 @@ def build_sources(con: duckdb.DuckDBPyConnection) -> None:
                CASE WHEN power_mw(tags['generator:output:electricity']) IS NOT NULL THEN
                         power_mw(tags['generator:output:electricity'])
                     WHEN solar AND to_int(tags['generator:solar:modules']) IS NOT NULL THEN
-                        to_int(tags['generator:solar:modules']) * 250 / 1e6
+                        -- BIGINT: someone tags 61,158,751 modules, and x 250 overflows INT32.
+                        to_int(tags['generator:solar:modules'])::BIGINT * 250 / 1e6
                     WHEN solar AND ST_Dimension(geometry) = 2 THEN
                         ST_Area_Spheroid(ST_FlipCoordinates(geometry)) * 150 / 1e6
                     WHEN solar AND ST_Dimension(geometry) = 0 THEN 0.004
@@ -668,25 +672,45 @@ def build_sources(con: duckdb.DuckDBPyConnection) -> None:
 # Point-in-polygon cost follows the vertices of every candidate whose box holds
 # the point, and a country's box can be most of a hemisphere (Denmark's,
 # through Greenland, covers the Netherlands with 1.1 M vertices). DuckDB has
-# no ST_Subdivide, so parts are split out and large ones clipped to a 1 degree
-# grid: every candidate is then small and local.
-SUBDIVIDE = """
-    WITH parts AS (
-        SELECT region, unnest(ST_Dump(geometry)).geom AS geometry FROM {src}
-    ), big AS (
-        SELECT region, geometry,
-               floor(ST_XMin(geometry))::INT AS x0, ceil(ST_XMax(geometry))::INT AS x1,
-               floor(ST_YMin(geometry))::INT AS y0, ceil(ST_YMax(geometry))::INT AS y1
-        FROM parts WHERE ST_NPoints(geometry) > 2000
-    )
-    SELECT region, geometry FROM parts WHERE ST_NPoints(geometry) <= 2000
-    UNION ALL
-    SELECT region, piece AS geometry FROM (
-        SELECT region, ST_Intersection(geometry, ST_MakeEnvelope(x, y, x + 1, y + 1)) AS piece
-        FROM big, range(x0, x1) AS gx(x), range(y0, y1) AS gy(y)
-        WHERE ST_Intersects(geometry, ST_MakeEnvelope(x, y, x + 1, y + 1))
-    ) WHERE NOT ST_IsEmpty(piece) AND ST_Dimension(piece) = 2
-"""
+# no ST_Subdivide, so this is one: parts are split out, and any part over
+# MAX_POINTS is cut into the four quarters of its box, round after round,
+# until every candidate is small and local. Quartering copies a polygon four
+# times per round; a fixed grid copied it once per cell, and Russia's and
+# Nunavut's GAUL units span hundreds of cells (9.4 GB and out of memory on
+# the planet build).
+MAX_POINTS = 2000
+
+
+def subdivide(con: duckdb.DuckDBPyConnection, src: str, dest: str) -> None:
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE sd_todo AS
+        SELECT region, unnest(ST_Dump(geometry)).geom AS geometry FROM {src}""")
+    con.execute(f"CREATE TABLE {dest} AS SELECT region, geometry FROM sd_todo LIMIT 0")
+    for _ in range(40):
+        con.execute(f"""INSERT INTO {dest} SELECT region, geometry FROM sd_todo
+                        WHERE ST_NPoints(geometry) <= {MAX_POINTS}""")
+        con.execute(f"""CREATE OR REPLACE TEMP TABLE sd_todo AS
+            WITH big AS (
+                SELECT region, geometry,
+                       ST_XMin(geometry) AS x0, ST_YMin(geometry) AS y0,
+                       ST_XMax(geometry) AS x1, ST_YMax(geometry) AS y1
+                FROM sd_todo WHERE ST_NPoints(geometry) > {MAX_POINTS}
+            ), cut AS (
+                SELECT region, ST_Intersection(geometry, ST_MakeEnvelope(
+                           CASE WHEN q % 2 = 0 THEN x0 ELSE (x0 + x1) / 2 END,
+                           CASE WHEN q < 2 THEN y0 ELSE (y0 + y1) / 2 END,
+                           CASE WHEN q % 2 = 0 THEN (x0 + x1) / 2 ELSE x1 END,
+                           CASE WHEN q < 2 THEN (y0 + y1) / 2 ELSE y1 END)) AS piece
+                FROM big, range(4) AS t(q)
+            )
+            SELECT region, geometry FROM (
+                SELECT region, unnest(ST_Dump(piece)).geom AS geometry FROM cut
+                WHERE NOT ST_IsEmpty(piece))
+            WHERE ST_Dimension(geometry) = 2""")
+        if not con.execute("SELECT count(*) FROM sd_todo").fetchone()[0]:
+            break
+    else:
+        raise RuntimeError(f"{src}: pieces still over {MAX_POINTS} points after 40 rounds")
+    con.execute("DROP TABLE sd_todo")
 
 
 def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
@@ -759,8 +783,8 @@ def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
         FROM r JOIN c ON c.country = split_part(r.region, '/', 1)
         UNION ALL SELECT '_intl/_intl', 'High seas', 'High seas', NULL
     """)
-    con.execute(f"CREATE TABLE land AS {SUBDIVIDE.format(src='land_src')}")
-    con.execute(f"CREATE TABLE sea AS {SUBDIVIDE.format(src='sea_src')}")
+    subdivide(con, "land_src", "land")
+    subdivide(con, "sea_src", "sea")
 
 
 def assign_region(con: duckdb.DuckDBPyConnection, table: str) -> None:
@@ -812,12 +836,19 @@ def layer_select(layer: Layer) -> str:
 
 
 def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> dict:
-    con.execute(f"CREATE OR REPLACE TEMP TABLE l AS {layer_select(layer)}")
-    n, types, xmin, ymin, xmax, ymax = con.execute("""
+    # Stats from the source rows, and the layer written straight from its
+    # query: materialising it first put every layer on disk twice (a temp
+    # table lives in the temp directory, and the sort spills beside it), which
+    # ran out of disk on the planet.
+    t0 = time.monotonic()
+    n, types, xmin, ymin, xmax, ymax, countries, regions = con.execute(f"""
         SELECT count(*), list(DISTINCT ST_GeometryType(geometry)::VARCHAR),
                min(ST_XMin(geometry)), min(ST_YMin(geometry)),
-               max(ST_XMax(geometry)), max(ST_YMax(geometry)) FROM l""").fetchone()
+               max(ST_XMax(geometry)), max(ST_YMax(geometry)),
+               count(DISTINCT country), count(DISTINCT (country, state))
+        FROM {layer.source} WHERE {layer.where}""").fetchone()
     if not n:
+        print(f"  {layer.name}: empty", flush=True)
         return {"layer": layer.name, "rows": 0}
     # Per-file extents differ by partition, so the `geo` block declares the
     # geometry types (a superset per file, which the spec allows) and the
@@ -833,15 +864,15 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
     }).replace("'", "''")
     dest = staging / layer.name
     con.execute(f"""
-        COPY (SELECT * FROM l ORDER BY country, state,
+        COPY ({layer_select(layer)} ORDER BY country, state,
               ST_Hilbert(geometry, ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
         TO '{dest}' (FORMAT PARQUET, PARTITION_BY (country, state), WRITE_PARTITION_COLUMNS true,
                      OVERWRITE_OR_IGNORE, GEOPARQUET_VERSION 'NONE',
                      COMPRESSION ZSTD, COMPRESSION_LEVEL 15, ROW_GROUP_SIZE 1048576,
                      KV_METADATA {{geo: '{geo}'}})
     """)
-    countries, regions = con.execute(
-        "SELECT count(DISTINCT country), count(DISTINCT (country, state)) FROM l").fetchone()
+    print(f"  {layer.name}: {n:,} rows in {regions:,} folders, {time.monotonic() - t0:.0f} s",
+          flush=True)
     return {"layer": layer.name, "group": layer.group, "rows": n,
             "countries": countries, "regions": regions}
 
@@ -984,6 +1015,15 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     con = duckdb.connect(str(work / "infra.duckdb"))
     con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
     con.execute(f"SET temp_directory = '{work}/tmp'")
+    # DuckDB's default (80% of RAM) left no room on a 16 GB runner: the
+    # planet build peaked at 13.8 GB while loading. A lower cap makes it
+    # spill to disk sooner, and insertion order is never relied on here
+    # (every write orders explicitly).
+    # INFRA_MEMORY_LIMIT (e.g. 8800MB) overrides it, to rehearse a runner locally.
+    ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    limit = os.environ.get("INFRA_MEMORY_LIMIT") or f"{int(ram * 0.55 / 2**20)}MB"
+    con.execute(f"SET memory_limit = '{limit}'")
+    con.execute("SET preserve_insertion_order = false")
     con.execute(MACROS)
     load(con, pbf, work)
     build_sources(con)
