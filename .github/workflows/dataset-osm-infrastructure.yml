@@ -186,6 +186,36 @@ jobs:
           curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors -o "$WORK/eez_land.json" "$EEZ_WFS"
           ls -lh "$WORK/eez_land.json"
 
+      # EIA-860M, the monthly inventory of US generators of 1 MW or more:
+      # the build adds the operating plants OSM lacks. EIA's page lists
+      # placeholder links for months not yet published (they answer 503), so
+      # the newest link that serves a real file wins. No file, no build:
+      # latest/ keeps last week rather than silently losing those plants.
+      - name: EIA-860M, newest month
+        run: |
+          python3 - <<'EOF'
+          import re, urllib.request, os
+          base = "https://www.eia.gov/electricity/data/eia860m/"
+          ua = {"User-Agent": "osm-geoparquet-infrastructure/1.0 (+https://geoparquet.geomermaids.com/)"}
+          page = urllib.request.urlopen(urllib.request.Request(base, headers=ua)).read().decode()
+          months = "january february march april may june july august september october november december".split()
+          links = set(re.findall(r'(?:archive/)?xls/([a-z]+)_generator(\d{4})\.xlsx', page))
+          ranked = sorted(((int(y), months.index(m), m, y) for m, y in links if m in months), reverse=True)
+          for _, _, m, y in ranked:
+              for path in (f"xls/{m}_generator{y}.xlsx", f"archive/xls/{m}_generator{y}.xlsx"):
+                  try:
+                      r = urllib.request.urlopen(urllib.request.Request(base + path, headers=ua), timeout=120)
+                      data = r.read()
+                  except Exception:
+                      continue
+                  if len(data) > 1_000_000:
+                      open(os.environ["WORK"] + "/eia860m.xlsx", "wb").write(data)
+                      open(os.environ["WORK"] + "/eia_month.txt", "w").write(f"{m.capitalize()} {y}")
+                      print(f"EIA-860M {m} {y}: {len(data):,} bytes")
+                      raise SystemExit(0)
+          raise SystemExit("no EIA-860M workbook could be downloaded")
+          EOF
+
       - name: Build and verify every file
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         env:
@@ -198,7 +228,8 @@ jobs:
           /usr/bin/time -v uv run --project "$GITHUB_WORKSPACE/scripts" \
             python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" build "$WORK/planet-infra.osm.pbf" \
             --out-dir "$WORK/out/latest" --work-dir "$WORK/build" \
-            --land "$GAUL_L1" --eez "$WORK/eez_land.json" 2> >(tee "$WORK/time.txt" >&2)
+            --land "$GAUL_L1" --eez "$WORK/eez_land.json" --eia "$WORK/eia860m.xlsx" \
+            2> >(tee "$WORK/time.txt" >&2)
           grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
           rm -rf "$WORK/build"
           du -sh "$WORK/out/latest"
@@ -222,6 +253,13 @@ jobs:
             Source: Geofabrik's top-level extracts (https://download.geofabrik.de/),
             as of:
           $stamps
+
+          US power plants OSM does not have (origin = 'eia' in power_plant)
+            U.S. Energy Information Administration, Preliminary Monthly Electric
+            Generator Inventory (EIA-860M), $(cat "$WORK/eia_month.txt" 2>/dev/null)
+            https://www.eia.gov/electricity/data/eia860m/. Public domain (U.S.
+            federal government work). Coverage of EIA's plants by OSM, and what
+            was added: latest/_coverage.json.
 
           Layers, attributes and derived values
             Follow the data model of Open Infrastructure Map

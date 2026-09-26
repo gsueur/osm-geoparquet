@@ -88,6 +88,14 @@ PROVIDERS = [
         "roles": ["processor"],
     },
     {
+        "name": "U.S. Energy Information Administration (EIA)",
+        "description": "Publishes EIA-860M, the monthly inventory of US generators; the "
+                       "operating plants OpenStreetMap lacks are added from it (public "
+                       "domain).",
+        "url": "https://www.eia.gov/electricity/data/eia860m/",
+        "roles": ["producer"],
+    },
+    {
         "name": "Geomermaids",
         "description": "Extracts the infrastructure, derives the typed columns following "
                        "Open Infrastructure Map's data model, and maintains and hosts "
@@ -118,7 +126,9 @@ LAYER_DOCS = {
                          "merged into one feature, and the circuits ending there are listed."),
     "power_plant": ("Power plants",
                     "Power plants, with source, method and output in MW, tagged or "
-                    "estimated from their generators (and, for solar farms, their area)."),
+                    "estimated from their generators (and, for solar farms, their area). "
+                    "In the US, completed with the operating plants EIA-860M reports and "
+                    "OpenStreetMap lacks (origin = 'eia')."),
     "power_generator": ("Generators",
                         "Individual generators (wind turbines, solar panels, hydro units), "
                         "with source, method and output in MW, tagged or estimated."),
@@ -180,7 +190,11 @@ GROUPS = {
 
 COMMON_DOCS = {
     "osm_id": "OSM element id. With osm_type, the key back to openstreetmap.org.",
-    "osm_type": "OSM element type: node, way or relation.",
+    "osm_type": "OSM element type: node, way or relation. NULL on rows from another "
+                "source (origin).",
+    "origin": "Where the row comes from: osm, or eia for a US power plant the EIA-860M "
+              "inventory reports and OpenStreetMap does not have (a point at EIA's "
+              "coordinates, no osm_id and no tags; see _coverage.json).",
     "country": "ISO 3166-1 alpha-2 code of the country the feature is in (FAO GAUL "
                "codes for disputed areas), or _intl on the high seas. Rows are "
                "Hilbert-sorted, so a filter on it skips most row groups.",
@@ -201,7 +215,7 @@ COMMON_DOCS = {
     "start_date": "The start_date tag, as tagged.",
     "website": "The website tag.",
     "tags": "Every OSM tag of the element. Anything not promoted to a column is a "
-            "tags['key'] lookup away.",
+            "tags['key'] lookup away. NULL on rows from another source.",
     "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax, float32 rounded outward), "
             "declared as the GeoParquet covering. Filter on it to prune row groups.",
     "geometry": "Native Parquet GEOMETRY (WKB), OGC:CRS84 lon/lat. Closed ways are "
@@ -240,6 +254,9 @@ DERIVED_DOCS = {
     "services": "What the mast hosts, from its communication:* tags (mobile_phone, "
                 "television...), sorted.",
     "utility": "The first value of the utility tag.",
+    "eia_plant_id": "The plant's EIA plant ID: from ref:US:EIA on OSM plants, EIA's own "
+                    "on the rows it adds. The key to join EIA's generator, capacity and "
+                    "generation data.",
     "category": "Pipeline category from the substance (oil, gas, water, "
                 "heat, ...), Open Infrastructure Map's grouping.",
 }
@@ -423,6 +440,8 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
             VIA_LINK,
             {"rel": "related", "href": f"{PUBLIC_DATA}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, sources and their licences"},
+            {"rel": "related", "href": f"{DATA_URL}/_coverage.json", "type": "application/json",
+             "title": "US power plants: how many EIA reports, how many OSM has, what was added"},
             {"rel": "related", "href": f"{DATA_URL}/_regions.json", "type": "application/json",
              "title": "Every country and state slug, with its names and GAUL code"},
             {"rel": "related", "href": OIM_URL, "type": "text/html",

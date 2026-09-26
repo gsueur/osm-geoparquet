@@ -38,6 +38,11 @@ country and state slug with its names and GAUL code. index.json and _manifest.js
 make it a parquetry repository with one dataset, the whole world, as GeoPQ
 Workbench's browser reads it.
 
+US completeness (--eia): the operating plants the EIA-860M inventory reports
+and OpenStreetMap lacks are added to power_plant as points, origin = 'eia'
+(97.8% of US capacity is already in OSM; what is missing is mostly recent
+and small solar). _coverage.json says how each EIA plant was found.
+
 Regions: every row carries the country and state holding a point on it
 (ST_PointOnSurface). On land the state is its FAO GAUL 2024 L1 unit, as a
 slug of the unit's name (`texas`; GAUL has no ISO 3166-2 codes, and matching
@@ -275,6 +280,7 @@ LAYERS: list[Layer] = [
               ("output_mw_estimated", "output_mw_estimated"),
               ("output_basis", "output_basis"),
               ("repd_id", s("repd:id")),
+              ("eia_plant_id", "TRY_CAST(first_semi(tags['ref:US:EIA']) AS INTEGER)"),
               ("location", s("location")),
               ("generator_count", "generator_count"),
               ("generator_output_mw", "generator_output_mw"),
@@ -812,6 +818,135 @@ def assign_region(con: duckdb.DuckDBPyConnection, table: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# EIA: US plants OSM does not have yet
+
+# EIA-860M technology -> the OSM tags a mapper would use. Unlisted
+# technologies get no source/method (the row still counts, with its MW).
+EIA_TAGS = [
+    ("Solar Photovoltaic", "solar", "photovoltaic"),
+    ("Solar Thermal%", "solar", "thermal"),
+    ("%Wind%", "wind", "wind_turbine"),
+    ("Batteries", "battery", None),
+    ("Flywheels", None, None),
+    ("Nuclear", "nuclear", "fission"),
+    ("Hydroelectric Pumped Storage", "hydro", "water-pumped-storage"),
+    ("Conventional Hydroelectric", "hydro", None),
+    ("%Coal%", "coal", "combustion"),
+    ("Natural Gas%", "gas", "combustion"),
+    ("Other Natural Gas", "gas", "combustion"),
+    ("Other Gases", "gas", "combustion"),
+    ("Petroleum%", "oil", "combustion"),
+    ("Landfill Gas", "biogas", "combustion"),
+    ("Wood/Wood Waste Biomass", "biomass", "combustion"),
+    ("Other Waste Biomass", "biomass", "combustion"),
+    ("Municipal Solid Waste", "waste", "combustion"),
+    ("Geothermal", "geothermal", None),
+]
+
+
+def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str) -> dict:
+    """Add to `plant` the operating US plants EIA-860M reports and OSM lacks.
+
+    A plant counts as present when OSM has it by ref:US:EIA, holds its point
+    in a plant polygon, has a plant within 2 km, or has generators within
+    500 m (small solar is often mapped as panels only): a borderline plant
+    stays OSM-only rather than risk a duplicate. The rest become point rows
+    with the tags their EIA record implies, osm_type and osm_id NULL (so
+    origin = 'eia'). Returns the coverage figures published in _coverage.json.
+    """
+    con.execute("INSTALL excel; LOAD excel;")
+    sheets = " UNION ALL ".join(
+        f"SELECT * FROM read_xlsx('{eia_xlsx}', sheet='{sh}', range='A3:BZ200000', "
+        f"header=true, all_varchar=true)" for sh in ("Operating", "Operating_PR"))
+    cases = " ".join(f"WHEN technology LIKE '{t}' THEN {'NULL' if v is None else repr(v)}"
+                     for t, v, _ in EIA_TAGS)
+    methods = " ".join(f"WHEN technology LIKE '{t}' THEN {'NULL' if m is None else repr(m)}"
+                       for t, _, m in EIA_TAGS)
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE eia AS
+        WITH g AS (
+            SELECT TRY_CAST("Plant ID" AS INTEGER) AS plant_id, "Plant Name" AS name,
+                   "Entity Name" AS operator, "Technology" AS technology,
+                   TRY_CAST("Nameplate Capacity (MW)" AS DOUBLE) AS mw,
+                   TRY_CAST("Operating Year" AS INTEGER) AS year,
+                   TRY_CAST("Latitude" AS DOUBLE) AS lat, TRY_CAST("Longitude" AS DOUBLE) AS lon
+            FROM ({sheets})
+            WHERE TRY_CAST("Plant ID" AS INTEGER) IS NOT NULL
+        )
+        SELECT plant_id, any_value(name) AS name, any_value(operator) AS operator,
+               arg_max(technology, mw) AS technology, round(sum(mw), 3) AS mw,
+               min(year) AS year, any_value(lat) AS lat, any_value(lon) AS lon
+        FROM g WHERE lat IS NOT NULL AND lon IS NOT NULL GROUP BY plant_id
+    """)
+    if not con.execute("SELECT count(*) FROM eia").fetchone()[0]:
+        sys.exit(f"{eia_xlsx}: no operating plants read")
+    # Only the plants the build covers: a partial build (one extract) would
+    # otherwise count every plant outside it as missing. It still counts
+    # those in the states its extract's box touches (Florida's: Alabama's
+    # Barry plant), which is why a partial run never publishes.
+    con.execute("""
+        DELETE FROM eia WHERE NOT EXISTS (
+            SELECT 1 FROM land WHERE split_part(region, '/', 1) IN ('US', 'PR')
+              AND ST_Contains(geometry, ST_Point(eia.lon, eia.lat)))""")
+    # Matching in metres (CONUS Albers; the thresholds are loose enough for
+    # Alaska, Hawaii and Puerto Rico).
+    albers = "'EPSG:4326', 'EPSG:5070', always_xy := true"
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE eia_m AS
+        SELECT e.*, ST_Transform(ST_Point(lon, lat), {albers}) AS p FROM eia e""")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE osm_us AS
+        SELECT TRY_CAST(first_semi(tags['ref:US:EIA']) AS INTEGER) AS eia_ref,
+               ST_Transform(geometry, {albers}) AS g
+        FROM plant WHERE country IN ('US', 'PR')""")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE gen_us AS
+        SELECT ST_Transform(ST_PointOnSurface(geometry), {albers}) AS g
+        FROM generator WHERE country IN ('US', 'PR')""")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE eia_how AS
+        WITH ref AS (SELECT DISTINCT e.plant_id FROM eia_m e JOIN osm_us o ON o.eia_ref = e.plant_id),
+             inside AS (SELECT DISTINCT e.plant_id FROM eia_m e JOIN osm_us o ON ST_Intersects(o.g, e.p)),
+             near AS (SELECT DISTINCT e.plant_id FROM eia_m e JOIN osm_us o ON ST_DWithin(o.g, e.p, 2000)),
+             gens AS (SELECT DISTINCT e.plant_id FROM eia_m e JOIN gen_us o ON ST_DWithin(o.g, e.p, 500))
+        SELECT e.plant_id, e.mw,
+               CASE WHEN e.plant_id IN (SELECT * FROM ref) THEN 'ref'
+                    WHEN e.plant_id IN (SELECT * FROM inside) THEN 'inside'
+                    WHEN e.plant_id IN (SELECT * FROM near) THEN 'near'
+                    WHEN e.plant_id IN (SELECT * FROM gens) THEN 'generators'
+                    ELSE 'added' END AS how
+        FROM eia_m e
+    """)
+    con.execute(f"""
+        CREATE OR REPLACE TABLE eia_add AS
+        SELECT 'eia' AS osm_type, e.plant_id AS osm_id,
+               map_from_entries(list_filter([
+                   struct_pack(k := 'power', v := 'plant'),
+                   struct_pack(k := 'name', v := e.name),
+                   struct_pack(k := 'operator', v := e.operator),
+                   struct_pack(k := 'plant:source', v := CASE {cases} END),
+                   struct_pack(k := 'plant:method', v := CASE {methods} END),
+                   struct_pack(k := 'plant:output:electricity', v := e.mw::VARCHAR || ' MW'),
+                   struct_pack(k := 'ref:US:EIA', v := e.plant_id::VARCHAR),
+                   struct_pack(k := 'start_date', v := e.year::VARCHAR)
+               ], x -> x.v IS NOT NULL)) AS tags,
+               ST_Point(e.lon, e.lat) AS geometry,
+               NULL::BIGINT AS generator_count, NULL::DOUBLE AS generator_output_mw,
+               e.mw AS output_mw_estimated, 'tagged' AS output_basis
+        FROM eia e JOIN eia_how h USING (plant_id) WHERE h.how = 'added'
+    """)
+    assign_region(con, "eia_add")
+    con.execute("UPDATE eia_add SET osm_type = NULL, osm_id = NULL")
+    con.execute("INSERT INTO plant BY NAME SELECT * FROM eia_add")
+    con.execute("DROP TABLE eia_add")
+    tiers = {how: {"plants": n, "mw": round(mw, 1)} for how, n, mw in con.execute(
+        "SELECT how, count(*), sum(mw) FROM eia_how GROUP BY 1").fetchall()}
+    total = con.execute("SELECT count(*), sum(mw) FROM eia").fetchone()
+    return {"source": Path(eia_xlsx).name, "eia_plants": total[0],
+            "eia_mw": round(total[1], 1), "tiers": tiers}
+
+
+# --------------------------------------------------------------------------
 # Writing
 
 GEOMETRY_TYPE_NAMES = {
@@ -835,7 +970,13 @@ def layer_select(layer: Layer) -> str:
             expr = f"lifecycle(tags, '{layer.key}')"
         cols.append(f"{expr} AS {name}")
     cols += [f"{expr} AS {name}" for name, expr in layer.columns]
-    return (f"SELECT osm_id, osm_type, country, state, {', '.join(cols)}, tags, "
+    # Rows added from another source (EIA plants OSM lacks) have no OSM
+    # element: no osm_id/osm_type, and no tags, since theirs only exist to
+    # derive the columns.
+    return (f"SELECT osm_id, osm_type, "
+            f"CASE WHEN osm_type IS NULL THEN 'eia' ELSE 'osm' END AS origin, "
+            f"country, state, {', '.join(cols)}, "
+            f"CASE WHEN osm_type IS NULL THEN NULL ELSE tags END AS tags, "
             f"{BBOX} AS bbox, geometry FROM {layer.source} WHERE {layer.where}")
 
 
@@ -1013,7 +1154,8 @@ def write_stats(con: duckdb.DuckDBPyConnection, out: Path) -> None:
 
 # --------------------------------------------------------------------------
 
-def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
+def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
+          eia: str | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(work / "infra.duckdb"))
@@ -1034,6 +1176,11 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     load_regions(con, land, eez)
     for table in ("feat", "circuit", "substation", "generator", "plant"):
         assign_region(con, table)
+    coverage = add_eia_plants(con, eia) if eia else None
+    if coverage:
+        added = coverage["tiers"].get("added", {"plants": 0, "mw": 0})
+        print(f"  EIA-860M: {coverage['eia_plants']:,} US plants, {added['plants']:,} "
+              f"({added['mw'] / 1000:,.1f} GW) added where OSM has none", flush=True)
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
@@ -1063,6 +1210,8 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
         print(f"  {dest.name}: {n:,} rows, {dest.stat().st_size / 1e6:,.0f} MB, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
     write_repository(out, report)
+    if coverage:
+        (out / "_coverage.json").write_text(json.dumps(coverage, indent=2))
     write_stats(check, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
@@ -1082,13 +1231,15 @@ def main() -> None:
     b.add_argument("--work-dir", type=Path, required=True)
     b.add_argument("--land", required=True,
                    help="GAUL 2024 L1 parquet (path or URL)")
+    b.add_argument("--eia", help="EIA-860M generator workbook (.xlsx): adds the "
+                   "operating US plants OSM lacks, and writes _coverage.json")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
     a = p.parse_args()
     if a.cmd == "filter":
         filter_extract(a.src, a.dest)
     else:
-        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez)
+        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez, a.eia)
 
 
 if __name__ == "__main__":
