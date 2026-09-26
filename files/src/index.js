@@ -169,7 +169,7 @@ const DATASETS = {
   // "osm-infrastructure/" does not start with "osm/".
   "osm-infrastructure/": {
     subtitle: "OpenStreetMap infrastructure, worldwide: power, telecoms, oil and " +
-      "gas, water. One folder per country and state, latest build only.",
+      "gas, water. One file per layer, latest build only.",
     attribution: "osm-infrastructure/ATTRIBUTION.txt",
   },
   "clc/": {
