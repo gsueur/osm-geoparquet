@@ -21,29 +21,31 @@ ponds and lakes, not infrastructure (61,933 of them in Florida alone, next to
 
 Two stages, so the worldwide build can fan out over Geofabrik regions:
 
-  filter  one extract -> the infrastructure subset (about 0.4% of the input)
-  build   one (merged) subset ->
-          <out>/country=<ISO2>/state=<GAUL L1 name slug>/<layer>.parquet, a
-          _manifest.json per folder, <out>/world/<layer>.parquet (every
-          folder in one file), <out>/stats/, and index.json in
-          <out>'s parent (the repository base; <out> is `latest`, the only
-          version published: no snapshots.json)
+  filter  one extract -> the infrastructure subset (about 0.8% of the input)
+  build   one (merged) subset -> <out>/<layer>.parquet, one file per layer
+          for the whole world, <out>/_manifest.json, <out>/stats/, and
+          index.json in <out>'s parent (the repository base; <out> is
+          `latest`, the only version published: no snapshots.json)
 
-The layout is the parquetry one the OSM dataset uses and GeoPQ Workbench's
-repository browser reads (index.json lists the folders, each _manifest.json
-its layers): picking a state there loads every layer, picking a country
-loads all its states. One layer everywhere is `world/<layer>.parquet`, the
-same rows in one file (a glob over the ~2,700 folder files spends minutes on
-their footers before reading a row).
+Each layer is one file, sorted along a Hilbert curve over its extent, in row
+groups of 32,000: a bbox filter reads only the groups it touches (a box
+around Bayern, 27 of the towers' 1,245), and a filter on country and state
+skips most of them (Texas: 153 read, 31 hold it; a group on a border spans
+a wide range of state names). It replaced one file per country
+and state: ~41,000 files, 15,000 of them under 10 KB, and a glob over them
+spent minutes on footers before reading a row. _regions.json lists every
+country and state slug with its names and GAUL code. index.json and _manifest.json
+make it a parquetry repository with one dataset, the whole world, as GeoPQ
+Workbench's browser reads it.
 
-Regions: a feature goes to exactly one folder, the one holding a point on it
-(ST_PointOnSurface). On land that is its FAO GAUL 2024 L1 unit, the
-folder named after it so a listing reads (`state=texas`; GAUL has no ISO
-3166-2 codes, and matching names to them fails for a third of the units),
-with the GAUL L1 code in index.json and the manifest. Offshore it is the country of Marine Regions' union of land and EEZ,
-with `state=_offshore`; elsewhere `country=_intl/state=_intl` (high seas).
-Countries are ISO 3166-1 alpha-2 like the OSM dataset; GAUL's non-ISO codes
-for disputed areas (xJK, xAB, ...) are kept as they are.
+Regions: every row carries the country and state holding a point on it
+(ST_PointOnSurface). On land the state is its FAO GAUL 2024 L1 unit, as a
+slug of the unit's name (`texas`; GAUL has no ISO 3166-2 codes, and matching
+names to them fails for a third of the units). Offshore it is the country of
+Marine Regions' union of land and EEZ, with state `_offshore`; elsewhere
+country and state `_intl` (high seas). Countries are ISO 3166-1 alpha-2 like
+the OSM dataset; GAUL's non-ISO codes for disputed areas (xJK, xAB, ...) are
+kept as they are.
 """
 
 from __future__ import annotations
@@ -838,10 +840,10 @@ def layer_select(layer: Layer) -> str:
 
 
 def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> dict:
-    # Stats from the source rows, and the layer written straight from its
-    # query: materialising it first put every layer on disk twice (a temp
-    # table lives in the temp directory, and the sort spills beside it), which
-    # ran out of disk on the planet.
+    """The layer, sorted along a Hilbert curve over its extent, as one DuckDB
+    file in staging (re-cut into exact row groups afterwards). Written
+    straight from its query: materialising it first put it on disk twice (a
+    temp table lives in the temp directory, and the sort spills beside it)."""
     t0 = time.monotonic()
     n, types, xmin, ymin, xmax, ymax, countries, regions = con.execute(f"""
         SELECT count(*), list(DISTINCT ST_GeometryType(geometry)::VARCHAR),
@@ -852,29 +854,26 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
     if not n:
         print(f"  {layer.name}: empty", flush=True)
         return {"layer": layer.name, "rows": 0}
-    # Per-file extents differ by partition, so the `geo` block declares the
-    # geometry types (a superset per file, which the spec allows) and the
-    # covering, and leaves the optional bbox out.
     geo = json.dumps({
         "version": "2.0.0", "primary_column": "geometry",
         "columns": {"geometry": {
             "encoding": "WKB",
             "geometry_types": sorted(GEOMETRY_TYPE_NAMES[t] for t in types),
+            "bbox": [xmin, ymin, xmax, ymax],
             "covering": {"bbox": {"xmin": ["bbox", "xmin"], "ymin": ["bbox", "ymin"],
                                   "xmax": ["bbox", "xmax"], "ymax": ["bbox", "ymax"]}},
         }},
     }).replace("'", "''")
-    dest = staging / layer.name
+    dest = staging / f"{layer.name}.parquet"
     con.execute(f"""
-        COPY ({layer_select(layer)} ORDER BY country, state,
+        COPY ({layer_select(layer)} ORDER BY
               ST_Hilbert(geometry, ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
-        TO '{dest}' (FORMAT PARQUET, PARTITION_BY (country, state), WRITE_PARTITION_COLUMNS true,
-                     OVERWRITE_OR_IGNORE, GEOPARQUET_VERSION 'NONE',
-                     COMPRESSION ZSTD, COMPRESSION_LEVEL 15, ROW_GROUP_SIZE 1048576,
+        TO '{dest}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE',
+                     COMPRESSION ZSTD, COMPRESSION_LEVEL 1, ROW_GROUP_SIZE 1048576,
                      KV_METADATA {{geo: '{geo}'}})
     """)
-    print(f"  {layer.name}: {n:,} rows in {regions:,} folders, {time.monotonic() - t0:.0f} s",
-          flush=True)
+    print(f"  {layer.name}: {n:,} rows, {countries} countries, sorted in "
+          f"{time.monotonic() - t0:.0f} s", flush=True)
     return {"layer": layer.name, "group": layer.group, "rows": n,
             "countries": countries, "regions": regions}
 
@@ -882,40 +881,44 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
 ROW_GROUP_ROWS = 32_000
 
 
-def rewrite(parts: list[Path], dest: Path) -> None:
-    """Join a partition's DuckDB-written parts into one file, re-cut into row
-    groups of exactly ROW_GROUP_ROWS.
-
-    DuckDB keeps at most partitioned_write_max_open_files (100) partitions
-    open and starts a new data_<n> file when it reopens one, so a big layer
-    comes out with several parts in its large partitions (198 of 40,959 on
-    the planet, up to 6 parts). The COPY is ordered, so each part carries the
-    next stretch of the Hilbert order: joined in part order, the file stays
-    sorted.
+def rewrite(src: Path, dest: Path) -> int:
+    """Re-cut a DuckDB-written file into row groups of exactly ROW_GROUP_ROWS,
+    streamed so memory does not follow the layer (40 M towers).
 
     DuckDB only writes row groups in multiples of its 2,048-row vector size
     (ROW_GROUP_SIZE 32000 gives 32,768). pyarrow 22 with geoarrow-pyarrow
     registered keeps the native Parquet GEOMETRY logical type, its geospatial
-    statistics and the `geo` footer. Encodings are set to match what DuckDB
-    gets for free: byte-stream-split floats, delta-packed ids. Measured on
-    83k NL generators: +3% for 32k groups over ~50k, +8% for pyarrow's writer.
+    statistics and the `geo` footer. Measured on 83k NL generators: +3% for
+    32k groups over ~50k, +8% for pyarrow's writer. Returns the row count.
     """
     import geoarrow.pyarrow  # noqa: F401  registers the geoarrow.wkb extension type
-    import pyarrow.parquet as pq
     import pyarrow as pa
-    pf = pq.ParquetFile(parts[0])
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(src)
     leaves = [pf.metadata.schema.column(i) for i in range(pf.metadata.num_columns)]
-    # ParquetFile, not read_table: read_table reads the hive keys of the path
-    # (country=, state=) back as dictionary columns, clashing with the file's.
-    table = (pa.concat_tables([pq.ParquetFile(p).read() for p in parts])
-             if len(parts) > 1 else pf.read())
     dest.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, dest, row_group_size=ROW_GROUP_ROWS, **writer_options(leaves))
+    rows, pending, pending_rows = 0, [], 0
+    with pq.ParquetWriter(dest, pf.schema_arrow, **writer_options(leaves)) as w:
+        def flush(n: int) -> None:
+            nonlocal pending, pending_rows
+            table = pa.Table.from_batches(pending)
+            w.write_table(table.slice(0, n), row_group_size=ROW_GROUP_ROWS)
+            rest = table.slice(n)
+            pending, pending_rows = rest.to_batches(), rest.num_rows
+        for batch in pf.iter_batches(batch_size=ROW_GROUP_ROWS):
+            pending.append(batch)
+            pending_rows += batch.num_rows
+            rows += batch.num_rows
+            while pending_rows >= ROW_GROUP_ROWS:
+                flush(ROW_GROUP_ROWS)
+        if pending_rows:
+            flush(pending_rows)
+    return rows
 
 
 def writer_options(leaves) -> dict:
-    """pyarrow writer settings shared by every file: what DuckDB gets for free
-    (byte-stream-split floats, delta-packed ids), zstd 15, 1 MB pages."""
+    """pyarrow writer settings: what DuckDB gets for free (byte-stream-split
+    floats, delta-packed ids), zstd 15, 1 MB pages."""
     return dict(
         compression="zstd", compression_level=15, write_statistics=True,
         use_dictionary=[c.path for c in leaves
@@ -924,64 +927,6 @@ def writer_options(leaves) -> dict:
                                if c.physical_type in ("FLOAT", "DOUBLE")],
         column_encoding={"osm_id": "DELTA_BINARY_PACKED"},
         data_page_size=1 << 20)
-
-
-def hilbert_d(x: float, y: float, order: int = 16) -> int:
-    """Position of a lon/lat point on a Hilbert curve over the world."""
-    n = 1 << order
-    xi = min(n - 1, max(0, int((x + 180) / 360 * n)))
-    yi = min(n - 1, max(0, int((y + 90) / 180 * n)))
-    d, s = 0, n >> 1
-    while s:
-        rx, ry = int(xi & s > 0), int(yi & s > 0)
-        d += s * s * ((3 * rx) ^ ry)
-        if ry == 0:
-            if rx == 1:
-                xi, yi = s - 1 - xi, s - 1 - yi
-            xi, yi = yi, xi
-        s >>= 1
-    return d
-
-
-def write_world(con: duckdb.DuckDBPyConnection, out: Path, layer: str) -> int:
-    """<out>/world/<layer>.parquet: every folder's file of the layer in one,
-    for whole-world reads (a glob over ~2,700 files spends minutes on footers
-    before reading a row). The folder files are Hilbert-sorted already, so
-    they are concatenated in the Hilbert order of their centres rather than
-    re-sorted: neighbouring states sit together, and a row group that
-    straddles two files stays local. Streamed in exact ROW_GROUP_ROWS groups,
-    so memory does not follow the layer's size. Returns the row count."""
-    import geoarrow.pyarrow  # noqa: F401
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    glob = f"{out}/country=*/state=*/{layer}.parquet"
-    centres = con.execute(f"""
-        SELECT filename, (min(bbox.xmin) + max(bbox.xmax)) / 2, (min(bbox.ymin) + max(bbox.ymax)) / 2
-        FROM read_parquet('{glob}', filename = true, hive_partitioning = false)
-        GROUP BY filename""").fetchall()
-    files = [f for f, _, _ in sorted(centres, key=lambda r: hilbert_d(r[1], r[2]))]
-    first = pq.ParquetFile(files[0])
-    leaves = [first.metadata.schema.column(i) for i in range(first.metadata.num_columns)]
-    dest = out / "world" / f"{layer}.parquet"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    rows, pending, pending_rows = 0, [], 0
-    with pq.ParquetWriter(dest, first.schema_arrow, **writer_options(leaves)) as w:
-        def flush(n: int) -> None:
-            nonlocal pending, pending_rows
-            table = pa.Table.from_batches(pending)
-            w.write_table(table.slice(0, n), row_group_size=ROW_GROUP_ROWS)
-            rest = table.slice(n)
-            pending, pending_rows = rest.to_batches(), rest.num_rows
-        for f in files:
-            for batch in pq.ParquetFile(f).iter_batches(batch_size=ROW_GROUP_ROWS):
-                pending.append(batch)
-                pending_rows += batch.num_rows
-                rows += batch.num_rows
-                while pending_rows >= ROW_GROUP_ROWS:
-                    flush(ROW_GROUP_ROWS)
-        if pending_rows:
-            flush(pending_rows)
-    return rows
 
 
 def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
@@ -1018,62 +963,43 @@ def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
     assert not undeclared, f"{path}: undeclared geometry types {undeclared}"
 
 
-def write_manifests(con: duckdb.DuckDBPyConnection, out: Path) -> None:
-    """A _manifest.json per folder (its layers and row counts, in LAYERS
-    order) and index.json at the repository base listing the folders by
-    country and name: what the parquetry repository protocol reads."""
-    names = {r: (c, s, g) for r, c, s, g in con.execute(
-        "SELECT region, country_name, state_name, gaul1_code FROM region_name").fetchall()}
-    order = {layer.name: i for i, layer in enumerate(LAYERS)}
-    datasets = []
-    for folder in out.glob("country=*/state=*"):
-        country = folder.parent.name.split("=", 1)[1]
-        state = folder.name.split("=", 1)[1]
-        country_name, state_name, gaul1_code = names.get(
-            f"{country}/{state}", (country, state, None))
-        themes = {}
-        for f in sorted(folder.glob("*.parquet"), key=lambda f: order.get(f.stem, 99)):
-            themes[f.stem] = con.execute(
-                "SELECT sum(row_group_num_rows) FROM (SELECT DISTINCT row_group_id, "
-                "row_group_num_rows FROM parquet_metadata(?))", [str(f)]).fetchone()[0]
-        (folder / "_manifest.json").write_text(json.dumps({
-            "country": country, "country_name": country_name,
-            "state": state, "state_name": state_name, "gaul1_code": gaul1_code,
-            "total_features": sum(themes.values()), "themes": themes,
-        }, indent=2))
-        datasets.append({"path": f"{folder.parent.name}/{folder.name}",
-                         "code": state, "name": state_name,
-                         "country": country, "country_name": country_name,
-                         "gaul1_code": gaul1_code})
-    datasets.sort(key=lambda d: (d["country"], d["name"]))
-    # index.json belongs to the repository, not to `latest`: the browser
-    # reads it at the base.
-    (out.parent / "index.json").write_text(json.dumps({"datasets": datasets}, indent=2))
+def write_repository(out: Path, report: list[dict]) -> None:
+    """_manifest.json in <out> and index.json at the repository base, the
+    parquetry protocol GeoPQ Workbench reads: one dataset, the whole world,
+    at an empty path (its files are <out>/<layer>.parquet), as GAUL's
+    whole-world entry."""
+    themes = {r["layer"]: r["rows"] for r in report if r["rows"]}
+    (out / "_manifest.json").write_text(json.dumps({
+        "state_name": "The whole world", "total_features": sum(themes.values()),
+        "themes": themes,
+    }, indent=2))
+    (out.parent / "index.json").write_text(json.dumps({"datasets": [
+        {"path": "", "code": "WORLD", "name": "The whole world"}]}, indent=2))
 
 
 STATS = {
     # OIM stats.power_line: length by country and (highest) voltage.
     "power_line_length": """
         SELECT country, voltage_kv, count(*) AS lines, round(sum(length_km), 3) AS length_km
-        FROM read_parquet('{out}/country=*/state=*/power_line.parquet')
+        FROM read_parquet('{out}/power_line.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.power_plant / power_generator: count and output by source.
     "power_plant_by_source": """
         SELECT country, source, count(*) AS plants,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/country=*/state=*/power_plant.parquet')
+        FROM read_parquet('{out}/power_plant.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     "power_generator_by_source": """
         SELECT country, source, count(*) AS generators,
                round(sum(output_mw), 3) AS output_mw_tagged,
                round(sum(output_mw_estimated), 3) AS output_mw_estimated
-        FROM read_parquet('{out}/country=*/state=*/power_generator.parquet')
+        FROM read_parquet('{out}/power_generator.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
     # OIM stats.substation: count by country and highest voltage.
     "power_substation_by_voltage": """
         SELECT country, voltage_kv, count(*) AS substations
-        FROM read_parquet('{out}/country=*/state=*/power_substation.parquet')
+        FROM read_parquet('{out}/power_substation.parquet')
         WHERE lifecycle = 'active' GROUP BY ALL ORDER BY ALL""",
 }
 
@@ -1111,44 +1037,36 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
-    # DuckDB partitions as <layer>/country=X/state=Y/data_<n>.parquet, one or
-    # more parts; the published layout is region first, one file per layer.
-    parts: dict[Path, list[Path]] = {}
-    for f in staging.glob("*/country=*/state=*/data_*.parquet"):
-        parts.setdefault(f.parent, []).append(f)
-    for folder, fs in sorted(parts.items()):
-        fs.sort(key=lambda f: int(f.stem.split("_")[1]))
-        dest = out / folder.parent.name / folder.name / f"{folder.parent.parent.name}.parquet"
-        rewrite(fs, dest)
-        verify(con, dest)
-    print(f"  {len(parts)} files written to {ROW_GROUP_ROWS:,}-row groups and verified "
-          f"({sum(len(fs) > 1 for fs in parts.values())} joined from several parts)")
-    write_manifests(con, out)
-    # Nothing is published unless every source row reached a file: the first
-    # planet build lost 30% of its towers here, one part overwriting another.
-    written = {}
-    for mf in out.glob("country=*/state=*/_manifest.json"):
-        for name, n in json.loads(mf.read_text())["themes"].items():
-            written[name] = written.get(name, 0) + n
-    lost = {r["layer"]: (r["rows"], written.get(r["layer"], 0))
-            for r in report if r["rows"] != written.get(r["layer"], 0)}
-    if lost:
-        sys.exit(f"rows lost between the source and the files (source, written): {lost}")
+    # The slugs rows carry, with their names and GAUL codes: how a reader
+    # finds that Île-de-France is state = 'ile-de-france'. A sidecar (the
+    # leading _ keeps folder scans from taking it for a dataset).
+    regions = [dict(zip(("country", "state", "country_name", "state_name", "gaul1_code"), r))
+               for r in con.execute("""
+                   SELECT split_part(region, '/', 1), split_part(region, '/', 2),
+                          country_name, state_name, gaul1_code
+                   FROM region_name ORDER BY 1, 4""").fetchall()]
+    (out / "_regions.json").write_text(json.dumps(regions, indent=1, ensure_ascii=False))
+    con.close()
+    check = duckdb.connect()
+    check.execute("INSTALL spatial; LOAD spatial;")
     for r in report:
         if not r["rows"]:
             continue
         t0 = time.monotonic()
-        n = write_world(con, out, r["layer"])
+        dest = out / f"{r['layer']}.parquet"
+        n = rewrite(staging / f"{r['layer']}.parquet", dest)
+        # Nothing is published unless every source row reached its file.
         if n != r["rows"]:
-            sys.exit(f"world/{r['layer']}.parquet has {n:,} rows, the source {r['rows']:,}")
-        verify(con, out / "world" / f"{r['layer']}.parquet")
-        print(f"  world/{r['layer']}.parquet: {n:,} rows, "
-              f"{(out / 'world' / (r['layer'] + '.parquet')).stat().st_size / 1e6:,.0f} MB, "
+            sys.exit(f"{dest.name}: {n:,} rows written, {r['rows']:,} in the source")
+        verify(check, dest)
+        (staging / f"{r['layer']}.parquet").unlink()
+        print(f"  {dest.name}: {n:,} rows, {dest.stat().st_size / 1e6:,.0f} MB, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
-    write_stats(con, out)
+    write_repository(out, report)
+    write_stats(check, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
-        print(f"  {r['layer']:24} {r['rows']:>9,} rows  {r.get('countries', 0):>3} countries"
+        print(f"  {r['layer']:24} {r['rows']:>11,} rows  {r.get('countries', 0):>3} countries"
               f"  {r.get('regions', 0):>4} regions")
 
 

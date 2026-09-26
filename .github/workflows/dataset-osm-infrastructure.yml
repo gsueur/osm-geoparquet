@@ -202,8 +202,7 @@ jobs:
           grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
           rm -rf "$WORK/build"
           du -sh "$WORK/out/latest"
-          echo "files: $(find "$WORK/out/latest" -name '*.parquet' -path '*country=*' | wc -l)"
-          echo "folders: $(find "$WORK/out/latest" -name _manifest.json | wc -l)"
+          ls -la "$WORK/out/latest"
 
       - name: ATTRIBUTION.txt
         run: |
@@ -231,19 +230,19 @@ jobs:
             rules for voltages, outputs, solar estimates and pipeline categories.
             Not affiliated with or endorsed by Open Infrastructure Map.
 
-          Partitions (the country= and state= keys)
-            Land: FAO GAUL 2024 level 1; state= is the unit's name as a slug
-            (state=texas), and index.json and each _manifest.json give its GAUL code
+          The country and state columns
+            Land: FAO GAUL 2024 level 1; state is the unit's name as a slug
+            (texas, bayern)
             (https://parquetry.geomermaids.com/gaul/2024/ATTRIBUTION.txt).
               FAO. 2024. Global Administrative Unit Layers (GAUL).
               [Accessed on $(date -u +'%-d %B %Y')]. https://data.apps.fao.org/?lang=en.
               Licence: CC-BY-4.0
-            Offshore (state=_offshore): Flanders Marine Institute (2024). Union of
+            Offshore (state _offshore): Flanders Marine Institute (2024). Union of
             the ESRI Country shapefile and the Exclusive Economic Zones, via the
             Marine Regions WFS (MarineRegions:eez_land). https://www.marineregions.org.
             Licence: CC BY 4.0.
-            High seas: country=_intl/state=_intl.
-            The keys are a convenience for partitioning, assigned from one point on
+            High seas: country and state _intl.
+            They are a convenience for filtering, assigned from one point on
             each feature. They are not a statement on any boundary or claim.
           EOF
           cat "$WORK/out/ATTRIBUTION.txt"
@@ -263,8 +262,8 @@ jobs:
             *:*) ;;
             *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
           esac
-          # latest/ is the only version: sync replaces it, removing folders
-          # the new build no longer has. Data first, then the files that
+          # latest/ is the only version: sync replaces it, removing files the
+          # new build no longer has. Data first, then the files that
           # point at it.
           rclone sync "$WORK/out/latest" "$REMOTE/latest" \
             --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
@@ -288,12 +287,9 @@ jobs:
         run: |
           set +e
           fail=0
-          for f in index.json ATTRIBUTION.txt \
-                   latest/country=US/state=texas/_manifest.json \
-                   latest/country=US/state=texas/power_line.parquet \
-                   latest/country=DE/state=bayern/power_generator.parquet \
-                   latest/country=FR/state=ile-de-france/power_substation.parquet \
-                   latest/world/power_line.parquet latest/world/power_tower.parquet \
+          for f in index.json ATTRIBUTION.txt latest/_manifest.json \
+                   latest/power_line.parquet latest/power_tower.parquet \
+                   latest/water_well.parquet \
                    catalog/catalog.json catalog/power/power_line/collection.json \
                    catalog/power/power_line/thumbnail.png; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
