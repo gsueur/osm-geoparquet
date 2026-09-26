@@ -216,6 +216,14 @@ jobs:
           raise SystemExit("no EIA-860M workbook could be downloaded")
           EOF
 
+      # USPVDB (USGS/LBNL): outlines of US solar farms, keyed by EIA plant ID,
+      # for the solar plants the EIA step adds. Required like EIA.
+      - name: USPVDB, solar outlines
+        run: |
+          curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors \
+            -o "$WORK/uspvdb.zip" https://energy.usgs.gov/uspvdb/assets/data/uspvdbGeoJSON.zip
+          unzip -l "$WORK/uspvdb.zip" | grep -o 'uspvdb_v[0-9_]*\.geojson' | tee "$WORK/uspvdb_version.txt"
+
       - name: Build and verify every file
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         env:
@@ -229,6 +237,7 @@ jobs:
             python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" build "$WORK/planet-infra.osm.pbf" \
             --out-dir "$WORK/out/latest" --work-dir "$WORK/build" \
             --land "$GAUL_L1" --eez "$WORK/eez_land.json" --eia "$WORK/eia860m.xlsx" \
+            --uspvdb "$WORK/uspvdb.zip" \
             2> >(tee "$WORK/time.txt" >&2)
           grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
           rm -rf "$WORK/build"
@@ -260,6 +269,10 @@ jobs:
             https://www.eia.gov/electricity/data/eia860m/. Public domain (U.S.
             federal government work). Coverage of EIA's plants by OSM, and what
             was added: latest/_coverage.json.
+            Outlines of the solar plants added: U.S. Geological Survey and Lawrence
+            Berkeley National Laboratory, United States Large-Scale Solar
+            Photovoltaic Database (USPVDB), $(cat "$WORK/uspvdb_version.txt" 2>/dev/null).
+            https://energy.usgs.gov/uspvdb/. Public domain.
 
           Layers, attributes and derived values
             Follow the data model of Open Infrastructure Map

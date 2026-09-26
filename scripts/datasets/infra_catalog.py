@@ -96,6 +96,14 @@ PROVIDERS = [
         "roles": ["producer"],
     },
     {
+        "name": "U.S. Geological Survey and Lawrence Berkeley National Laboratory",
+        "description": "Publish the US Large-Scale Solar Photovoltaic Database (USPVDB), "
+                       "whose outlines replace EIA's points for the solar plants added "
+                       "(public domain).",
+        "url": "https://energy.usgs.gov/uspvdb/",
+        "roles": ["producer"],
+    },
+    {
         "name": "Geomermaids",
         "description": "Extracts the infrastructure, derives the typed columns following "
                        "Open Infrastructure Map's data model, and maintains and hosts "
@@ -193,8 +201,9 @@ COMMON_DOCS = {
     "osm_type": "OSM element type: node, way or relation. NULL on rows from another "
                 "source (origin).",
     "origin": "Where the row comes from: osm, or eia for a US power plant the EIA-860M "
-              "inventory reports and OpenStreetMap does not have (a point at EIA's "
-              "coordinates, no osm_id and no tags; see _coverage.json).",
+              "inventory reports and OpenStreetMap does not have (no osm_id and no tags; "
+              "a point at EIA's coordinates, or for solar farms the USPVDB outline; see "
+              "_coverage.json).",
     "country": "ISO 3166-1 alpha-2 code of the country the feature is in (FAO GAUL "
                "codes for disputed areas), or _intl on the high seas. Rows are "
                "Hilbert-sorted, so a filter on it skips most row groups.",

@@ -41,7 +41,9 @@ Workbench's browser reads it.
 US completeness (--eia): the operating plants the EIA-860M inventory reports
 and OpenStreetMap lacks are added to power_plant as points, origin = 'eia'
 (97.8% of US capacity is already in OSM; what is missing is mostly recent
-and small solar). _coverage.json says how each EIA plant was found.
+and small solar). With --uspvdb, an added solar plant USPVDB has gets its
+outline instead of EIA's point. _coverage.json says how each EIA plant was
+found, and how many added plants have an outline.
 
 Regions: every row carries the country and state holding a point on it
 (ST_PointOnSurface). On land the state is its FAO GAUL 2024 L1 unit, as a
@@ -844,7 +846,24 @@ EIA_TAGS = [
 ]
 
 
-def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str) -> dict:
+def uspvdb_outlines(con: duckdb.DuckDBPyConnection, path: str) -> None:
+    """Table `pv_outline(eia_id, geometry)` from the USGS/LBNL US Large-Scale
+    Solar Photovoltaic Database (a .geojson, or the .zip USGS publishes)."""
+    src = path
+    if path.endswith(".zip"):
+        import zipfile
+        member = next(n for n in zipfile.ZipFile(path).namelist() if n.endswith(".geojson"))
+        src = f"/vsizip/{path}/{member}"
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE pv_outline AS
+        SELECT eia_id, ST_MakeValid(geom) AS geometry FROM ST_Read('{src}')
+        WHERE eia_id IS NOT NULL""")
+    if not con.execute("SELECT count(*) FROM pv_outline").fetchone()[0]:
+        sys.exit(f"{path}: no USPVDB outline read")
+
+
+def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str,
+                   uspvdb: str | None = None) -> dict:
     """Add to `plant` the operating US plants EIA-860M reports and OSM lacks.
 
     A plant counts as present when OSM has it by ref:US:EIA, holds its point
@@ -852,9 +871,13 @@ def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str) -> dict:
     500 m (small solar is often mapped as panels only): a borderline plant
     stays OSM-only rather than risk a duplicate. The rest become point rows
     with the tags their EIA record implies, osm_type and osm_id NULL (so
-    origin = 'eia'). Returns the coverage figures published in _coverage.json.
+    origin = 'eia'). With `uspvdb`, a solar plant USPVDB has (joined on its
+    EIA plant ID) gets USPVDB's outline instead of EIA's point. Returns the
+    coverage figures published in _coverage.json.
     """
     con.execute("INSTALL excel; LOAD excel;")
+    if uspvdb:
+        uspvdb_outlines(con, uspvdb)
     sheets = " UNION ALL ".join(
         f"SELECT * FROM read_xlsx('{eia_xlsx}', sheet='{sh}', range='A3:BZ200000', "
         f"header=true, all_varchar=true)" for sh in ("Operating", "Operating_PR"))
@@ -930,11 +953,17 @@ def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str) -> dict:
                    struct_pack(k := 'ref:US:EIA', v := e.plant_id::VARCHAR),
                    struct_pack(k := 'start_date', v := e.year::VARCHAR)
                ], x -> x.v IS NOT NULL)) AS tags,
-               ST_Point(e.lon, e.lat) AS geometry,
+               {"coalesce(pv.geometry, ST_Point(e.lon, e.lat))" if uspvdb else "ST_Point(e.lon, e.lat)"}
+                   AS geometry,
                NULL::BIGINT AS generator_count, NULL::DOUBLE AS generator_output_mw,
                e.mw AS output_mw_estimated, 'tagged' AS output_basis
-        FROM eia e JOIN eia_how h USING (plant_id) WHERE h.how = 'added'
+        FROM eia e JOIN eia_how h USING (plant_id)
+        {"LEFT JOIN pv_outline pv ON pv.eia_id = e.plant_id" if uspvdb else ""}
+        WHERE h.how = 'added'
     """)
+    outlined = con.execute("""
+        SELECT count(*), coalesce(sum(output_mw_estimated), 0)
+        FROM eia_add WHERE ST_Dimension(geometry) = 2""").fetchone()
     assign_region(con, "eia_add")
     con.execute("UPDATE eia_add SET osm_type = NULL, osm_id = NULL")
     con.execute("INSERT INTO plant BY NAME SELECT * FROM eia_add")
@@ -943,7 +972,9 @@ def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str) -> dict:
         "SELECT how, count(*), sum(mw) FROM eia_how GROUP BY 1").fetchall()}
     total = con.execute("SELECT count(*), sum(mw) FROM eia").fetchone()
     return {"source": Path(eia_xlsx).name, "eia_plants": total[0],
-            "eia_mw": round(total[1], 1), "tiers": tiers}
+            "eia_mw": round(total[1], 1), "tiers": tiers,
+            "added_with_outline": {"source": Path(uspvdb).name if uspvdb else None,
+                                   "plants": outlined[0], "mw": round(outlined[1], 1)}}
 
 
 # --------------------------------------------------------------------------
@@ -1155,7 +1186,7 @@ def write_stats(con: duckdb.DuckDBPyConnection, out: Path) -> None:
 # --------------------------------------------------------------------------
 
 def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
-          eia: str | None = None) -> None:
+          eia: str | None = None, uspvdb: str | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(work / "infra.duckdb"))
@@ -1176,11 +1207,12 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
     load_regions(con, land, eez)
     for table in ("feat", "circuit", "substation", "generator", "plant"):
         assign_region(con, table)
-    coverage = add_eia_plants(con, eia) if eia else None
+    coverage = add_eia_plants(con, eia, uspvdb) if eia else None
     if coverage:
         added = coverage["tiers"].get("added", {"plants": 0, "mw": 0})
         print(f"  EIA-860M: {coverage['eia_plants']:,} US plants, {added['plants']:,} "
-              f"({added['mw'] / 1000:,.1f} GW) added where OSM has none", flush=True)
+              f"({added['mw'] / 1000:,.1f} GW) added where OSM has none, "
+              f"{coverage['added_with_outline']['plants']:,} with a USPVDB outline", flush=True)
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
@@ -1233,13 +1265,15 @@ def main() -> None:
                    help="GAUL 2024 L1 parquet (path or URL)")
     b.add_argument("--eia", help="EIA-860M generator workbook (.xlsx): adds the "
                    "operating US plants OSM lacks, and writes _coverage.json")
+    b.add_argument("--uspvdb", help="USGS US Large-Scale Solar PV Database (.geojson or "
+                   "its .zip): outlines for the solar plants --eia adds")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
     a = p.parse_args()
     if a.cmd == "filter":
         filter_extract(a.src, a.dest)
     else:
-        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez, a.eia)
+        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez, a.eia, a.uspvdb)
 
 
 if __name__ == "__main__":
