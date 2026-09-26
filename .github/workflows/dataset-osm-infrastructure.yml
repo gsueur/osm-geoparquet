@@ -20,12 +20,21 @@
 #   build    everything but the upload; the output is kept as an artifact.
 #   publish  the same, then replace latest/ and the repository files.
 #
+# Runs weekly (Sunday 06:47 UTC) as a publish, and on demand. A failed run
+# publishes nothing, so latest/ keeps the previous week; ntfy says which
+# (NTFY_TOPIC, the nightly's secret).
+#
 # Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
 # R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
 
 name: dataset-osm-infrastructure
 
 on:
+  schedule:
+    # Weekly, Sunday 06:47 UTC: Geofabrik's continental extracts carry the
+    # previous evening's data (~20:20 UTC), and off the hour because GitHub
+    # queues scheduled runs late at :00. A scheduled run publishes.
+    - cron: "47 6 * * 0"
   workflow_dispatch:
     inputs:
       stage:
@@ -43,6 +52,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # A scheduled run has no inputs: it is a full publish.
+  STAGE: ${{ inputs.stage || 'publish' }}
   REMOTE: parquetry:parquetry/osm-infrastructure
   PUBLIC: https://parquetry.geomermaids.com/osm-infrastructure
   GAUL_L1: https://parquetry.geomermaids.com/gaul/2024/GAUL_2024_L1.parquet
@@ -177,6 +188,12 @@ jobs:
 
       - name: Build and verify every file
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
+        env:
+          # DuckDB is capped at 55% of RAM (8.8 GB here), and the same build
+          # peaks at 8.75 GB on macOS, but reached 14.1 GB on this runner:
+          # glibc keeps a malloc arena per thread and returns little to the
+          # OS. Two arenas bound that; a hypothesis until a run shows it.
+          MALLOC_ARENA_MAX: "2"
         run: |
           /usr/bin/time -v uv run --project "$GITHUB_WORKSPACE/scripts" \
             python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" build "$WORK/planet-infra.osm.pbf" \
@@ -232,14 +249,14 @@ jobs:
           cat "$WORK/out/ATTRIBUTION.txt"
 
       - uses: actions/upload-artifact@v7.0.1
-        if: inputs.stage == 'build'
+        if: env.STAGE == 'build'
         with:
           name: osm-infrastructure
           path: ${{ env.WORK }}/out
           retention-days: 3
 
       - name: Publish
-        if: inputs.stage == 'publish'
+        if: env.STAGE == 'publish'
         run: |
           [ -z "${{ inputs.regions }}" ] || { echo "Refusing to publish a partial run."; exit 1; }
           case "$REMOTE" in
@@ -260,14 +277,14 @@ jobs:
       # Rendered from the files just published: rows and sizes match them.
       # The thumbnails are committed (catalog/thumbnails/osm-infrastructure/).
       - name: Portolan catalog, published
-        if: inputs.stage == 'publish'
+        if: env.STAGE == 'publish'
         run: |
           uv run --project scripts python scripts/datasets/infra_catalog.py publish \
             --out-dir "$WORK/out/latest" --attribution "$WORK/out/ATTRIBUTION.txt" \
             --remote "$REMOTE"
 
       - name: Check what is live
-        if: inputs.stage == 'publish'
+        if: env.STAGE == 'publish'
         run: |
           set +e
           fail=0
@@ -284,3 +301,29 @@ jobs:
             echo "ok  $f"
           done
           exit $fail
+
+  notify:
+    needs: [plan, filter, build]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          FILTER: ${{ needs.filter.result }}
+          BUILD: ${{ needs.build.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
+          if [[ "$FILTER" == "success" && "$BUILD" == "success" ]]; then
+            title="osm-infrastructure OK"; tags="white_check_mark"; prio="default"
+            if [[ "$STAGE" == "publish" ]]; then msg="published: latest/ replaced"
+            else msg="build only: nothing published"; fi
+          else
+            title="osm-infrastructure FAILED"; tags="warning"; prio="high"
+            msg="$STAGE: filter=$FILTER build=$BUILD; latest/ unchanged"
+          fi
+          curl -fsS --max-time 10 -H "Title: $title" -H "Tags: $tags" \
+            -H "Priority: $prio" -H "Click: $RUN_URL" -d "$msg" \
+            "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || echo "ntfy POST failed"
