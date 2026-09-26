@@ -217,8 +217,8 @@ Open geospatial datasets in <strong>GeoParquet 2.0</strong>, free to use and <st
   </div>
   <div class="dataset">
     <h4><a href="#osm-infrastructure">OSM infrastructure</a> <span class="tag">preview</span></h4>
-    <p>Power, telecoms, oil and gas, water: the content of Open Infrastructure Map, with voltages in kV and outputs in MW. Florida now, the world soon.</p>
-    <p class="meta"><code>osm-infrastructure/</code> · 27 layers · ODbL</p>
+    <p>Power, telecoms, oil and gas, water, worldwide: the content of Open Infrastructure Map, with voltages in kV and outputs in MW. 3,206 states in 261 countries.</p>
+    <p class="meta"><code>osm-infrastructure/</code> · 27 layers, 2.6 GB · ODbL</p>
   </div>
   <div class="dataset">
     <h4><a href="https://parquetry.geomermaids.com/gaul/">FAO GAUL 2024</a></h4>
@@ -356,9 +356,9 @@ https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.pa
 <p>The content of <a href="https://openinframap.org">Open Infrastructure Map</a>, as GeoParquet: power lines, circuits, substations, plants and generators; telecom cables, masts and data centres; pipelines, wells and platforms; water works. Voltages are parsed to kV per circuit, outputs to MW, and plants and substations are assembled from their OSM relations. 27 layers, each with the full OSM <code>tags</code>.</p>
 <pre><code>https://parquetry.geomermaids.com/osm-infrastructure/latest/country=&lt;CC&gt;/state=&lt;name&gt;/&lt;layer&gt;.parquet
 
-# e.g. Florida's power lines
-https://parquetry.geomermaids.com/osm-infrastructure/latest/country=US/state=florida/power_line.parquet</code></pre>
-<p>States are the <a href="https://parquetry.geomermaids.com/gaul/">GAUL</a> first-level units, named in the path; offshore features sit under <code>state=_offshore</code>. Only the latest build is kept. Today it covers Florida; a weekly worldwide build is next. Columns may still change.</p>
+# e.g. the power lines of Bayern, Germany
+https://parquetry.geomermaids.com/osm-infrastructure/latest/country=DE/state=bayern/power_line.parquet</code></pre>
+<p>States are the <a href="https://parquetry.geomermaids.com/gaul/">GAUL</a> first-level units, named in the path; offshore features sit under <code>state=_offshore</code>. The whole planet, built from Geofabrik's continental extracts: about 41,000 files, 2.6 GB. Only the latest build is kept, and columns may still change.</p>
 
 <div class="cta" id="custom">
 <h2>Other regions, schemas or hosting</h2>

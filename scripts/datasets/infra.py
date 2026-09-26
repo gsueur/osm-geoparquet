@@ -880,8 +880,16 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
 ROW_GROUP_ROWS = 32_000
 
 
-def rewrite(src: Path, dest: Path) -> None:
-    """Re-cut a DuckDB-written file into row groups of exactly ROW_GROUP_ROWS.
+def rewrite(parts: list[Path], dest: Path) -> None:
+    """Join a partition's DuckDB-written parts into one file, re-cut into row
+    groups of exactly ROW_GROUP_ROWS.
+
+    DuckDB keeps at most partitioned_write_max_open_files (100) partitions
+    open and starts a new data_<n> file when it reopens one, so a big layer
+    comes out with several parts in its large partitions (198 of 40,959 on
+    the planet, up to 6 parts). The COPY is ordered, so each part carries the
+    next stretch of the Hilbert order: joined in part order, the file stays
+    sorted.
 
     DuckDB only writes row groups in multiples of its 2,048-row vector size
     (ROW_GROUP_SIZE 32000 gives 32,768). pyarrow 22 with geoarrow-pyarrow
@@ -892,11 +900,16 @@ def rewrite(src: Path, dest: Path) -> None:
     """
     import geoarrow.pyarrow  # noqa: F401  registers the geoarrow.wkb extension type
     import pyarrow.parquet as pq
-    pf = pq.ParquetFile(src)
+    import pyarrow as pa
+    pf = pq.ParquetFile(parts[0])
     leaves = [pf.metadata.schema.column(i) for i in range(pf.metadata.num_columns)]
+    # ParquetFile, not read_table: read_table reads the hive keys of the path
+    # (country=, state=) back as dictionary columns, clashing with the file's.
+    table = (pa.concat_tables([pq.ParquetFile(p).read() for p in parts])
+             if len(parts) > 1 else pf.read())
     dest.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(
-        pf.read(), dest, row_group_size=ROW_GROUP_ROWS,
+        table, dest, row_group_size=ROW_GROUP_ROWS,
         compression="zstd", compression_level=15, write_statistics=True,
         use_dictionary=[c.path for c in leaves
                         if c.physical_type == "BYTE_ARRAY" and c.path != "geometry"],
@@ -1033,15 +1046,29 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
-    # DuckDB partitions as <layer>/country=X/state=Y/data_0.parquet; the
-    # published layout is region first.
-    files = sorted(staging.glob("*/country=*/state=*/*.parquet"))
-    for f in files:
-        dest = out / f.parent.parent.name / f.parent.name / f"{f.parent.parent.parent.name}.parquet"
-        rewrite(f, dest)
+    # DuckDB partitions as <layer>/country=X/state=Y/data_<n>.parquet, one or
+    # more parts; the published layout is region first, one file per layer.
+    parts: dict[Path, list[Path]] = {}
+    for f in staging.glob("*/country=*/state=*/data_*.parquet"):
+        parts.setdefault(f.parent, []).append(f)
+    for folder, fs in sorted(parts.items()):
+        fs.sort(key=lambda f: int(f.stem.split("_")[1]))
+        dest = out / folder.parent.name / folder.name / f"{folder.parent.parent.name}.parquet"
+        rewrite(fs, dest)
         verify(con, dest)
-    print(f"  {len(files)} files rewritten to {ROW_GROUP_ROWS:,}-row groups and verified")
+    print(f"  {len(parts)} files written to {ROW_GROUP_ROWS:,}-row groups and verified "
+          f"({sum(len(fs) > 1 for fs in parts.values())} joined from several parts)")
     write_manifests(con, out)
+    # Nothing is published unless every source row reached a file: the first
+    # planet build lost 30% of its towers here, one part overwriting another.
+    written = {}
+    for mf in out.glob("country=*/state=*/_manifest.json"):
+        for name, n in json.loads(mf.read_text())["themes"].items():
+            written[name] = written.get(name, 0) + n
+    lost = {r["layer"]: (r["rows"], written.get(r["layer"], 0))
+            for r in report if r["rows"] != written.get(r["layer"], 0)}
+    if lost:
+        sys.exit(f"rows lost between the source and the files (source, written): {lost}")
     write_stats(con, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
