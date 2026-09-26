@@ -291,6 +291,22 @@ def remote_sizes(remote: str) -> dict[str, int]:
     return {e["Path"]: e["Size"] for e in json.loads(out) if e["Path"].endswith(".parquet")}
 
 
+def world_asset(name: str, agg: dict) -> dict:
+    path = f"{DATASET_PREFIX}/latest/world/{name}.parquet"
+    return {
+        "href": f"{PUBLIC_BASE}/{path}",
+        "type": PARQUET_TYPE,
+        "title": "The whole world in one file",
+        "description": f"{agg['rows']:,} features in {agg['world_row_groups']:,} row groups of "
+                       f"32,000, spatially clustered: a bbox filter reads only the groups "
+                       f"it touches.",
+        "roles": ["data"],
+        "file:size": agg["world_bytes"],
+        "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                             "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+    }
+
+
 def measure(out_dir: Path, sizes: dict[str, int] | None = None) -> dict[str, dict]:
     """Per layer: its folders (with rows and size), extent and columns."""
     layers = {l.name: {"folders": [], "rows": 0, "bytes": 0} for l in infra.LAYERS}
@@ -320,6 +336,13 @@ def measure(out_dir: Path, sizes: dict[str, int] | None = None) -> dict[str, dic
         agg["columns"] = [(r[0], "GEOMETRY" if r[1].startswith("GEOMETRY") else r[1])
                           for r in con.execute(f"DESCRIBE SELECT * FROM '{first}'").fetchall()]
         agg["countries"] = sorted({f["country"] for f in agg["folders"]})
+        world = out_dir / "world" / f"{name}.parquet"
+        if not world.is_file():
+            sys.exit(f"{name}: no {world}")
+        key = f"world/{name}.parquet"
+        agg["world_bytes"] = sizes[key] if sizes else world.stat().st_size
+        agg["world_row_groups"] = con.execute(
+            f"SELECT count(DISTINCT row_group_id) FROM parquet_metadata('{world}')").fetchone()[0]
     return layers
 
 
@@ -359,12 +382,14 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
         "title": title,
         "description": (
             f"{description} From OpenStreetMap, worldwide, following Open "
-            f"Infrastructure Map's data model. One GeoParquet file per country and "
-            f"state ({len(agg['folders']):,} files, {agg['rows']:,} rows). Read every "
-            f"file at once with the partition glob {glob_for(name)} through the "
-            f"anonymous S3 endpoint {S3_ENDPOINT} (path-style, empty credentials), or "
-            f"one file over plain HTTPS. This collection reads latest/, which each "
-            f"build replaces. {PREVIEW}"
+            f"Infrastructure Map's data model. Published twice from the same "
+            f"{agg['rows']:,} rows: one whole-world GeoParquet file (the data asset, "
+            f"{agg['world_bytes'] / 1e6:,.0f} MB, spatially clustered row groups) for "
+            f"world-scale reads, and one file per country and state "
+            f"({len(agg['folders']):,} files, the data-<country>-<state> assets and the "
+            f"partition glob {glob_for(name)}) for small ones. Both read in place over "
+            f"HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}. This collection "
+            f"reads latest/, which each build replaces. {PREVIEW}"
         ),
         "keywords": ["OpenStreetMap", "OSM", "infrastructure", "GeoParquet", "worldwide",
                      infra_group(name), name.replace("_", " ")],
@@ -387,6 +412,7 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
         "table:columns": [{"name": n, "type": t, "description": docs[n]}
                           for n, t in agg["columns"]],
         "assets": {
+            "data": world_asset(name, agg),
             **folder_assets(name, agg["folders"]),
             "thumbnail": {
                 "href": "./thumbnail.png",
@@ -535,16 +561,26 @@ Features that touch no Geofabrik extract (mid-ocean cable nodes) are missing."""
 
 def access_section(name: str) -> str:
     return f"""\
-One file over HTTPS, no credentials:
+The whole world in one file, over HTTPS; a bbox filter reads only the row
+groups it touches:
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+SELECT count(*) FROM read_parquet('{DATA_URL}/world/{name}.parquet')
+WHERE bbox.xmin <= 13.8 AND bbox.xmax >= 9.0 AND bbox.ymin <= 50.6 AND bbox.ymax >= 47.3;
+```
+
+One state, a small file, no credentials:
 
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
 SELECT count(*) FROM read_parquet('{DATA_URL}/country=DE/state=bayern/{name}.parquet');
 ```
 
-Every country and state at once, through the anonymous S3 endpoint
-`{S3_ENDPOINT}` (path-style, empty credentials); the `country` and `state`
-columns are inside every file:
+The per-state files all at once, through the anonymous S3 endpoint
+`{S3_ENDPOINT}` (path-style, empty credentials). Slower than the world file
+(every footer is read first), but it prunes by path: `country=DE/state=*`
+reads Germany only. The `country` and `state` columns are inside every file:
 
 ```sql
 SET s3_endpoint='{S3_ENDPOINT}'; SET s3_url_style='path';
@@ -564,7 +600,8 @@ def collection_readme(col: dict, agg: dict, interval: list[str]) -> str:
 | | |
 |---|---|
 | Rows | {agg['rows']:,} |
-| Files | {len(agg['folders']):,} (one per country and state), {agg['bytes'] / 1e6:,.0f} MB in all |
+| Whole-world file | `world/{col['id']}.parquet`, {agg['world_bytes'] / 1e6:,.0f} MB, {agg['world_row_groups']:,} row groups |
+| Per-state files | {len(agg['folders']):,} (one per country and state), {agg['bytes'] / 1e6:,.0f} MB in all |
 | Countries | {len(agg['countries'])} |
 | Extent | {shared.fmt_bbox(agg['bbox'])} (lon/lat) |
 | Data as of | {interval[0]} (Geofabrik extracts) |
@@ -606,8 +643,9 @@ def collection_agents(col: dict, agg: dict) -> str:
   The data assets list every file with its title ("Texas, United States of
   America") and row count; `{PUBLIC_DATA}/index.json` maps every folder to its
   names and GAUL code.
-- A region or the world: the partition glob through the S3 endpoint, with a
-  `bbox` filter so row groups outside the window are skipped.
+- A region or the world: the whole-world file, `{DATA_URL}/world/{col['id']}.parquet`,
+  with a `bbox` filter so row groups outside the window are skipped. One
+  country: the glob `country=<ISO2>/state=*` through the S3 endpoint.
 - `lifecycle` separates what exists (active) from construction, proposed,
   disused and abandoned features; filter on it for current infrastructure.
 - Anything not promoted to a column is in `tags`, a MAP: `tags['key']`.
@@ -641,9 +679,10 @@ ATTRIBUTION.txt).
 
 ## Access
 
-Every layer is one file per country and state:
-`{DATA_URL}/country=<ISO2>/state=<slug>/<layer>.parquet`, readable in place
-with HTTP range requests. `{PUBLIC_DATA}/index.json` lists the folders with
+Every layer is published twice: one whole-world file,
+`{DATA_URL}/world/<layer>.parquet`, and one file per country and state,
+`{DATA_URL}/country=<ISO2>/state=<slug>/<layer>.parquet`, all readable in
+place with HTTP range requests. `{PUBLIC_DATA}/index.json` lists the folders with
 their names. The same paths exist under `s3://{BUCKET}/{DATASET_PREFIX}/latest/`
 on the anonymous S3 endpoint `{S3_ENDPOINT}`, where each collection's
 `partition:glob` reads the whole world. GeoPQ Workbench has the dataset built
@@ -681,8 +720,10 @@ state. Only the latest build is published. {PREVIEW}
 
 - One place: `{DATA_URL}/country=<ISO2>/state=<slug>/<layer>.parquet` over
   HTTPS, no credentials. `{PUBLIC_DATA}/index.json` maps folders to names.
-- Everything: the collection's `partition:glob` on the anonymous S3 endpoint
-  `{S3_ENDPOINT}`, path-style, empty credentials.
+- The world or a large region: `{DATA_URL}/world/<layer>.parquet` with a
+  bbox filter (the collection's `data` asset).
+- One country: the `partition:glob` narrowed to `country=<ISO2>/state=*` on
+  the anonymous S3 endpoint `{S3_ENDPOINT}`, path-style, empty credentials.
 
 ## Conventions
 

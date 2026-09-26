@@ -24,15 +24,17 @@ Two stages, so the worldwide build can fan out over Geofabrik regions:
   filter  one extract -> the infrastructure subset (about 0.4% of the input)
   build   one (merged) subset ->
           <out>/country=<ISO2>/state=<GAUL L1 name slug>/<layer>.parquet, a
-          _manifest.json per folder, <out>/stats/, and index.json in
+          _manifest.json per folder, <out>/world/<layer>.parquet (every
+          folder in one file), <out>/stats/, and index.json in
           <out>'s parent (the repository base; <out> is `latest`, the only
           version published: no snapshots.json)
 
 The layout is the parquetry one the OSM dataset uses and GeoPQ Workbench's
 repository browser reads (index.json lists the folders, each _manifest.json
 its layers): picking a state there loads every layer, picking a country
-loads all its states. One layer everywhere is
-`country=*/state=*/<layer>.parquet`.
+loads all its states. One layer everywhere is `world/<layer>.parquet`, the
+same rows in one file (a glob over the ~2,700 folder files spends minutes on
+their footers before reading a row).
 
 Regions: a feature goes to exactly one folder, the one holding a point on it
 (ST_PointOnSurface). On land that is its FAO GAUL 2024 L1 unit, the
@@ -908,8 +910,13 @@ def rewrite(parts: list[Path], dest: Path) -> None:
     table = (pa.concat_tables([pq.ParquetFile(p).read() for p in parts])
              if len(parts) > 1 else pf.read())
     dest.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(
-        table, dest, row_group_size=ROW_GROUP_ROWS,
+    pq.write_table(table, dest, row_group_size=ROW_GROUP_ROWS, **writer_options(leaves))
+
+
+def writer_options(leaves) -> dict:
+    """pyarrow writer settings shared by every file: what DuckDB gets for free
+    (byte-stream-split floats, delta-packed ids), zstd 15, 1 MB pages."""
+    return dict(
         compression="zstd", compression_level=15, write_statistics=True,
         use_dictionary=[c.path for c in leaves
                         if c.physical_type == "BYTE_ARRAY" and c.path != "geometry"],
@@ -917,6 +924,64 @@ def rewrite(parts: list[Path], dest: Path) -> None:
                                if c.physical_type in ("FLOAT", "DOUBLE")],
         column_encoding={"osm_id": "DELTA_BINARY_PACKED"},
         data_page_size=1 << 20)
+
+
+def hilbert_d(x: float, y: float, order: int = 16) -> int:
+    """Position of a lon/lat point on a Hilbert curve over the world."""
+    n = 1 << order
+    xi = min(n - 1, max(0, int((x + 180) / 360 * n)))
+    yi = min(n - 1, max(0, int((y + 90) / 180 * n)))
+    d, s = 0, n >> 1
+    while s:
+        rx, ry = int(xi & s > 0), int(yi & s > 0)
+        d += s * s * ((3 * rx) ^ ry)
+        if ry == 0:
+            if rx == 1:
+                xi, yi = s - 1 - xi, s - 1 - yi
+            xi, yi = yi, xi
+        s >>= 1
+    return d
+
+
+def write_world(con: duckdb.DuckDBPyConnection, out: Path, layer: str) -> int:
+    """<out>/world/<layer>.parquet: every folder's file of the layer in one,
+    for whole-world reads (a glob over ~2,700 files spends minutes on footers
+    before reading a row). The folder files are Hilbert-sorted already, so
+    they are concatenated in the Hilbert order of their centres rather than
+    re-sorted: neighbouring states sit together, and a row group that
+    straddles two files stays local. Streamed in exact ROW_GROUP_ROWS groups,
+    so memory does not follow the layer's size. Returns the row count."""
+    import geoarrow.pyarrow  # noqa: F401
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    glob = f"{out}/country=*/state=*/{layer}.parquet"
+    centres = con.execute(f"""
+        SELECT filename, (min(bbox.xmin) + max(bbox.xmax)) / 2, (min(bbox.ymin) + max(bbox.ymax)) / 2
+        FROM read_parquet('{glob}', filename = true, hive_partitioning = false)
+        GROUP BY filename""").fetchall()
+    files = [f for f, _, _ in sorted(centres, key=lambda r: hilbert_d(r[1], r[2]))]
+    first = pq.ParquetFile(files[0])
+    leaves = [first.metadata.schema.column(i) for i in range(first.metadata.num_columns)]
+    dest = out / "world" / f"{layer}.parquet"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rows, pending, pending_rows = 0, [], 0
+    with pq.ParquetWriter(dest, first.schema_arrow, **writer_options(leaves)) as w:
+        def flush(n: int) -> None:
+            nonlocal pending, pending_rows
+            table = pa.Table.from_batches(pending)
+            w.write_table(table.slice(0, n), row_group_size=ROW_GROUP_ROWS)
+            rest = table.slice(n)
+            pending, pending_rows = rest.to_batches(), rest.num_rows
+        for f in files:
+            for batch in pq.ParquetFile(f).iter_batches(batch_size=ROW_GROUP_ROWS):
+                pending.append(batch)
+                pending_rows += batch.num_rows
+                rows += batch.num_rows
+                while pending_rows >= ROW_GROUP_ROWS:
+                    flush(ROW_GROUP_ROWS)
+        if pending_rows:
+            flush(pending_rows)
+    return rows
 
 
 def verify(con: duckdb.DuckDBPyConnection, path: Path) -> None:
@@ -1069,6 +1134,17 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str) -> None:
             for r in report if r["rows"] != written.get(r["layer"], 0)}
     if lost:
         sys.exit(f"rows lost between the source and the files (source, written): {lost}")
+    for r in report:
+        if not r["rows"]:
+            continue
+        t0 = time.monotonic()
+        n = write_world(con, out, r["layer"])
+        if n != r["rows"]:
+            sys.exit(f"world/{r['layer']}.parquet has {n:,} rows, the source {r['rows']:,}")
+        verify(con, out / "world" / f"{r['layer']}.parquet")
+        print(f"  world/{r['layer']}.parquet: {n:,} rows, "
+              f"{(out / 'world' / (r['layer'] + '.parquet')).stat().st_size / 1e6:,.0f} MB, "
+              f"{time.monotonic() - t0:.0f} s", flush=True)
     write_stats(con, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:

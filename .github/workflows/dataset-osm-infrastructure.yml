@@ -276,6 +276,7 @@ jobs:
                    latest/country=US/state=texas/power_line.parquet \
                    latest/country=DE/state=bayern/power_generator.parquet \
                    latest/country=FR/state=ile-de-france/power_substation.parquet \
+                   latest/world/power_line.parquet latest/world/power_tower.parquet \
                    catalog/catalog.json catalog/power/power_line/collection.json \
                    catalog/power/power_line/thumbnail.png; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")

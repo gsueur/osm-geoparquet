@@ -357,8 +357,11 @@ https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.pa
 <pre><code>https://parquetry.geomermaids.com/osm-infrastructure/latest/country=&lt;CC&gt;/state=&lt;name&gt;/&lt;layer&gt;.parquet
 
 # e.g. the power lines of Bayern, Germany
-https://parquetry.geomermaids.com/osm-infrastructure/latest/country=DE/state=bayern/power_line.parquet</code></pre>
-<p>States are the <a href="https://parquetry.geomermaids.com/gaul/">GAUL</a> first-level units, named in the path; offshore features sit under <code>state=_offshore</code>. The whole planet, built from Geofabrik's continental extracts: about 41,000 files, 2.6 GB. Only the latest build is kept, and columns may still change.</p>
+https://parquetry.geomermaids.com/osm-infrastructure/latest/country=DE/state=bayern/power_line.parquet
+
+# every power line on the planet, in one file
+https://parquetry.geomermaids.com/osm-infrastructure/latest/world/power_line.parquet</code></pre>
+<p>States are the <a href="https://parquetry.geomermaids.com/gaul/">GAUL</a> first-level units, named in the path; offshore features sit under <code>state=_offshore</code>. The whole planet, built from Geofabrik's continental extracts, one file per layer and state, and each layer again as one world file whose row groups a bbox filter skips (a glob over thousands of small files spends minutes on their footers). Only the latest build is kept, and columns may still change.</p>
 
 <div class="cta" id="custom">
 <h2>Other regions, schemas or hosting</h2>
