@@ -165,6 +165,13 @@ const DATASETS = {
     attribution: "osm/ATTRIBUTION.txt",
     snapshots: "osm/snapshots.json",
   },
+  // Not caught by "osm/": the keys are matched with startsWith, and
+  // "osm-infrastructure/" does not start with "osm/".
+  "osm-infrastructure/": {
+    subtitle: "OpenStreetMap infrastructure, worldwide: power, telecoms, oil and " +
+      "gas, water. One folder per country and state, latest build only.",
+    attribution: "osm-infrastructure/ATTRIBUTION.txt",
+  },
   "clc/": {
     subtitle: "Corine Land Cover 2018, Europe.",
     attribution: "clc/2018/ATTRIBUTION.txt",

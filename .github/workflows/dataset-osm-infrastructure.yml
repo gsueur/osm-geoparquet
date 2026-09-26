@@ -256,6 +256,16 @@ jobs:
             --include index.json --include ATTRIBUTION.txt --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
 
+      # After the data, so the catalog never links a file that is not there.
+      # Rendered from the files just published: rows and sizes match them.
+      # The thumbnails are committed (catalog/thumbnails/osm-infrastructure/).
+      - name: Portolan catalog, published
+        if: inputs.stage == 'publish'
+        run: |
+          uv run --project scripts python scripts/datasets/infra_catalog.py publish \
+            --out-dir "$WORK/out/latest" --attribution "$WORK/out/ATTRIBUTION.txt" \
+            --remote "$REMOTE"
+
       - name: Check what is live
         if: inputs.stage == 'publish'
         run: |
@@ -265,7 +275,9 @@ jobs:
                    latest/country=US/state=texas/_manifest.json \
                    latest/country=US/state=texas/power_line.parquet \
                    latest/country=DE/state=bayern/power_generator.parquet \
-                   latest/country=FR/state=ile-de-france/power_substation.parquet; do
+                   latest/country=FR/state=ile-de-france/power_substation.parquet \
+                   catalog/catalog.json catalog/power/power_line/collection.json \
+                   catalog/power/power_line/thumbnail.png; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
