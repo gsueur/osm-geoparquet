@@ -1291,9 +1291,14 @@ def rewrite(src: Path, dest: Path) -> int:
 
 def writer_options(leaves) -> dict:
     """pyarrow writer settings: what DuckDB gets for free (byte-stream-split
-    floats, delta-packed ids), zstd 15, 1 MB pages."""
+    floats, delta-packed ids), zstd 19, 1 MB pages.
+
+    19 rather than the guide's minimum of 15: measured 2026-09-27 on three
+    published layers, 13-15% smaller (power_line 598 -> 506 MB,
+    power_generator 370 -> 319 MB, power_substation 78 -> 67 MB) for 2-3x
+    the write time; reads take the same time."""
     return dict(
-        compression="zstd", compression_level=15, write_statistics=True,
+        compression="zstd", compression_level=19, write_statistics=True,
         use_dictionary=[c.path for c in leaves
                         if c.physical_type == "BYTE_ARRAY" and c.path != "geometry"],
         use_byte_stream_split=[c.path for c in leaves
