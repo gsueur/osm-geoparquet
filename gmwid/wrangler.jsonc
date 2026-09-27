@@ -1,0 +1,18 @@
+// GMWID, the GeoMermaids World Infrastructures Dataset: its page.
+// Workers + Static Assets, like site/. The page reads the live build
+// (_manifest.json, _layers.json, _coverage.json, ATTRIBUTION.txt) from
+// parquetry.geomermaids.com/gmwid/ in the browser, so a new weekly build
+// updates it without a redeploy.
+//
+// Deploy from gmwid/:
+//   npx wrangler deploy
+// The custom domain is declared below, so the first deploy creates the
+// DNS record and the certificate for gmwid.geomermaids.com.
+{
+  "name": "gmwid",
+  "compatibility_date": "2026-04-01",
+  "routes": [{ "pattern": "gmwid.geomermaids.com", "custom_domain": true }],
+  "assets": {
+    "directory": "./public"
+  }
+}

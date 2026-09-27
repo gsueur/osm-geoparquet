@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GMWID · GeoMermaids World Infrastructures Dataset</title>
+<meta name="description" content="GMWID: the world's power, telecoms, oil and gas, and water infrastructure from OpenStreetMap, measured against and completed from authoritative open sources. GeoParquet, one file per layer, rebuilt weekly, coverage published with every build.">
+<link rel="canonical" href="https://gmwid.geomermaids.com/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#d2553a">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://gmwid.geomermaids.com/">
+<meta property="og:title" content="GMWID · GeoMermaids World Infrastructures Dataset">
+<meta property="og:description" content="OpenStreetMap's infrastructure, worldwide, completed from authoritative open sources, with a coverage measure published every build.">
+<meta property="og:image" content="https://gmwid.geomermaids.com/logo-384.png">
+<meta property="og:site_name" content="geomermaids">
+<meta name="twitter:card" content="summary">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --accent: #d2553a;
+  --accent-soft: #fae0d8;
+  --border: #e5e5e5;
+  --code-bg: #f6f6f4;
+  --code-fg: #1a1a1a;
+  /* Coverage bars (validated: blue / aqua / orange, light surface). */
+  --c-id: #2a78d6;
+  --c-loc: #1baf7a;
+  --c-add: #eb6834;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --accent: #f08a6e;
+    --accent-soft: #2e1f1a;
+    --border: #2e2e2e;
+    --code-bg: #0f0f0f;
+    --code-fg: #e8e8e8;
+    /* Same hues, stepped for the dark surface (validated). */
+    --c-id: #3987e5;
+    --c-loc: #199e70;
+    --c-add: #d95926;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+body { font-family: var(--sans); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+main { max-width: 860px; margin: 0 auto; padding: 3rem 1rem 6rem; }
+@media (min-width: 600px) { main { padding-left: 1.5rem; padding-right: 1.5rem; } }
+.topnav { display: flex; justify-content: flex-end; gap: 1.2rem; margin-bottom: 1rem; font-size: .9rem; flex-wrap: wrap; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.hero-logo { width: 96px; height: 96px; display: block; margin: 0 0 1rem; border-radius: 8px; }
+h1 { font-size: 2.4rem; margin: 0; letter-spacing: -0.03em; line-height: 1.1; }
+h1 .brand { color: var(--accent); }
+.expansion { font-size: 1.1rem; color: var(--muted); margin: .3rem 0 1.2rem; }
+h2 { font-size: 1.35rem; margin: 3rem 0 .75rem; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 1.8rem 0 .4rem; color: var(--muted); font-weight: 600; }
+p { margin: .8rem 0; }
+.lead { font-size: 1.08rem; }
+a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+.stats { display: flex; flex-wrap: wrap; gap: 1.5rem 2.2rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 1rem 0; margin: 1.5rem 0 2rem; }
+.stat strong { display: block; font-family: var(--mono); font-size: 1.4rem; letter-spacing: -0.02em; }
+.stat span { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: .1em .3em; border-radius: 3px; }
+pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: 6px; overflow-x: auto; font-family: var(--mono); font-size: .85rem; line-height: 1.55; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: .5rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { font-weight: 600; padding-top: 1.1rem; border-bottom: 2px solid var(--border); }
+ul, ol { padding-left: 1.3rem; }
+li { margin: .35rem 0; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
+.tag { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 .3rem; vertical-align: middle; white-space: nowrap; }
+.status { font-size: .82rem; white-space: nowrap; }
+.status.live { color: var(--fg); font-weight: 600; }
+.status.apart { color: var(--fg); }
+.status.planned, .status.none { color: var(--muted); }
+.steps { counter-reset: step; list-style: none; padding: 0; display: grid; gap: .8rem; }
+.steps li { counter-increment: step; border: 1px solid var(--border); border-radius: 6px; padding: .8rem 1rem .8rem 3.2rem; position: relative; margin: 0; }
+.steps li::before { content: counter(step); position: absolute; left: 1rem; top: .8rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: .85rem; display: flex; align-items: center; justify-content: center; }
+.steps strong { display: block; }
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: .9rem 1.1rem; margin: 1rem 0 1.5rem; border-radius: 0 4px 4px 0; }
+.callout p { margin: .25rem 0; }
+/* Coverage */
+.cov { border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.1rem 1.1rem; margin: 1rem 0 1.4rem; }
+.cov h3 { margin: 0 0 .1rem; color: var(--fg); font-size: 1.02rem; }
+.cov .src { color: var(--muted); font-size: .86rem; margin: 0 0 .9rem; }
+.cov .headline { font-family: var(--mono); font-size: 1.5rem; letter-spacing: -0.02em; margin: 0; }
+.cov .headline-sub { color: var(--muted); font-size: .88rem; margin: 0 0 .7rem; }
+.bar { display: flex; gap: 2px; height: 18px; margin: .4rem 0 .3rem; position: relative; }
+.bar div { height: 100%; min-width: 3px; cursor: default; }
+.bar div:first-child { border-radius: 4px 0 0 4px; }
+.bar div:last-child { border-radius: 0 4px 4px 0; }
+.bar div:only-child { border-radius: 4px; }
+.bar .id { background: var(--c-id); }
+.bar .loc { background: var(--c-loc); }
+.bar .add { background: var(--c-add); }
+.legend { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: .84rem; color: var(--muted); margin: .4rem 0 .2rem; }
+.legend span::before { content: ""; display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .35rem; vertical-align: -1px; background: var(--sw); }
+.cov table { font-size: .86rem; margin-top: .6rem; }
+.cov .note { color: var(--muted); font-size: .86rem; margin: .6rem 0 0; }
+.tip { position: fixed; pointer-events: none; background: var(--fg); color: var(--bg); font-size: .8rem; padding: .35rem .55rem; border-radius: 4px; opacity: 0; transition: opacity .1s; z-index: 10; max-width: 260px; }
+.loading { color: var(--muted); font-style: italic; }
+.code-block { position: relative; }
+.code-block pre { padding-right: 4.5rem; }
+.copy-btn { position: absolute; top: .55rem; right: .55rem; background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: .25rem .6rem; font-size: .78rem; font-family: var(--sans); cursor: pointer; line-height: 1.3; }
+.copy-btn:hover, .copy-btn.copied { border-color: var(--accent); color: var(--accent); }
+.cta { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 2.5rem 0 1rem; }
+.cta h2 { margin-top: 0; color: var(--accent); }
+@media (max-width: 600px) { #layers-table td code { display: inline-block; font-size: .78em; overflow-wrap: anywhere; } #layers-table th, #layers-table td { padding: .4rem .4rem; } #layers-table { font-size: .84rem; } .status { white-space: normal; } h1 { font-size: 2rem; } }
+footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
+footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<nav class="topnav">
+  <a href="#coverage">Coverage</a>
+  <a href="#sources">Sources and licences</a>
+  <a href="#data">Get the data</a>
+  <a href="https://www.geomermaids.com" rel="noopener">geomermaids.com&nbsp;↗</a>
+</nav>
+
+<picture>
+  <source type="image/webp" srcset="/logo-96.webp 1x, /logo-192.webp 2x, /logo-384.webp 4x">
+  <img class="hero-logo" src="/logo-384.png" alt="geomermaids" width="96" height="96">
+</picture>
+<h1><span class="brand">GMWID</span></h1>
+<p class="expansion">GeoMermaids World Infrastructures Dataset <span class="tag">preview</span></p>
+
+<p class="lead">The world's power grids, telecom masts, pipelines, wells and water works, from OpenStreetMap, <strong>measured against authoritative open sources and completed where OpenStreetMap falls short</strong>. Every row says where it comes from, and every build publishes how OpenStreetMap compares with each source.</p>
+<p>GeoParquet 2.0, one whole-world file per layer, rebuilt every week. Query it from a URL with DuckDB, no account, no download.</p>
+
+<div class="stats" id="stats">
+  <div class="stat"><strong data-stat="layers">27</strong><span>layers</span></div>
+  <div class="stat"><strong data-stat="features">…</strong><span>features</span></div>
+  <div class="stat"><strong data-stat="countries">…</strong><span>countries</span></div>
+  <div class="stat"><strong data-stat="asof">…</strong><span>data as of</span></div>
+</div>
+
+<h2 id="why">Why enrich OpenStreetMap</h2>
+<p>OpenStreetMap is already remarkable for infrastructure: in the United States it holds 97.8% of the generating capacity the Energy Information Administration reports. What it lacks is the last few percent (recent and small plants, remote wells, offshore assets), and a way to know how complete it is. GMWID adds both: the missing features, from sources that are authoritative for them, and a published measure of completeness for every layer that has a reference.</p>
+<p>OpenStreetMap stays the base and is never overwritten. What GMWID adds is additive, labelled, and removable with one filter.</p>
+
+<h2 id="process">How the enrichment works</h2>
+<ol class="steps">
+  <li><strong>Pick an authoritative open source per layer</strong>A national register or inventory that is the reference for that kind of asset (EIA-860M for US power plants, the NSTA for UK offshore oil and gas), with a licence that allows open redistribution, and never a source that was itself built from OpenStreetMap.</li>
+  <li><strong>Match, strictest test first</strong>A feature counts as present in OpenStreetMap when OpenStreetMap carries its identifier (a <code>ref:US:EIA</code>, a UK well registration number, a pipeline PL number). Failing that, by location: inside an OpenStreetMap outline, or within a distance suited to the asset (25 m for a well, 500 m for a platform, 2 km for a power plant). Borderline cases count as present: a missed addition is better than a duplicate.</li>
+  <li><strong>Add only what is missing</strong>Unmatched features become rows with the layer's exact columns, the tags a mapper would have used, and <code>origin</code> set to the source (<code>eia</code>, <code>nsta</code>). They have no <code>osm_id</code>. Where a better geometry exists (a solar farm's outline instead of a point), it is used.</li>
+  <li><strong>Publish the measure</strong>Every build writes <code>_coverage.json</code>: how many features each source reports, how many OpenStreetMap has (by identifier or by location), and what was added. It is shown below, live.</li>
+  <li><strong>Credit, and fail loudly</strong>Every source is credited in the attribution file and the catalog. If a source cannot be downloaded, the build stops and last week's data stays online, rather than publishing a silently thinner dataset.</li>
+</ol>
+
+<h2 id="coverage">Coverage, measured every build</h2>
+<p>Read live from this week's <a href="https://parquetry.geomermaids.com/gmwid/latest/_coverage.json"><code>_coverage.json</code></a>. Bars are split into what OpenStreetMap already has, found by identifier or by location, and what GMWID adds.</p>
+<div class="legend" aria-hidden="true">
+  <span style="--sw: var(--c-id)">in OpenStreetMap, by identifier</span>
+  <span style="--sw: var(--c-loc)">in OpenStreetMap, by location</span>
+  <span style="--sw: var(--c-add)">added by GMWID</span>
+</div>
+<div id="coverage-blocks"><p class="loading">Loading this week's coverage…</p></div>
+
+<h2 id="layers">What is inside</h2>
+<p>27 layers in four groups, with the data model of <a href="https://openinframap.org">Open Infrastructure Map</a>: voltages parsed to kV per circuit, outputs to MW, plants and substations assembled from their OpenStreetMap relations, and every OpenStreetMap tag kept. Row counts are this week's.</p>
+<div class="table-wrap">
+<table id="layers-table">
+  <thead><tr><th>Layer</th><th class="num">Rows</th><th>Enrichment</th></tr></thead>
+  <tbody><tr><td colspan="3" class="loading">Loading…</td></tr></tbody>
+</table>
+</div>
+<p>Layers marked <em>OpenStreetMap only</em> have no open authoritative reference anywhere we could find (pylons outside France, switchgear, street cabinets, pipeline markers, drinking water plants): OpenStreetMap is the best open source there is for them.</p>
+
+<h2 id="sources">Sources and licences</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Source</th><th>What it contributes</th><th>Licence</th></tr></thead>
+  <tbody>
+    <tr><td><a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, via <a href="https://download.geofabrik.de/">Geofabrik</a> extracts</td><td>Every layer, every <code>origin = 'osm'</code> row</td><td>ODbL 1.0</td></tr>
+    <tr><td><a href="https://www.eia.gov/electricity/data/eia860m/">EIA-860M</a>, U.S. Energy Information Administration</td><td>US power plants OpenStreetMap lacks (<code>power_plant</code>, <code>origin = 'eia'</code>)</td><td>Public domain</td></tr>
+    <tr><td><a href="https://energy.usgs.gov/uspvdb/">USPVDB</a>, USGS and Lawrence Berkeley National Laboratory</td><td>Outlines of the solar farms added from EIA</td><td>Public domain</td></tr>
+    <tr><td><a href="https://opendata-nstauthority.hub.arcgis.com/">NSTA open data</a>, North Sea Transition Authority</td><td>UK wells, platforms and pipelines OpenStreetMap lacks, in <code>gmwid/nsta/</code> only (see below)</td><td>NSTA User Agreement, <strong>non-commercial</strong></td></tr>
+    <tr><td><a href="https://data.apps.fao.org/">FAO GAUL 2024</a></td><td>The <code>country</code> and <code>state</code> columns on land</td><td>CC BY 4.0</td></tr>
+    <tr><td><a href="https://www.marineregions.org">Marine Regions</a>, Flanders Marine Institute</td><td>The country of offshore features (<code>state = '_offshore'</code>)</td><td>CC BY 4.0</td></tr>
+    <tr><td><a href="https://github.com/openinframap/openinframap">Open Infrastructure Map</a></td><td>Data model and derivation rules (code, not data)</td><td>BSD-style</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The dataset in <code>gmwid/latest/</code> is a derived database of OpenStreetMap and is distributed under the <strong>ODbL 1.0</strong>: free to use, commercially included, with attribution and share-alike. A source joins it only if its own licence allows the same (public domain, CC0, CC BY, government open licences). The full credits of each build are in <a href="https://parquetry.geomermaids.com/gmwid/ATTRIBUTION.txt">ATTRIBUTION.txt</a>.</p>
+
+<h3>Why some rows live apart</h3>
+<div class="callout">
+<p>Some authoritative sources are open, but only for non-commercial use: the UK's NSTA is one. Their rows cannot go into an ODbL file, since the ODbL lets anyone reuse it commercially. So they are published beside it, in <a href="https://parquetry.geomermaids.com/gmwid/nsta/"><code>gmwid/nsta/</code></a>, under the source's own terms (<a href="https://parquetry.geomermaids.com/gmwid/nsta/LICENSE.txt">LICENSE.txt</a>), with the same columns as the layer they complete. Add them with one <code>UNION ALL BY NAME</code> when your use allows it; leave them out and everything else stays ODbL. The coverage figures themselves are published for every source.</p>
+</div>
+
+<h2 id="next">What is next</h2>
+<p>Every layer was surveyed for open authoritative sources. The next additions, in order:</p>
+<ol>
+  <li><strong>United States, public domain:</strong> FCC Antenna Structure Registration (telecom masts), BSEE (Gulf of Mexico platforms, pipelines and wells), EPA NPDES (wastewater plants).</li>
+  <li><strong>Europe, matched by identifier:</strong> ANFR (French masts and water towers), Sandre and the EEA's Urban Waste Water Treatment reporting (wastewater plants), the UK Renewable Energy Planning Database, Germany's Marktstammdatenregister (plants and wind turbines).</li>
+  <li><strong>France's distribution grid</strong> from Enedis and Agence ORE: a million local substations, overhead medium-voltage lines and six million poles.</li>
+  <li><strong>Oil and gas worldwide</strong> from OGIM (EDF and MethaneSAT), keeping only records whose upstream licence allows open reuse.</li>
+  <li><strong>The Global South:</strong> ANEEL (Brazil's power plants), the Water Point Data Exchange (wells, mostly in Africa), HydroWASTE (wastewater plants outside Europe and the US).</li>
+</ol>
+<p>Know a source we should use, or one you need measured? <a href="mailto:contact@geomermaids.com?subject=GMWID%20source">Tell us</a>.</p>
+
+<h2 id="data">Get the data</h2>
+<pre><code>https://parquetry.geomermaids.com/gmwid/latest/&lt;layer&gt;.parquet
+s3://parquetry/gmwid/latest/&lt;layer&gt;.parquet   (endpoint s3.geomermaids.com, anonymous)</code></pre>
+<p>Each file is Hilbert-sorted in row groups of 32,000: a bbox filter reads only the row groups it touches, and a filter on <code>country</code> and <code>state</code> (GAUL first-level units as name slugs, <code>texas</code>, <code>bayern</code>) skips most of the others.</p>
+
+<h3>What GMWID added to US power plants</h3>
+<div class="code-block">
+<pre><code>SELECT origin, count(*) AS plants, round(sum(output_mw_estimated)) AS mw
+FROM read_parquet('https://parquetry.geomermaids.com/gmwid/latest/power_plant.parquet')
+WHERE country = 'US'
+GROUP BY origin;</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<h3>OpenStreetMap only, whatever else is added later</h3>
+<div class="code-block">
+<pre><code>SELECT * FROM read_parquet('https://parquetry.geomermaids.com/gmwid/latest/power_plant.parquet')
+WHERE origin = 'osm';</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<h3>UK wells, with the NSTA rows (non-commercial use only)</h3>
+<div class="code-block">
+<pre><code>SELECT origin, lifecycle, count(*) AS wells FROM (
+  SELECT * FROM read_parquet('https://parquetry.geomermaids.com/gmwid/latest/petroleum_well.parquet')
+  WHERE country = 'GB'
+  UNION ALL BY NAME
+  SELECT * FROM read_parquet('https://parquetry.geomermaids.com/gmwid/nsta/petroleum_well.parquet')
+)
+GROUP BY ALL ORDER BY ALL;</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<ul>
+  <li><strong>Browse the files:</strong> <a href="https://parquetry.geomermaids.com/gmwid/">parquetry.geomermaids.com/gmwid/</a></li>
+  <li><strong>Portolan catalog</strong> (STAC, one collection per layer, column docs, agent guides): <a href="https://parquetry.geomermaids.com/gmwid/catalog/">gmwid/catalog/</a></li>
+  <li><strong>On a map:</strong> <a href="https://www.geomermaids.com/geopq-workbench">GeoPQ Workbench</a> has GMWID built in as a repository.</li>
+  <li><strong>Region and state slugs:</strong> <a href="https://parquetry.geomermaids.com/gmwid/latest/_regions.json">_regions.json</a></li>
+</ul>
+
+<div class="cta">
+<h2>Need it tailored?</h2>
+<p>GMWID is an opinionated default. We also build it for one region or one asset class, with your own sources (including licensed ones kept private), your own cadence, or delivered to your bucket with freshness guarantees.</p>
+<p><a href="mailto:contact@geomermaids.com?subject=GMWID">contact@geomermaids.com</a></p>
+</div>
+
+<footer>
+GMWID is built by <a href="https://www.geomermaids.com">Geomermaids</a> from OpenStreetMap (© OpenStreetMap contributors, ODbL) and the sources listed above. Not affiliated with OpenStreetMap, the OpenStreetMap Foundation or Open Infrastructure Map. Builder source: <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a>. Other datasets: <a href="https://geoparquet.geomermaids.com">geoparquet.geomermaids.com</a>.
+</footer>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+// ?base= points the page at another build (a local rehearsal) for previews.
+const BASE = new URLSearchParams(location.search).get("base") || "https://parquetry.geomermaids.com/gmwid";
+const fmt = new Intl.NumberFormat("en-US");
+const f1 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+// Layer labels and their enrichment status (sources surveyed 2026-09-27).
+const GROUPS = {
+  power: "Power", telecoms: "Telecoms", petroleum: "Oil and gas", water: "Water",
+};
+const LAYERS = {
+  power_line: ["Power lines and cables", "planned", "Enedis (FR, medium voltage)"],
+  power_circuit: ["Circuits", "none"],
+  power_tower: ["Towers and poles", "planned", "Enedis poles (FR)"],
+  power_substation: ["Substations", "planned", "Enedis and ORE (FR), UKPN (GB)"],
+  power_plant: ["Power plants", "live", "EIA-860M + USPVDB (US)"],
+  power_generator: ["Generators and wind turbines", "planned", "Marktstammdatenregister (DE)"],
+  power_switchgear: ["Switchgear and transformers", "none"],
+  power_other: ["Other power features", "none"],
+  telecom_cable: ["Telecom cables", "planned", "EMODnet (EU waters)"],
+  telecom_building: ["Data centres and exchanges", "none"],
+  telecom_location: ["Connection points", "none"],
+  telecom_mast: ["Masts and towers", "planned", "FCC ASR (US), ANFR (FR)"],
+  telecom_antenna: ["Antennas", "planned", "attributes from ANFR, Arcep"],
+  utility_pole: ["Utility poles", "none"],
+  street_cabinet: ["Street cabinets", "none"],
+  pipeline: ["Pipelines", "apart", "NSTA (GB); next BSEE (US Gulf)"],
+  petroleum_site: ["Oil and gas sites", "planned", "OGIM"],
+  petroleum_well: ["Oil and gas wells", "apart", "NSTA (GB); next BSEE, OGIM"],
+  offshore_platform: ["Offshore platforms", "apart", "NSTA (GB); next BSEE (US Gulf)"],
+  pipeline_feature: ["Valves and pig traps", "none"],
+  marker: ["Pipeline markers", "none"],
+  water_treatment_plant: ["Water treatment plants", "none"],
+  wastewater_plant: ["Wastewater plants", "planned", "EPA (US), EEA and Sandre (EU)"],
+  pumping_station: ["Pumping stations", "none"],
+  water_tower: ["Water towers", "planned", "ANFR (FR)"],
+  water_well: ["Water wells", "planned", "Water Point Data Exchange"],
+  pressurised_waterway: ["Penstocks", "none"],
+};
+const STATUS = {
+  live: "Completed:", apart: "Completed apart:", planned: "Planned:", none: "OpenStreetMap only",
+};
+
+async function getJSON(path) {
+  const r = await fetch(`${BASE}/${path}`);
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+function el(tag, attrs = {}, text) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+async function loadStats() {
+  try {
+    const [manifest, layers] = await Promise.all([getJSON("latest/_manifest.json"), getJSON("latest/_layers.json")]);
+    document.querySelector('[data-stat="features"]').textContent =
+      `${f1.format(manifest.total_features / 1e6)} M`;
+    document.querySelector('[data-stat="countries"]').textContent =
+      fmt.format(Math.max(...layers.map((l) => l.countries || 0)));
+    renderLayers(layers);
+  } catch (e) {
+    document.querySelector("#layers-table tbody").innerHTML =
+      '<tr><td colspan="3" class="loading">The build could not be read right now.</td></tr>';
+  }
+  try {
+    const txt = await (await fetch(`${BASE}/ATTRIBUTION.txt`)).text();
+    const dates = (txt.match(/20\d\d-\d\d-\d\d/g) || []).sort();
+    if (dates.length) document.querySelector('[data-stat="asof"]').textContent = dates[dates.length - 1];
+  } catch (e) { /* keep the ellipsis */ }
+}
+
+function renderLayers(layers) {
+  const tbody = document.querySelector("#layers-table tbody");
+  tbody.textContent = "";
+  for (const [g, gname] of Object.entries(GROUPS)) {
+    const tr = el("tr", { class: "group" });
+    tr.append(el("td", { colspan: "3" }, gname));
+    tbody.append(tr);
+    for (const l of layers.filter((x) => x.group === g)) {
+      const [label, status, detail] = LAYERS[l.layer] || [l.layer, "none"];
+      const row = el("tr");
+      const name = el("td");
+      name.append(el("span", {}, label + " "), el("code", {}, l.layer));
+      row.append(name, el("td", { class: "num" }, fmt.format(l.rows)));
+      const st = el("td");
+      st.append(el("span", { class: `status ${status}` }, STATUS[status]));
+      if (detail) st.append(document.createTextNode(" " + detail));
+      row.append(st);
+      tbody.append(row);
+    }
+  }
+}
+
+// _coverage.json tiers -> the three bar segments.
+const TIER_KIND = { ref: "id", inside: "loc", near: "loc", generators: "loc", added: "add" };
+const TIER_LABEL = {
+  ref: "by identifier", inside: "inside an OSM outline", near: "nearby",
+  generators: "OSM generators within 500 m", added: "added by GMWID",
+};
+
+// One block per (source, layer): what the source reports and how it matched.
+function blocks(cov) {
+  if (cov.eia_plants !== undefined) cov = { eia: cov };  // before 2026-09-27: EIA only
+  const out = [];
+  if (cov.eia) {
+    const e = cov.eia;
+    const tiers = Object.entries(e.tiers).map(([t, v]) => ({ t, n: v.plants, m: v.mw }));
+    const addedMw = e.tiers.added ? e.tiers.added.mw : 0;
+    out.push({
+      title: "US power plants",
+      layer: "power_plant",
+      src: `EIA-860M (${e.source}), every operating US plant of 1 MW or more`,
+      measure: "mw", unit: "MW", totalN: e.eia_plants, totalM: e.eia_mw,
+      headline: `${f1.format(100 * (1 - addedMw / e.eia_mw))}%`,
+      headlineSub: "of EIA's capacity was already in OpenStreetMap",
+      tiers,
+      note: e.added_with_outline && e.added_with_outline.plants
+        ? `${fmt.format(e.added_with_outline.plants)} of the added solar farms (${fmt.format(Math.round(e.added_with_outline.mw))} MW) have their USPVDB outline instead of a point.`
+        : "",
+    });
+  }
+  if (cov.nsta) {
+    const n = cov.nsta;
+    const defs = [
+      ["petroleum_well", "UK oil and gas wells", "wellbores, onshore England and offshore", null],
+      ["offshore_platform", "UK offshore platforms", "platforms and floating production units", null],
+      ["pipeline", "UK offshore pipelines", "pipelines (not umbilicals)", "km"],
+    ];
+    for (const [layer, title, what, km] of defs) {
+      const d = n[layer];
+      if (!d) continue;
+      const tiers = Object.entries(d.tiers).map(([t, v]) => ({ t, n: v.features, m: v.km }));
+      const total = tiers.reduce((a, x) => a + x.n, 0);
+      const totalKm = km ? tiers.reduce((a, x) => a + (x.m || 0), 0) : null;
+      const added = d.tiers.added ? d.tiers.added : { features: 0, km: 0 };
+      const share = km ? 1 - added.km / totalKm : 1 - added.features / total;
+      out.push({
+        title, layer,
+        src: `NSTA open data (${n.source}), ${fmt.format(d.nsta)} ${what}. Added rows are in gmwid/nsta/ (non-commercial licence).`,
+        measure: km ? "km" : "n", unit: km ? "km" : "", totalN: total, totalM: totalKm,
+        headline: `${f1.format(100 * share)}%`,
+        headlineSub: km ? "of NSTA's pipeline length was already in OpenStreetMap"
+                        : `of NSTA's ${what.split(",")[0]} were already in OpenStreetMap`,
+        tiers, note: "",
+      });
+    }
+  }
+  return out;
+}
+
+const tip = document.getElementById("tip");
+function showTip(ev, text) {
+  tip.textContent = text;
+  tip.style.opacity = 1;
+  const x = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${ev.clientY + 14}px`;
+}
+function hideTip() { tip.style.opacity = 0; }
+
+function renderBlock(b) {
+  const box = el("section", { class: "cov" });
+  const h = el("h3");
+  h.append(document.createTextNode(b.title + " "), el("code", {}, b.layer));
+  box.append(h, el("p", { class: "src" }, b.src));
+  box.append(el("p", { class: "headline" }, b.headline), el("p", { class: "headline-sub" }, b.headlineSub));
+
+  const val = (x) => (b.measure === "n" ? x.n : x.m || 0);
+  const total = b.tiers.reduce((a, x) => a + val(x), 0) || 1;
+  const order = ["ref", "inside", "near", "generators", "added"];
+  const tiers = [...b.tiers].sort((a, z) => order.indexOf(a.t) - order.indexOf(z.t));
+  const bar = el("div", { class: "bar", role: "img",
+    "aria-label": tiers.map((x) => `${TIER_LABEL[x.t] || x.t}: ${fmt.format(Math.round(val(x)))}`).join(", ") });
+  for (const x of tiers) {
+    const v = val(x);
+    if (!v) continue;
+    const seg = el("div", { class: TIER_KIND[x.t] || "loc" });
+    seg.style.flex = `${v / total} 1 0`;
+    const unitTxt = b.unit ? ` ${b.unit}` : "";
+    const text = `${TIER_LABEL[x.t] || x.t}: ${fmt.format(Math.round(v))}${unitTxt} (${f1.format(100 * v / total)}%)`;
+    seg.addEventListener("mousemove", (ev) => showTip(ev, text));
+    seg.addEventListener("mouseleave", hideTip);
+    bar.append(seg);
+  }
+  box.append(bar);
+
+  const wrap = el("div", { class: "table-wrap" });
+  const t = el("table");
+  const head = el("tr");
+  head.append(el("th", {}, "Found"), el("th", { class: "num" }, b.measure === "mw" ? "Plants" : "Features"));
+  if (b.measure !== "n") head.append(el("th", { class: "num" }, b.unit));
+  const thead = el("thead"); thead.append(head);
+  const tbody = el("tbody");
+  for (const x of tiers) {
+    const r = el("tr");
+    r.append(el("td", {}, TIER_KIND[x.t] === "add" ? "Added by GMWID"
+                               : "In OpenStreetMap, " + (TIER_LABEL[x.t] || x.t)));
+    r.append(el("td", { class: "num" }, fmt.format(x.n)));
+    if (b.measure !== "n") r.append(el("td", { class: "num" }, fmt.format(Math.round(x.m || 0))));
+    tbody.append(r);
+  }
+  t.append(thead, tbody);
+  wrap.append(t);
+  box.append(wrap);
+  if (b.note) box.append(el("p", { class: "note" }, b.note));
+  return box;
+}
+
+async function loadCoverage() {
+  const host = document.getElementById("coverage-blocks");
+  try {
+    const cov = await getJSON("latest/_coverage.json");
+    host.textContent = "";
+    for (const b of blocks(cov)) host.append(renderBlock(b));
+  } catch (e) {
+    host.innerHTML = '<p class="loading">This week\'s coverage could not be read right now.</p>';
+  }
+}
+
+document.querySelectorAll(".copy-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const code = btn.parentElement.querySelector("code").innerText;
+    try {
+      await navigator.clipboard.writeText(code);
+      btn.textContent = "Copied"; btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1500);
+    } catch (e) { /* clipboard blocked: leave the button as is */ }
+  });
+});
+
+loadStats();
+loadCoverage();
+</script>
+</body>
+</html>

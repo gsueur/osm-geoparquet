@@ -38,8 +38,20 @@ function isLegacyKey(key) {
   );
 }
 
+// GMWID was published as osm-infrastructure/ until 2026-09-27. Its old URLs
+// are answered from gmwid/ the same way, forever.
+const RENAMED = [["osm-infrastructure/", "gmwid/"]];
+
+// [old prefix, new prefix] for a key written under an old layout, else null.
+function legacyMap(key) {
+  const renamed = RENAMED.find(([from]) => key.startsWith(from));
+  if (renamed) return renamed;
+  return isLegacyKey(key) ? ["", DATASET_PREFIX] : null;
+}
+
 function currentKey(key) {
-  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+  const m = legacyMap(key);
+  return m ? m[1] + key.slice(m[0].length) : key;
 }
 
 export default {
@@ -104,12 +116,12 @@ async function handleList(url, env) {
   // A continuation token is opaque R2 state tied to the prefix that produced
   // it. The follow-up call carries the same legacy prefix and gets rewritten
   // the same way, so the cursor stays valid across pages.
-  const legacy = isLegacyKey(prefix);
-  const listOpts = { prefix: legacy ? DATASET_PREFIX + prefix : prefix, limit: maxKeys };
+  const legacy = legacyMap(prefix);
+  const listOpts = { prefix: currentKey(prefix), limit: maxKeys };
   if (delimiter) listOpts.delimiter = delimiter;
   if (continuationToken) listOpts.cursor = continuationToken;
   if (startAfter && !continuationToken) {
-    listOpts.startAfter = legacy ? DATASET_PREFIX + startAfter : startAfter;
+    listOpts.startAfter = legacy ? currentKey(startAfter) : startAfter;
   }
 
   const list = await env.BUCKET.list(listOpts);
@@ -118,7 +130,7 @@ async function handleList(url, env) {
     // Echoed and reported as the client wrote them: it asked about the old
     // layout and gets an answer entirely in the old layout.
     prefix,
-    asRequested: legacy ? (k) => k.slice(DATASET_PREFIX.length) : (k) => k,
+    asRequested: legacy ? (k) => legacy[0] + k.slice(legacy[1].length) : (k) => k,
     delimiter,
     maxKeys,
     continuationToken,

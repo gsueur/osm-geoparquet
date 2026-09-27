@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Render, validate and publish the Portolan catalog for OSM infrastructure.
+Render, validate and publish the Portolan catalog for GMWID, the GeoMermaids
+World Infrastructures Dataset (OpenStreetMap infrastructure, enriched).
 
 One STAC Collection per layer of infra.py (27), in four groups, each with its
 layer's one whole-world file as the data asset. Row counts come from
@@ -10,7 +11,7 @@ latest/ is published, and the next build replaces it, so assets carry sizes
 but no checksums (spec: a publisher that cannot keep one current should omit
 it).
 
-The catalog is published beside the data, at /osm-infrastructure/catalog/,
+The catalog is published beside the data, at /gmwid/catalog/,
 so the dataset stays one self-contained prefix. Spec, validator (rashid),
 STAC constants and uploader are shared with the OSM catalog (scripts/catalog.py).
 
@@ -18,7 +19,7 @@ Usage:
   python3 scripts/datasets/infra_catalog.py build --out-dir out/latest --dest build/infra-catalog
   python3 scripts/datasets/infra_catalog.py check build/infra-catalog
   python3 scripts/datasets/infra_catalog.py publish --out-dir out/latest \\
-      --remote parquetry:parquetry/osm-infrastructure
+      --remote parquetry:parquetry/gmwid
   # the committed thumbnails, re-rendered only when the data changes a lot
   uv run --project scripts --with matplotlib python scripts/datasets/infra_catalog.py \\
       thumbnails --out-dir out/latest
@@ -65,13 +66,14 @@ from catalog import (
     write_json,
 )
 
-DATASET_PREFIX = "osm-infrastructure"
+DATASET_PREFIX = "gmwid"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 DATA_URL = f"{PUBLIC_DATA}/latest"
+PAGE_URL = "https://gmwid.geomermaids.com"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
-CATALOG_ID = "osm-infrastructure-geoparquet"
-THUMBS = REPO / "catalog" / "thumbnails" / "osm-infrastructure"
+CATALOG_ID = "gmwid"
+THUMBS = REPO / "catalog" / "thumbnails" / "gmwid"
 OIM_URL = "https://openinframap.org"
 
 PROVIDERS = [
@@ -427,13 +429,16 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": CATALOG_ID,
-        "title": "OpenStreetMap infrastructure as GeoParquet",
+        "title": "GMWID, GeoMermaids World Infrastructures Dataset",
         "description": (
             "The world's power, telecoms, oil and gas, and water infrastructure from "
             "OpenStreetMap, as GeoParquet 2.0: the content of Open Infrastructure Map, "
             "with its data model (voltages in kV per circuit, outputs in MW, solar "
             "estimates, circuits and plants assembled from their relations) and every "
-            f"OSM tag kept. {len(collections)} layers, one whole-world file each. "
+            f"OSM tag kept. Where OSM falls short, authoritative open sources complete "
+            "it: each row says where it comes from (origin), and every build publishes "
+            f"how OSM compares with each source (_coverage.json; {PAGE_URL}). "
+            f"{len(collections)} layers, one whole-world file each. "
             f"Only the latest build is published. {PREVIEW} Data (c) OpenStreetMap "
             "contributors, ODbL 1.0. Not affiliated with Open Infrastructure Map."
         ),
@@ -445,6 +450,8 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
             *({"rel": "child", "href": f"./{g}/catalog.json",
                "type": "application/json", "title": GROUPS[g][0]} for g in GROUPS),
             md_link("describedby", "./README.md", "Catalog README"),
+            {"rel": "about", "href": PAGE_URL, "type": "text/html",
+             "title": "GMWID: sources, enrichment, licences and coverage"},
             md_link("agents", "./AGENTS.md", "Catalog agent guide"),
             {"rel": "icon", "href": "./logo.png", "type": "image/png", "title": "Geomermaids"},
             LICENSE_LINK,
@@ -683,9 +690,11 @@ def root_agents(collections: list[dict]) -> str:
     return f"""\
 # {CATALOG_ID}: agent guide
 
-OpenStreetMap infrastructure (power, telecoms, oil and gas, water) as
-GeoParquet 2.0, worldwide, one collection per layer, one file per layer. Only
-the latest build is published. {PREVIEW}
+GMWID, the GeoMermaids World Infrastructures Dataset: OpenStreetMap
+infrastructure (power, telecoms, oil and gas, water) as GeoParquet 2.0,
+worldwide, completed from authoritative open sources where OSM falls short
+(column `origin`; `{DATA_URL}/_coverage.json`; {PAGE_URL}). One collection
+per layer, one file per layer. Only the latest build is published. {PREVIEW}
 
 ## Collections
 
@@ -848,12 +857,12 @@ def main() -> None:
     u = sub.add_parser("publish", help="build, check, upload to <remote>/catalog/")
     u.add_argument("--out-dir", type=Path, required=True)
     u.add_argument("--remote", required=True,
-                   help="rclone path of the dataset prefix, e.g. parquetry:parquetry/osm-infrastructure")
+                   help="rclone path of the dataset prefix, e.g. parquetry:parquetry/gmwid")
     u.add_argument("--attribution")
     u.add_argument("--remote-sizes", metavar="REMOTE")
     u.add_argument("--dry-run", action="store_true")
 
-    t = sub.add_parser("thumbnails", help="render catalog/thumbnails/osm-infrastructure/<layer>.png")
+    t = sub.add_parser("thumbnails", help="render catalog/thumbnails/gmwid/<layer>.png")
     t.add_argument("--out-dir", type=Path, required=True)
     t.add_argument("--layers", nargs="*", default=[l.name for l in infra.LAYERS])
 
