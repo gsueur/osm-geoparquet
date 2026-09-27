@@ -224,6 +224,16 @@ jobs:
             -o "$WORK/uspvdb.zip" https://energy.usgs.gov/uspvdb/assets/data/uspvdbGeoJSON.zip
           unzip -l "$WORK/uspvdb.zip" | grep -o 'uspvdb_v[0-9_]*\.geojson' | tee "$WORK/uspvdb_version.txt"
 
+      # NSTA open data (UK offshore infrastructure and wells): the UK wells,
+      # platforms and pipelines OSM lacks, published apart in nsta/ because
+      # NSTA's User Agreement is non-commercial (not ODbL-compatible).
+      # Required like EIA: no file, no build.
+      - name: NSTA, UK offshore infrastructure
+        run: |
+          curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors -o "$WORK/UKCS_OFF_WGS84_SHP.zip" \
+            https://datanstauthority.blob.core.windows.net/external/OpenDataZips/UKCS_OFF_WGS84_SHP.zip
+          unzip -l "$WORK/UKCS_OFF_WGS84_SHP.zip" | grep -c '\.shp$'
+
       - name: Build and verify every file
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         env:
@@ -237,12 +247,12 @@ jobs:
             python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" build "$WORK/planet-infra.osm.pbf" \
             --out-dir "$WORK/out/latest" --work-dir "$WORK/build" \
             --land "$GAUL_L1" --eez "$WORK/eez_land.json" --eia "$WORK/eia860m.xlsx" \
-            --uspvdb "$WORK/uspvdb.zip" \
+            --uspvdb "$WORK/uspvdb.zip" --nsta "$WORK/UKCS_OFF_WGS84_SHP.zip" \
             2> >(tee "$WORK/time.txt" >&2)
           grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
           rm -rf "$WORK/build"
-          du -sh "$WORK/out/latest"
-          ls -la "$WORK/out/latest"
+          du -sh "$WORK/out/latest" "$WORK/out/nsta"
+          ls -la "$WORK/out/latest" "$WORK/out/nsta"
 
       - name: ATTRIBUTION.txt
         run: |
@@ -273,6 +283,12 @@ jobs:
             Berkeley National Laboratory, United States Large-Scale Solar
             Photovoltaic Database (USPVDB), $(cat "$WORK/uspvdb_version.txt" 2>/dev/null).
             https://energy.usgs.gov/uspvdb/. Public domain.
+
+          UK wells, platforms and pipelines OSM does not have: nsta/, NOT ODbL
+            Contains information provided by the North Sea Transition Authority
+            and/or other third parties. Under the NSTA User Agreement
+            (non-commercial use only), which is why they are not in latest/:
+            see nsta/LICENSE.txt. How OSM compares: latest/_coverage.json.
 
           Layers, attributes and derived values
             Follow the data model of Open Infrastructure Map
@@ -319,6 +335,9 @@ jobs:
           rclone sync "$WORK/out/latest" "$REMOTE/latest" \
             --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
             --transfers 16 --checkers 32 --stats 60s --stats-one-line
+          rclone sync "$WORK/out/nsta" "$REMOTE/nsta" \
+            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
+            --transfers 4 --stats-one-line
           rclone copy "$WORK/out" "$REMOTE" --max-depth 1 \
             --include index.json --include ATTRIBUTION.txt --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
@@ -340,7 +359,8 @@ jobs:
           fail=0
           for f in index.json ATTRIBUTION.txt latest/_manifest.json \
                    latest/power_line.parquet latest/power_tower.parquet \
-                   latest/water_well.parquet \
+                   latest/water_well.parquet latest/_coverage.json \
+                   nsta/LICENSE.txt nsta/petroleum_well.parquet \
                    catalog/catalog.json catalog/power/power_line/collection.json \
                    catalog/power/power_line/thumbnail.png; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")

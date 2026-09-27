@@ -203,7 +203,9 @@ COMMON_DOCS = {
     "origin": "Where the row comes from: osm, or eia for a US power plant the EIA-860M "
               "inventory reports and OpenStreetMap does not have (no osm_id and no tags; "
               "a point at EIA's coordinates, or for solar farms the USPVDB outline; see "
-              "_coverage.json).",
+              "_coverage.json). NSTA's UK wells, platforms and pipelines OSM lacks are "
+              "not in these files: their licence is non-commercial, so they are published "
+              "apart, with the same schema and origin nsta, in nsta/.",
     "country": "ISO 3166-1 alpha-2 code of the country the feature is in (FAO GAUL "
                "codes for disputed areas), or _intl on the high seas. Rows are "
                "Hilbert-sorted, so a filter on it skips most row groups.",
@@ -450,7 +452,11 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
             {"rel": "related", "href": f"{PUBLIC_DATA}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, sources and their licences"},
             {"rel": "related", "href": f"{DATA_URL}/_coverage.json", "type": "application/json",
-             "title": "US power plants: how many EIA reports, how many OSM has, what was added"},
+             "title": "OSM against authoritative sources (EIA, NSTA): how many each "
+                      "reports, how many OSM has, what was added"},
+            {"rel": "related", "href": f"{PUBLIC_DATA}/nsta/LICENSE.txt", "type": "text/plain",
+             "title": "UK wells, platforms and pipelines OSM lacks, from the NSTA: a "
+                      "separate folder, non-commercial licence, not ODbL"},
             {"rel": "related", "href": f"{DATA_URL}/_regions.json", "type": "application/json",
              "title": "Every country and state slug, with its names and GAUL code"},
             {"rel": "related", "href": OIM_URL, "type": "text/html",
