@@ -56,6 +56,10 @@ RELEASE = "2018"
 STEM = f"clc_{RELEASE}"
 SOURCE_COLUMNS = ["Shape", "OBJECTID", "Code_18", "Remark", "Area_Ha", "ID"]
 ROW_GROUP_ROWS = 10_240   # a multiple of DuckDB's 2,048-row vectors, ~16 MB
+# The distributing-geoparquet guide asks for 15 or more. Measured on 204,800
+# CLC rows with DuckDB's writer: 9 -> 170.6 MB, 15 -> 170.7 MB (11x slower
+# for nothing), 19 -> 159.3 MB (17x slower). Reads take the same time.
+ZSTD_LEVEL = 19
 MAX_POINTS = 1_000        # vertices per piece of border
 CHUNK = 250_000           # source polygons per pass of the border join
 HEAVY = 5_000             # vertices above which a CLC polygon is cut into parts
@@ -227,7 +231,7 @@ def write(con: duckdb.DuckDBPyConnection, query: str, dest: Path, crs: dict) -> 
     dest.parent.mkdir(parents=True, exist_ok=True)
     con.execute(f"""
         COPY ({query}) TO '{dest}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE',
-            COMPRESSION ZSTD, COMPRESSION_LEVEL 9, ROW_GROUP_SIZE {ROW_GROUP_ROWS},
+            COMPRESSION ZSTD, COMPRESSION_LEVEL {ZSTD_LEVEL}, ROW_GROUP_SIZE {ROW_GROUP_ROWS},
             KV_METADATA {{geo: '{geo}'}})""")
 
 
