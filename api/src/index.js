@@ -308,8 +308,11 @@ function landingText() {
     `    SELECT country, count(*) FROM read_parquet(\n` +
     `      's3://${BUCKET_NAME}/gaul/2024/country=*/L2.parquet', hive_partitioning = true)\n` +
     `    GROUP BY 1;\n` +
-    `  clc/            Corine Land Cover 2018, Europe:\n` +
-    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/clc/2018/clc_2018.parquet');\n` +
+    `  clc/            Corine Land Cover 2018, Europe. One Europe file\n` +
+    `                  (clc_2018.parquet) and one file per country to glob:\n` +
+    `    SELECT country, count(*) FROM read_parquet(\n` +
+    `      's3://${BUCKET_NAME}/clc/2018/country=*/clc_2018.parquet')\n` +
+    `    GROUP BY 1;\n` +
     `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
     `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/geoboundaries/6.0.0/cgaz_adm1.parquet');\n` +
     `\n` +

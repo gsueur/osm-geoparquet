@@ -1,0 +1,133 @@
+# Corine Land Cover 2018 by country: parquetry:parquetry/clc/2018/.
+#
+# CLC 2018 is a static release, so this runs on demand. The source is the
+# published Europe file (the Copernicus download needs an EU Login); the
+# script adds a `country` column, rewrites the Europe file sorted by
+# country, and writes one file per country beside it, with the parquetry
+# repository files (index.json, the manifests) GeoPQ Workbench reads.
+#
+# scripts/datasets/clc.py checks its output before anything is uploaded:
+# same rows, IDs, geometries (hashed) and total area as the source, every
+# row in exactly one country, EPSG:3035 in both the Parquet type and the
+# `geo` footer. A failure there fails the job with nothing published.
+#
+#   build    partition and verify, upload nothing. Use it to check a change.
+#   publish  the same, then upload to the bucket.
+#
+# Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
+
+name: dataset-clc
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build partitions and verifies; publish also uploads"
+        type: choice
+        options: [build, publish]
+        default: build
+
+concurrency:
+  group: dataset-clc
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/clc
+  VERSION: "2018"
+  PUBLIC: https://parquetry.geomermaids.com/clc
+  GAUL: https://parquetry.geomermaids.com/gaul/2024
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  clc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work dir on the runner's big scratch disk
+        # / has ~14 GB free on hosted runners; /mnt has ~65 GB. The source,
+        # the Europe file, the country files and DuckDB's spill share it.
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        if: inputs.stage == 'publish'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch the Europe file and the GAUL borders
+        run: |
+          curl -fsS --retry 3 -o "$WORK/clc_$VERSION.parquet" "$PUBLIC/$VERSION/clc_$VERSION.parquet"
+          curl -fsS --retry 3 -o "$WORK/gaul_l0.parquet" "$GAUL/GAUL_2024_L0_derived.parquet"
+          curl -fsS --retry 3 -o "$WORK/gaul_manifest.json" "$GAUL/_manifest.json"
+          ls -la "$WORK"
+
+      - name: Partition and verify
+        run: |
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/clc.py \
+            --source "$WORK/clc_$VERSION.parquet" --gaul "$WORK/gaul_l0.parquet" \
+            --gaul-manifest "$WORK/gaul_manifest.json" \
+            --out-dir "$WORK/out/$VERSION" --work-dir "$WORK/duckdb" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out/$VERSION"
+
+      - name: Upload
+        if: inputs.stage == 'publish'
+        run: |
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          # The Europe file is replaced in place, and it is the only copy of
+          # the source online. Keep the bytes it had once, server side.
+          if ! rclone lsf "$REMOTE/_source/clc_$VERSION.parquet" | grep -q .; then
+            rclone copyto "$REMOTE/$VERSION/clc_$VERSION.parquet" "$REMOTE/_source/clc_$VERSION.parquet"
+          fi
+          # The country files first, then the Europe file, then the metadata,
+          # index.json last: a reader never gets a folder that is not there.
+          rclone copy "$WORK/out/$VERSION" "$REMOTE/$VERSION" --include "country=*/*.parquet" \
+            --header-upload "Cache-Control: public, max-age=86400" \
+            --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copyto "$WORK/out/$VERSION/clc_$VERSION.parquet" "$REMOTE/$VERSION/clc_$VERSION.parquet" \
+            --header-upload "Cache-Control: public, max-age=86400" \
+            --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --stats 30s --stats-one-line
+          rclone copy "$WORK/out/$VERSION" "$REMOTE/$VERSION" --ignore-times \
+            --include "_manifest.json" --include "country=*/_manifest.json" --include "ATTRIBUTION.txt" \
+            --header-upload "Cache-Control: public, max-age=300"
+          rclone copyto "$WORK/out/index.json" "$REMOTE/index.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: inputs.stage == 'publish'
+        run: |
+          set +e
+          fail=0
+          for f in index.json snapshots.json $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
+                   $VERSION/clc_$VERSION.parquet $VERSION/country=FR/_manifest.json \
+                   $VERSION/country=FR/clc_$VERSION.parquet $VERSION/country=LU/clc_$VERSION.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          # The Europe file online is the new one: its size matches.
+          want=$(stat -c %s "$WORK/out/$VERSION/clc_$VERSION.parquet")
+          got=$(curl -sI "$PUBLIC/$VERSION/clc_$VERSION.parquet" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
+          [ "$want" = "$got" ] || { echo "BAD Europe file: $got bytes online, $want built"; fail=1; }
+          exit $fail

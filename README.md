@@ -74,6 +74,16 @@ geoarrow into row groups of at most 42 MB, since DuckDB writes none under
 disclaimers) are encoded in its `ATTRIBUTION.txt`, quoted from the Terms of
 Use shipped inside the FAO archives.
 
+Corine Land Cover 2018 (`scripts/datasets/clc.py`, workflow
+`dataset-clc.yml`) sits under `https://parquetry.geomermaids.com/clc/2018/`
+as one Europe file (`clc_2018.parquet`) and one file per country
+(`country=<alpha-2>/clc_2018.parquet`), EPSG:3035. CLC has no country of its
+own: each polygon goes whole to the GAUL country it overlaps most, or the
+nearest one, so no polygon is cut and the country files add up to the Europe
+file. The source is the published Europe file itself (the Copernicus
+download needs an EU Login); the first publish keeps its original bytes in
+`clc/_source/`.
+
 ## Requirements
 
 - Python ≥ 3.12
