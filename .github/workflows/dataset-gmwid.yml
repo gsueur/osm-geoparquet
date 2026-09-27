@@ -260,13 +260,12 @@ jobs:
           stamps=$(for f in "$WORK"/subsets/*.timestamp; do
             printf '    %-18s %s\n' "$(basename "$f" .timestamp)" "$(cat "$f")"; done)
           cat > "$WORK/out/ATTRIBUTION.txt" <<EOF
-          GMWID, GeoMermaids World Infrastructures Dataset: PREVIEW
-          ========================================================
+          GMWID, GeoMermaids World Infrastructures Dataset
+          ================================================
 
           Worldwide power, telecoms, oil and gas, and water infrastructure from
           OpenStreetMap, measured against and completed from authoritative open
           sources. https://gmwid.geomermaids.com
-          A preview: layout, columns and values may still change.
 
           Data
             (c) OpenStreetMap contributors, available under the Open Database

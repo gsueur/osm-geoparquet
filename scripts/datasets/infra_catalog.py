@@ -116,8 +116,6 @@ PROVIDERS = [
     },
 ]
 
-PREVIEW = ("A preview: layer names, columns and values may still change between builds.")
-
 # Title, description. Order and names are infra.LAYERS'.
 LAYER_DOCS = {
     "power_line": ("Power lines and cables",
@@ -380,8 +378,7 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
             f"file ({agg['bytes'] / 1e6:,.0f} MB), Hilbert-sorted in row groups of "
             f"32,000, so a bbox filter or one on country or state reads only the groups "
             f"it touches. Read in place over HTTPS or through the anonymous S3 endpoint "
-            f"{S3_ENDPOINT}. This collection reads latest/, which each build replaces. "
-            f"{PREVIEW}"
+            f"{S3_ENDPOINT}. This collection reads latest/, which each build replaces."
         ),
         "keywords": ["OpenStreetMap", "OSM", "infrastructure", "GeoParquet", "worldwide",
                      infra_group(name), name.replace("_", " ")],
@@ -439,7 +436,7 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
             "it: each row says where it comes from (origin), and every build publishes "
             f"how OSM compares with each source (_coverage.json; {PAGE_URL}). "
             f"{len(collections)} layers, one whole-world file each. "
-            f"Only the latest build is published. {PREVIEW} Data (c) OpenStreetMap "
+            f"Only the latest build is published. Data (c) OpenStreetMap "
             "contributors, ODbL 1.0. Not affiliated with Open Infrastructure Map."
         ),
         "version": interval[-1][:10],
@@ -487,7 +484,7 @@ def build_group(group: str, collections: list[dict], interval: list[str],
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": f"{CATALOG_ID}-{group}",
         "title": f"{title} infrastructure",
-        "description": f"{description} From OpenStreetMap, worldwide. {PREVIEW}",
+        "description": f"{description} From OpenStreetMap, worldwide.",
         "version": interval[-1][:10],
         "updated": updated,
         "links": [
@@ -584,7 +581,7 @@ def collection_readme(col: dict, agg: dict, interval: list[str]) -> str:
     return f"""\
 # {col['title']}
 
-{LAYER_DOCS[col['id']][1]} {PREVIEW}
+{LAYER_DOCS[col['id']][1]}
 
 | | |
 |---|---|
@@ -694,7 +691,7 @@ GMWID, the GeoMermaids World Infrastructures Dataset: OpenStreetMap
 infrastructure (power, telecoms, oil and gas, water) as GeoParquet 2.0,
 worldwide, completed from authoritative open sources where OSM falls short
 (column `origin`; `{DATA_URL}/_coverage.json`; {PAGE_URL}). One collection
-per layer, one file per layer. Only the latest build is published. {PREVIEW}
+per layer, one file per layer. Only the latest build is published.
 
 ## Collections
 
