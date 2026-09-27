@@ -184,7 +184,7 @@ const DATASETS = {
     attribution: "gmwid/ATTRIBUTION.txt",
   },
   "clc/": {
-    subtitle: "Corine Land Cover 2018, Europe.",
+    subtitle: "Corine Land Cover 2018, Europe: one file for Europe and one per country.",
     attribution: "clc/2018/ATTRIBUTION.txt",
     snapshots: "clc/snapshots.json",
   },
