@@ -45,6 +45,12 @@ and small solar). With --uspvdb, an added solar plant USPVDB has gets its
 outline instead of EIA's point. _coverage.json says how each EIA plant was
 found, and how many added plants have an outline.
 
+UK oil and gas (--nsta): the wells, platforms and pipelines the North Sea
+Transition Authority reports and OpenStreetMap lacks. NSTA's licence is
+non-commercial, so they are not added to the layers: they go to
+<out>/../nsta/, one file per layer with the layer's schema (origin =
+'nsta'), with its LICENSE.txt. _coverage.json carries both measures.
+
 Regions: every row carries the country and state holding a point on it
 (ST_PointOnSurface). On land the state is its FAO GAUL 2024 L1 unit, as a
 slug of the unit's name (`texas`; GAUL has no ISO 3166-2 codes, and matching
@@ -64,7 +70,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import duckdb
@@ -978,6 +984,199 @@ def add_eia_plants(con: duckdb.DuckDBPyConnection, eia_xlsx: str,
 
 
 # --------------------------------------------------------------------------
+# NSTA: UK oil and gas OSM does not have yet, published apart
+#
+# The North Sea Transition Authority's open data comes under its User
+# Agreement, which allows publishing and adapting it but exploiting it
+# non-commercially only. The ODbL grants commercial reuse, so these rows
+# cannot go into the layers: they are written to <repository>/nsta/, one file
+# per layer with the layer's exact schema (origin = 'nsta'), under NSTA's
+# terms. A UNION ALL BY NAME with the layer completes it. Permission to
+# merge them was requested on 2026-09-27.
+
+NSTA_READ = {
+    "surface": "UKCS offshore infrastructure surface points (WGS84).shp",
+    "pipeline": "UKCS offshore infrastructure pipeline linear (WGS84).shp",
+    "well_offshore": "UKCS offshore wellbore top holes (WGS84).shp",
+    "well_onshore": "UK England petroleum wells top holes (WGS84).shp",
+}
+NSTA_LAYERS = {"petroleum_well": "nsta_well", "offshore_platform": "nsta_platform",
+               "pipeline": "nsta_pipeline"}
+NSTA_SUBSTANCE = {"GAS": "gas", "OIL": "oil", "MIXED HYDROCARBONS": "hydrocarbons",
+                  "CONDENSATE": "condensate", "WATER": "water", "SEAWATER": "water",
+                  "METHANOL": "methanol", "CHEMICAL": "chemicals"}
+NSTA_LICENCE = """\
+UK oil and gas infrastructure OpenStreetMap does not have, from the NSTA
+=======================================================================
+
+Contains information provided by the North Sea Transition Authority and/or
+other third parties.
+
+Source: NSTA Open Data, offshore infrastructure and wells ({source}),
+https://opendata-nstauthority.hub.arcgis.com/, downloaded {date}.
+
+Licence: NSTA User Agreement (June 2023),
+https://www.nstauthority.co.uk/media/u51lhvio/nsta-user-agreeement-june-2023.pdf
+You may copy, publish, distribute, transmit and adapt this information and
+exploit it NON-COMMERCIALLY, with the attribution statement above. It is not
+under the ODbL, unlike the layers in ../latest/, and is kept apart from them
+for that reason. For other uses, ask the NSTA (correspondence@nstauthority.co.uk).
+
+Each file has the schema of the layer of the same name in ../latest/
+(origin = 'nsta', no osm_id and no tags) and holds only what OSM lacks: how
+each NSTA feature was matched is in ../latest/_coverage.json (nsta).
+"""
+
+
+def nsta_rows(con: duckdb.DuckDBPyConnection, zip_path: str) -> dict:
+    """Tables nsta_well, nsta_platform and nsta_pipeline: the UK wells,
+    platforms and pipelines the NSTA reports and OSM lacks, as rows with the
+    tags a mapper would use (osm_type NULL). A well counts as present when
+    OSM has its registration number (ref_no, from the old DECC import) or a
+    well within 25 m of its top hole; a platform, when OSM has one within
+    500 m; a pipeline, when OSM has its PL number, or pipelines within 250 m
+    along half its length. Returns the coverage figures."""
+    src = {k: f"/vsizip/{zip_path}/{v}" for k, v in NSTA_READ.items()}
+    metres = "'EPSG:4326', 'EPSG:3035', always_xy := true"
+    date = "strftime(TRY_STRPTIME(left({}, 8), '%Y%m%d'), '%Y-%m-%d')"
+
+    def lc_key(key: str) -> str:
+        return f"CASE WHEN state = 'active' THEN '{key}' ELSE state || ':{key}' END"
+
+    def tags(*pairs: tuple[str, str]) -> str:
+        return ("map_from_entries(list_filter(["
+                + ", ".join(f"struct_pack(k := {k}, v := {v})" for k, v in pairs)
+                + "], x -> x.v IS NOT NULL))")
+
+    # Wells: every wellbore, onshore England and offshore, by registration number.
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE nw AS
+        SELECT WELLREGNO AS id, TDOPERATOR AS operator, {date.format('SPUDDATE')} AS spud,
+               CASE WHEN ORIGINSTAT = 'Planned' THEN 'proposed'
+                    WHEN ORIGINSTAT = 'Decommissioned' OR WELLOPSTAT = 'Decomissioned' THEN 'abandoned'
+                    WHEN WELLOPSTAT = 'Constructing' THEN 'construction'
+                    WHEN WELLOPSTAT = 'Suspended' OR ORIGINSTAT = 'Derogated' THEN 'disused'
+                    ELSE 'active' END AS state,
+               geom AS geometry, ST_Transform(geom, {metres}) AS g
+        FROM (SELECT * FROM ST_Read('{src["well_offshore"]}')
+              UNION ALL BY NAME SELECT * FROM ST_Read('{src["well_onshore"]}'))
+        WHERE WELLREGNO IS NOT NULL AND geom IS NOT NULL""")
+    # One OSM well often lists its sidetracks: ref_no=204/22-2;204/22-2Z.
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE ow AS
+        SELECT upper(replace(unnest(string_split(coalesce(
+                   tags['ref_no'], tags['ref:GB:decc'], tags['ref'], ''), ';')), ' ', '')) AS ref,
+               ST_Transform(ST_PointOnSurface(geometry), {metres}) AS g
+        FROM feat WHERE country = 'GB'
+          AND lc_val(tags, 'man_made') IN ('petroleum_well', 'oil_well')""")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE nw_how AS
+        WITH ref AS (SELECT DISTINCT n.id FROM nw n
+                     JOIN ow ON ow.ref = upper(replace(n.id, ' ', ''))),
+             near AS (SELECT DISTINCT n.id FROM nw n JOIN ow ON ST_DWithin(ow.g, n.g, 25))
+        SELECT n.id, CASE WHEN n.id IN (SELECT * FROM ref) THEN 'ref'
+                          WHEN n.id IN (SELECT * FROM near) THEN 'near'
+                          ELSE 'added' END AS how
+        FROM nw n""")
+    con.execute(f"""
+        CREATE OR REPLACE TABLE nsta_well AS
+        SELECT 'nsta' AS osm_type, row_number() OVER () AS osm_id,
+               {tags((lc_key('man_made'), "'petroleum_well'"), ("'ref'", "id"),
+                     ("'operator'", "operator"), ("'start_date'", "spud"))} AS tags,
+               geometry
+        FROM nw JOIN nw_how h USING (id) WHERE h.how = 'added'""")
+
+    # Platforms and floating production units.
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE np AS
+        SELECT FEATURE_ID AS id, NAME AS name, REP_GROUP AS operator,
+               {date.format('START_DATE')} AS started,
+               CASE STATUS WHEN 'NOT IN USE' THEN 'disused'
+                           WHEN 'ABANDONED' THEN 'abandoned' ELSE 'active' END AS state,
+               geom AS geometry, ST_Transform(geom, {metres}) AS g
+        FROM ST_Read('{src["surface"]}')
+        WHERE INF_TYPE IN ('PLATFORM', 'FPSO', 'FSO') AND STATUS <> 'REMOVED'""")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE op AS
+        SELECT ST_Transform(ST_PointOnSurface(geometry), {metres}) AS g FROM feat
+        WHERE country = 'GB' AND lc_val(tags, 'man_made') = 'offshore_platform'""")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE np_how AS
+        WITH near AS (SELECT DISTINCT n.id FROM np n JOIN op ON ST_DWithin(op.g, n.g, 500))
+        SELECT n.id, CASE WHEN n.id IN (SELECT * FROM near) THEN 'near' ELSE 'added' END AS how
+        FROM np n""")
+    con.execute(f"""
+        CREATE OR REPLACE TABLE nsta_platform AS
+        SELECT 'nsta' AS osm_type, row_number() OVER () AS osm_id,
+               {tags((lc_key('man_made'), "'offshore_platform'"), ("'name'", "name"),
+                     ("'operator'", "operator"), ("'start_date'", "started"))} AS tags,
+               geometry
+        FROM np JOIN np_how h USING (id) WHERE h.how = 'added'""")
+
+    # Pipelines proper (not umbilicals, risers, rock dumps or mattresses).
+    substance = " ".join(f"WHEN '{k}' THEN '{v}'" for k, v in NSTA_SUBSTANCE.items())
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE nl AS
+        SELECT row_number() OVER () AS rid, NSTAPIPNO AS id, PIPE_NAME AS name,
+               CASE FLUID {substance} END AS substance,
+               CASE WHEN DIAMETERMM > 0 THEN round(DIAMETERMM)::INTEGER::VARCHAR END AS diameter,
+               {date.format('START_DATE')} AS started,
+               CASE STATUS WHEN 'NOT IN USE' THEN 'disused' WHEN 'ABANDONED' THEN 'abandoned'
+                           WHEN 'PRECOMMISSIONED' THEN 'construction'
+                           WHEN 'PROPOSED' THEN 'proposed' ELSE 'active' END AS state,
+               geom AS geometry, ST_Transform(geom, {metres}) AS g
+        FROM ST_Read('{src["pipeline"]}')
+        WHERE INF_TYPE = 'PIPELINE' AND STATUS <> 'REMOVED' AND geom IS NOT NULL""")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE ol AS
+        SELECT upper(replace(unnest(string_split(coalesce(tags['ref'], ''), ';')), ' ', '')) AS ref,
+               ST_Transform(geometry, {metres}) AS g
+        FROM feat WHERE country = 'GB' AND lc_val(tags, 'man_made') = 'pipeline'""")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE nl_cov AS
+        SELECT n.rid, ST_Length(ST_Intersection(any_value(n.g), ST_Union_Agg(ST_Buffer(o.g, 250))))
+                          / nullif(ST_Length(any_value(n.g)), 0) AS share
+        FROM nl n JOIN ol o ON ST_DWithin(n.g, o.g, 250) GROUP BY n.rid""")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE nl_how AS
+        WITH ref AS (SELECT DISTINCT n.rid FROM nl n
+                     JOIN ol ON ol.ref = upper(replace(n.id, ' ', '')))
+        SELECT n.rid, ST_Length(n.g) / 1000 AS km, CASE
+            WHEN n.rid IN (SELECT * FROM ref) THEN 'ref'
+            WHEN c.share >= 0.5 THEN 'near'
+            ELSE 'added' END AS how
+        FROM nl n LEFT JOIN nl_cov c USING (rid)""")
+    con.execute(f"""
+        CREATE OR REPLACE TABLE nsta_pipeline AS
+        SELECT 'nsta' AS osm_type, row_number() OVER () AS osm_id,
+               {tags((lc_key('man_made'), "'pipeline'"), ("'ref'", "id"), ("'name'", "name"),
+                     ("'substance'", "substance"), ("'diameter'", "diameter"),
+                     ("'start_date'", "started"))} AS tags,
+               geometry
+        FROM nl JOIN nl_how h USING (rid) WHERE h.how = 'added'""")
+
+    for table in NSTA_LAYERS.values():
+        assign_region(con, table)
+        con.execute(f"UPDATE {table} SET osm_type = NULL, osm_id = NULL")
+
+    def measure(read: str, how: str, km: bool = False) -> dict:
+        n = con.execute(f"SELECT count(*) FROM {read}").fetchone()[0]
+        if not n:
+            sys.exit(f"{zip_path}: nothing read for {read}")
+        rows = con.execute(f"SELECT how, count(*){', round(sum(km))' if km else ''} "
+                           f"FROM {how} GROUP BY 1 ORDER BY 1").fetchall()
+        return {"nsta": n, "tiers": {r[0]: {"features": r[1], **({"km": r[2]} if km else {})}
+                                     for r in rows}}
+
+    return {"source": Path(zip_path).name,
+            "licence": "NSTA User Agreement, non-commercial: what OSM lacks is in "
+                       "../nsta/, not in these layers",
+            "petroleum_well": measure("nw", "nw_how"),
+            "offshore_platform": measure("np", "np_how"),
+            "pipeline": measure("nl", "nl_how", km=True)}
+
+
+# --------------------------------------------------------------------------
 # Writing
 
 GEOMETRY_TYPE_NAMES = {
@@ -992,7 +1191,7 @@ BBOX = """struct_pack(
     ymax := (ST_YMax(geometry) + abs(ST_YMax(geometry)) * 1e-6 + 1e-9)::FLOAT)"""
 
 
-def layer_select(layer: Layer) -> str:
+def layer_select(layer: Layer, origin: str = "eia") -> str:
     cols = []
     for name, expr in COMMON:
         if name == "type":
@@ -1001,17 +1200,18 @@ def layer_select(layer: Layer) -> str:
             expr = f"lifecycle(tags, '{layer.key}')"
         cols.append(f"{expr} AS {name}")
     cols += [f"{expr} AS {name}" for name, expr in layer.columns]
-    # Rows added from another source (EIA plants OSM lacks) have no OSM
-    # element: no osm_id/osm_type, and no tags, since theirs only exist to
-    # derive the columns.
+    # Rows added from another source (EIA plants OSM lacks, NSTA's in their
+    # own files) have no OSM element: no osm_id/osm_type, and no tags, since
+    # theirs only exist to derive the columns.
     return (f"SELECT osm_id, osm_type, "
-            f"CASE WHEN osm_type IS NULL THEN 'eia' ELSE 'osm' END AS origin, "
+            f"CASE WHEN osm_type IS NULL THEN '{origin}' ELSE 'osm' END AS origin, "
             f"country, state, {', '.join(cols)}, "
             f"CASE WHEN osm_type IS NULL THEN NULL ELSE tags END AS tags, "
             f"{BBOX} AS bbox, geometry FROM {layer.source} WHERE {layer.where}")
 
 
-def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> dict:
+def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path,
+                origin: str = "eia") -> dict:
     """The layer, sorted along a Hilbert curve over its extent, as one DuckDB
     file in staging (re-cut into exact row groups afterwards). Written
     straight from its query: materialising it first put it on disk twice (a
@@ -1038,7 +1238,7 @@ def write_layer(con: duckdb.DuckDBPyConnection, layer: Layer, staging: Path) -> 
     }).replace("'", "''")
     dest = staging / f"{layer.name}.parquet"
     con.execute(f"""
-        COPY ({layer_select(layer)} ORDER BY
+        COPY ({layer_select(layer, origin)} ORDER BY
               ST_Hilbert(geometry, ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
         TO '{dest}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE',
                      COMPRESSION ZSTD, COMPRESSION_LEVEL 1, ROW_GROUP_SIZE 1048576,
@@ -1186,7 +1386,8 @@ def write_stats(con: duckdb.DuckDBPyConnection, out: Path) -> None:
 # --------------------------------------------------------------------------
 
 def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
-          eia: str | None = None, uspvdb: str | None = None) -> None:
+          eia: str | None = None, uspvdb: str | None = None,
+          nsta: str | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(work / "infra.duckdb"))
@@ -1213,9 +1414,21 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
         print(f"  EIA-860M: {coverage['eia_plants']:,} US plants, {added['plants']:,} "
               f"({added['mw'] / 1000:,.1f} GW) added where OSM has none, "
               f"{coverage['added_with_outline']['plants']:,} with a USPVDB outline", flush=True)
+    nsta_cov = nsta_rows(con, nsta) if nsta else None
+    if nsta_cov:
+        print("  NSTA: " + ", ".join(
+            f"{layer} {nsta_cov[layer]['tiers'].get('added', {}).get('features', 0):,} "
+            f"of {nsta_cov[layer]['nsta']:,} added" for layer in NSTA_LAYERS), flush=True)
     staging = work / "staging"
     staging.mkdir(exist_ok=True)
     report = [write_layer(con, layer, staging) for layer in LAYERS]
+    nsta_report = []
+    if nsta_cov:
+        (staging / "nsta").mkdir(exist_ok=True)
+        by_name = {layer.name: layer for layer in LAYERS}
+        nsta_report = [write_layer(con, replace(by_name[name], source=table),
+                                   staging / "nsta", origin="nsta")
+                       for name, table in NSTA_LAYERS.items()]
     # The slugs rows carry, with their names and GAUL codes: how a reader
     # finds that Île-de-France is state = 'ile-de-france'. A sidecar (the
     # leading _ keeps folder scans from taking it for a dataset).
@@ -1228,22 +1441,30 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
     con.close()
     check = duckdb.connect()
     check.execute("INSTALL spatial; LOAD spatial;")
-    for r in report:
+    nsta_out = out.parent / "nsta"
+    for r, staged, dest_dir in [(r, staging, out) for r in report] + \
+                               [(r, staging / "nsta", nsta_out) for r in nsta_report]:
         if not r["rows"]:
             continue
         t0 = time.monotonic()
-        dest = out / f"{r['layer']}.parquet"
-        n = rewrite(staging / f"{r['layer']}.parquet", dest)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{r['layer']}.parquet"
+        n = rewrite(staged / f"{r['layer']}.parquet", dest)
         # Nothing is published unless every source row reached its file.
         if n != r["rows"]:
             sys.exit(f"{dest.name}: {n:,} rows written, {r['rows']:,} in the source")
         verify(check, dest)
-        (staging / f"{r['layer']}.parquet").unlink()
+        (staged / f"{r['layer']}.parquet").unlink()
         print(f"  {dest.name}: {n:,} rows, {dest.stat().st_size / 1e6:,.0f} MB, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
     write_repository(out, report)
-    if coverage:
-        (out / "_coverage.json").write_text(json.dumps(coverage, indent=2))
+    # How OSM compares with each authoritative source, and what was added.
+    sources = {k: v for k, v in (("eia", coverage), ("nsta", nsta_cov)) if v}
+    if sources:
+        (out / "_coverage.json").write_text(json.dumps(sources, indent=2))
+    if nsta_cov:
+        (nsta_out / "LICENSE.txt").write_text(NSTA_LICENCE.format(
+            source=nsta_cov["source"], date=time.strftime("%Y-%m-%d", time.gmtime())))
     write_stats(check, out)
     (out / "_layers.json").write_text(json.dumps(report, indent=2))
     for r in report:
@@ -1267,13 +1488,16 @@ def main() -> None:
                    "operating US plants OSM lacks, and writes _coverage.json")
     b.add_argument("--uspvdb", help="USGS US Large-Scale Solar PV Database (.geojson or "
                    "its .zip): outlines for the solar plants --eia adds")
+    b.add_argument("--nsta", help="NSTA offshore open data (UKCS_OFF_WGS84_SHP.zip): "
+                   "the UK wells, platforms and pipelines OSM lacks, written to "
+                   "<out>/../nsta/ under NSTA's non-commercial terms")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
     a = p.parse_args()
     if a.cmd == "filter":
         filter_extract(a.src, a.dest)
     else:
-        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez, a.eia, a.uspvdb)
+        build(a.pbf, a.out_dir, a.work_dir, a.land, a.eez, a.eia, a.uspvdb, a.nsta)
 
 
 if __name__ == "__main__":
