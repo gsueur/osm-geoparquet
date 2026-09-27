@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "about": "The repositories GeoPQ Workbench lists under File > Repositories. Edited in osm-geoparquet meta/repositories.json; published to https://parquetry.geomermaids.com/meta/repositories.json by .github/workflows/meta.yml. Each entry: name, url (https, no trailing slash), kind (Parquetry or Stac), attribution (fallback credit when the data carries none), attribution_by_license (SPDX id to credit). moved: old base URL to new.",
+  "repositories": [
+    {
+      "name": "Geomermaids Parquetry (OSM North America)",
+      "url": "https://parquetry.geomermaids.com/osm",
+      "kind": "Parquetry",
+      "attribution": "© OpenStreetMap contributors"
+    },
+    {
+      "name": "GMWID, Geomermaids World Infrastructures (power, telecoms, oil & gas, water)",
+      "url": "https://parquetry.geomermaids.com/gmwid",
+      "kind": "Parquetry",
+      "attribution": "© OpenStreetMap contributors"
+    },
+    {
+      "name": "Geomermaids geoBoundaries (global admin)",
+      "url": "https://parquetry.geomermaids.com/geoboundaries",
+      "kind": "Parquetry"
+    },
+    {
+      "name": "Geomermaids FAO GAUL 2024 (global admin)",
+      "url": "https://parquetry.geomermaids.com/gaul",
+      "kind": "Parquetry"
+    },
+    {
+      "name": "Geomermaids CORINE Land Cover (Europe)",
+      "url": "https://parquetry.geomermaids.com/clc",
+      "kind": "Parquetry"
+    },
+    {
+      "name": "Overture Maps (STAC)",
+      "url": "https://stac.overturemaps.org",
+      "kind": "Stac",
+      "attribution": "Overture Maps Foundation, overturemaps.org",
+      "attribution_by_license": {
+        "ODbL-1.0": "© OpenStreetMap contributors, Overture Maps Foundation"
+      }
+    }
+  ],
+  "moved": {
+    "https://parquetry.geomermaids.com/osm-infrastructure": "https://parquetry.geomermaids.com/gmwid"
+  }
+}
