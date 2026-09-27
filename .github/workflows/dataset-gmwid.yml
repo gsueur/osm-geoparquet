@@ -1,6 +1,7 @@
-# Build and publish OSM infrastructure (power, telecoms, oil and gas, water:
+# Build and publish GMWID, the GeoMermaids World Infrastructures Dataset
+# (OpenStreetMap infrastructure, enriched; power, telecoms, oil and gas, water:
 # the content of Open Infrastructure Map) for the whole planet, to
-# parquetry:parquetry/osm-infrastructure/latest/.
+# parquetry:parquetry/gmwid/latest/.
 #
 # The planet (~89 GB) does not fit a hosted runner, and osmium tags-filter
 # reads its input twice, so it cannot stream. So:
@@ -27,7 +28,7 @@
 # Needs the same secrets as the nightly: R2_ACCESS_KEY_ID,
 # R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
 
-name: dataset-osm-infrastructure
+name: dataset-gmwid
 
 on:
   schedule:
@@ -48,14 +49,14 @@ on:
         default: ""
 
 concurrency:
-  group: dataset-osm-infrastructure
+  group: dataset-gmwid
   cancel-in-progress: false
 
 env:
   # A scheduled run has no inputs: it is a full publish.
   STAGE: ${{ inputs.stage || 'publish' }}
-  REMOTE: parquetry:parquetry/osm-infrastructure
-  PUBLIC: https://parquetry.geomermaids.com/osm-infrastructure
+  REMOTE: parquetry:parquetry/gmwid
+  PUBLIC: https://parquetry.geomermaids.com/gmwid
   GAUL_L1: https://parquetry.geomermaids.com/gaul/2024/GAUL_2024_L1.parquet
   EEZ_WFS: https://geo.vliz.be/geoserver/MarineRegions/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=MarineRegions:eez_land&outputFormat=application/json
   LC_ALL: C.UTF-8
@@ -259,11 +260,13 @@ jobs:
           stamps=$(for f in "$WORK"/subsets/*.timestamp; do
             printf '    %-18s %s\n' "$(basename "$f" .timestamp)" "$(cat "$f")"; done)
           cat > "$WORK/out/ATTRIBUTION.txt" <<EOF
-          OpenStreetMap infrastructure in GeoParquet: PREVIEW
-          ===================================================
+          GMWID, GeoMermaids World Infrastructures Dataset: PREVIEW
+          ========================================================
 
           Worldwide power, telecoms, oil and gas, and water infrastructure from
-          OpenStreetMap. A preview: layout, columns and values may still change.
+          OpenStreetMap, measured against and completed from authoritative open
+          sources. https://gmwid.geomermaids.com
+          A preview: layout, columns and values may still change.
 
           Data
             (c) OpenStreetMap contributors, available under the Open Database
@@ -317,7 +320,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.1
         if: env.STAGE == 'build'
         with:
-          name: osm-infrastructure
+          name: gmwid
           path: ${{ env.WORK }}/out
           retention-days: 3
 
@@ -344,7 +347,7 @@ jobs:
 
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: rows and sizes match them.
-      # The thumbnails are committed (catalog/thumbnails/osm-infrastructure/).
+      # The thumbnails are committed (catalog/thumbnails/gmwid/).
       - name: Portolan catalog, published
         if: env.STAGE == 'publish'
         run: |
@@ -384,11 +387,11 @@ jobs:
         run: |
           [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
           if [[ "$FILTER" == "success" && "$BUILD" == "success" ]]; then
-            title="osm-infrastructure OK"; tags="white_check_mark"; prio="default"
+            title="GMWID OK"; tags="white_check_mark"; prio="default"
             if [[ "$STAGE" == "publish" ]]; then msg="published: latest/ replaced"
             else msg="build only: nothing published"; fi
           else
-            title="osm-infrastructure FAILED"; tags="warning"; prio="high"
+            title="GMWID FAILED"; tags="warning"; prio="high"
             msg="$STAGE: filter=$FILTER build=$BUILD; latest/ unchanged"
           fi
           curl -fsS --max-time 10 -H "Title: $title" -H "Tags: $tags" \

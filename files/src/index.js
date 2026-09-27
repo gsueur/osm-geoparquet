@@ -35,8 +35,20 @@ function isLegacyKey(key) {
   );
 }
 
+// GMWID was published as osm-infrastructure/ until 2026-09-27. Its old URLs
+// are answered from gmwid/ the same way, forever.
+const RENAMED = [["osm-infrastructure/", "gmwid/"]];
+
+// [old prefix, new prefix] for a key written under an old layout, else null.
+function legacyMap(key) {
+  const renamed = RENAMED.find(([from]) => key.startsWith(from));
+  if (renamed) return renamed;
+  return isLegacyKey(key) ? ["", DATASET_PREFIX] : null;
+}
+
 function currentKey(key) {
-  return isLegacyKey(key) ? DATASET_PREFIX + key : key;
+  const m = legacyMap(key);
+  return m ? m[1] + key.slice(m[0].length) : key;
 }
 
 export default {
@@ -69,7 +81,7 @@ export default {
       // bar, the breadcrumbs and the links in the listing all agree on where
       // the file actually is. Objects are rewritten silently instead (below),
       // because a Range request should not have to survive a redirect.
-      if (isLegacyKey(path)) {
+      if (legacyMap(path)) {
         return new Response(null, {
           status: 301,
           headers: { Location: "/" + currentKey(path), ...corsHeaders() },
@@ -165,12 +177,11 @@ const DATASETS = {
     attribution: "osm/ATTRIBUTION.txt",
     snapshots: "osm/snapshots.json",
   },
-  // Not caught by "osm/": the keys are matched with startsWith, and
-  // "osm-infrastructure/" does not start with "osm/".
-  "osm-infrastructure/": {
-    subtitle: "OpenStreetMap infrastructure, worldwide: power, telecoms, oil and " +
-      "gas, water. One file per layer, latest build only.",
-    attribution: "osm-infrastructure/ATTRIBUTION.txt",
+  "gmwid/": {
+    subtitle: "GMWID, GeoMermaids World Infrastructures Dataset: power, telecoms, " +
+      "oil and gas, water from OpenStreetMap, completed from authoritative sources. " +
+      "One file per layer, latest build only. gmwid.geomermaids.com",
+    attribution: "gmwid/ATTRIBUTION.txt",
   },
   "clc/": {
     subtitle: "Corine Land Cover 2018, Europe.",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-OpenStreetMap infrastructure as partitioned GeoParquet: power, telecoms, oil
+GMWID, the GeoMermaids World Infrastructures Dataset: OpenStreetMap
+infrastructure as GeoParquet, enriched from authoritative sources: power, telecoms, oil
 and gas, water. The content of Open Infrastructure Map (openinframap.org),
 built from OSM extracts rather than a live PostGIS.
 

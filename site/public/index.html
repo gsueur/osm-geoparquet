@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>geomermaids · GeoParquet</title>
 
-<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, OSM infrastructure, FAO GAUL 2024, geoBoundaries and Corine Land Cover. No account, no download.">
+<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, geoBoundaries and Corine Land Cover. No account, no download.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://geoparquet.geomermaids.com/">
 <meta property="og:title" content="geomermaids · GeoParquet: open datasets you query from a URL">
-<meta property="og:description" content="Daily OpenStreetMap for North America, OSM infrastructure, GAUL, geoBoundaries and Corine Land Cover in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
+<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, geoBoundaries and Corine Land Cover in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
 <meta property="og:image" content="https://geoparquet.geomermaids.com/logo-384.png">
 <meta property="og:image:width" content="384">
 <meta property="og:image:height" content="384">
@@ -216,9 +216,9 @@ Open geospatial datasets in <strong>GeoParquet 2.0</strong>, free to use and <st
     <p class="meta"><code>osm/</code> · 27 GB per day · ODbL</p>
   </div>
   <div class="dataset">
-    <h4><a href="#osm-infrastructure">OSM infrastructure</a> <span class="tag">preview</span></h4>
-    <p>Power, telecoms, oil and gas, water, worldwide: the content of Open Infrastructure Map, with voltages in kV and outputs in MW. 261 countries, one file per layer.</p>
-    <p class="meta"><code>osm-infrastructure/</code> · 27 layers, 2.2 GB · ODbL</p>
+    <h4><a href="#gmwid">GMWID, World Infrastructures</a> <span class="tag">preview</span></h4>
+    <p>Power, telecoms, oil and gas, water, worldwide: OpenStreetMap's infrastructure, measured against and completed from authoritative open sources, with voltages in kV and outputs in MW. One file per layer.</p>
+    <p class="meta"><code>gmwid/</code> · 27 layers, 2.2 GB · ODbL · <a href="https://gmwid.geomermaids.com">gmwid.geomermaids.com</a></p>
   </div>
   <div class="dataset">
     <h4><a href="https://parquetry.geomermaids.com/gaul/">FAO GAUL 2024</a></h4>
@@ -352,16 +352,17 @@ https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.pa
 
 <hr>
 
-<h2 id="osm-infrastructure">OSM infrastructure <span class="tag">preview</span></h2>
-<p>The content of <a href="https://openinframap.org">Open Infrastructure Map</a>, as GeoParquet: power lines, circuits, substations, plants and generators; telecom cables, masts and data centres; pipelines, wells and platforms; water works. Voltages are parsed to kV per circuit, outputs to MW, and plants and substations are assembled from their OSM relations. 27 layers, each with the full OSM <code>tags</code>.</p>
-<pre><code>https://parquetry.geomermaids.com/osm-infrastructure/latest/&lt;layer&gt;.parquet
+<h2 id="gmwid">GMWID, GeoMermaids World Infrastructures Dataset <span class="tag">preview</span></h2>
+<p>Where OpenStreetMap falls short, authoritative open sources complete it: every row says where it comes from, and every build publishes how OSM compares with each source. Sources, licences and coverage: <a href="https://gmwid.geomermaids.com">gmwid.geomermaids.com</a>.</p>
+<p>The base is the content of <a href="https://openinframap.org">Open Infrastructure Map</a>, as GeoParquet: power lines, circuits, substations, plants and generators; telecom cables, masts and data centres; pipelines, wells and platforms; water works. Voltages are parsed to kV per circuit, outputs to MW, and plants and substations are assembled from their OSM relations. 27 layers, each with the full OSM <code>tags</code>.</p>
+<pre><code>https://parquetry.geomermaids.com/gmwid/latest/&lt;layer&gt;.parquet
 
 # e.g. every power line on the planet
-https://parquetry.geomermaids.com/osm-infrastructure/latest/power_line.parquet</code></pre>
+https://parquetry.geomermaids.com/gmwid/latest/power_line.parquet</code></pre>
 <p>One file per layer for the whole planet, Hilbert-sorted, so a query skips most of it: a bbox filter reads only the row groups it touches, and a filter on the <code>country</code> and <code>state</code> columns every row carries skips most of the rest.</p>
 <div class="code-block">
 <pre><code>SELECT voltage_kv, count(*) AS lines, round(sum(length_km)) AS km
-FROM read_parquet('https://parquetry.geomermaids.com/osm-infrastructure/latest/power_line.parquet')
+FROM read_parquet('https://parquetry.geomermaids.com/gmwid/latest/power_line.parquet')
 WHERE country = 'DE' AND state = 'bayern' AND voltage_kv &gt;= 220
 GROUP BY 1 ORDER BY 1 DESC;</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
