@@ -199,7 +199,7 @@ const DATASETS = {
     attribution: "gaul/2024/ATTRIBUTION.txt",
   },
   "meta/": {
-    subtitle: "Shared inputs the builds read. Not a dataset of its own.",
+    subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
 };
 

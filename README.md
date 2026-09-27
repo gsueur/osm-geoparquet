@@ -84,6 +84,12 @@ file. The source is the published Europe file itself (the Copernicus
 download needs an EU Login); the first publish keeps its original bytes in
 `clc/_source/`.
 
+The list of repositories GeoPQ Workbench shows under File > Repositories
+is `meta/repositories.json`, published to
+`https://parquetry.geomermaids.com/meta/repositories.json` by `meta.yml` when
+it changes on main. The app reads it at start-up, so adding, renaming or
+moving a dataset is an edit to that file, not an app release.
+
 ## Requirements
 
 - Python ≥ 3.12

@@ -1,0 +1,91 @@
+# Publish meta/repositories.json to parquetry:parquetry/meta/.
+#
+# The list GeoPQ Workbench shows under File > Repositories. The app reads
+# it at start-up, so adding, renaming or moving a repository is an edit to
+# that file, merged here, and no app release. Runs when the file changes
+# on main, or on demand.
+#
+# The file is checked before it goes up: the shape the app reads (version
+# 1, https bases without a trailing slash, a kind it knows, unique names
+# and bases, moves that land on a listed base). An app that cannot read a
+# list keeps the last one it could, so a bad file would silently freeze
+# every user on the old list.
+
+name: meta
+
+on:
+  push:
+    branches: [main]
+    paths: [meta/repositories.json, .github/workflows/meta.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: meta
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/meta
+  PUBLIC: https://parquetry.geomermaids.com/meta
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  repositories:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the list
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          doc = json.load(open("meta/repositories.json"))
+          errors = []
+          if doc.get("version") != 1:
+              errors.append(f"version {doc.get('version')!r}, the app reads 1")
+          repos = doc.get("repositories") or []
+          if not repos:
+              errors.append("no repositories")
+          names, urls = set(), set()
+          for r in repos:
+              name, url, kind = r.get("name", "").strip(), r.get("url", ""), r.get("kind")
+              if not name:
+                  errors.append(f"{url}: no name")
+              if not url.startswith("https://") or url.endswith("/"):
+                  errors.append(f"{name}: url {url!r} must be https, no trailing slash")
+              if kind not in ("Parquetry", "Stac"):
+                  errors.append(f"{name}: kind {kind!r}, the app knows Parquetry and Stac")
+              if name in names or url in urls:
+                  errors.append(f"{name}: duplicate name or url")
+              names.add(name); urls.add(url)
+          for old, new in (doc.get("moved") or {}).items():
+              if new not in urls:
+                  errors.append(f"moved {old} -> {new}: not a listed url")
+              if old in urls:
+                  errors.append(f"moved {old}: still listed")
+          if errors:
+              sys.exit("\n".join(errors))
+          print(f"{len(repos)} repositories, {len(doc.get('moved') or {})} moved")
+          EOF
+
+      - name: rclone
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Upload
+        run: |
+          rclone copyto meta/repositories.json "$REMOTE/repositories.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300" \
+            --header-upload "Content-Type: application/json"
+
+      - name: Check what is live
+        run: |
+          curl -fsS "$PUBLIC/repositories.json" -o live.json
+          python3 -c "import json; a=json.load(open('live.json')); b=json.load(open('meta/repositories.json')); assert a == b, 'live file differs'; print('ok  meta/repositories.json')"
