@@ -65,8 +65,8 @@ and how many were added. OSM rows are never changed.
   --boem    US offshore wells, platforms and pipelines (BSEE, BOEM)
             -> petroleum_well, offshore_platform, pipeline
   --ogim    the world's oil and gas wells, sites, platforms and pipelines
-            (OGIM v3.0, EDF/MethaneSAT, CC BY 4.0), from the sources whose
-            terms allow it -> petroleum_well, petroleum_site,
+            (OGIM v3.0, EDF/MethaneSAT, CC BY 4.0), except from the sources
+            whose terms restrict reuse -> petroleum_well, petroleum_site,
             offshore_platform, pipeline
 
 UK oil and gas (--nsta): the wells, platforms and pipelines the North Sea
@@ -1888,7 +1888,7 @@ def ore_rows(con: duckdb.DuckDBPyConnection, path: str) -> dict:
 # 4.0 is compatible with the ODbL, so what OSM lacks goes into the layers
 # with origin = 'ogim' and source_id = OGIM_ID. Two filters come first:
 #
-#   - Sources whose own terms we cannot pass on, or that we take elsewhere,
+#   - Sources whose own terms restrict reuse, or that we take elsewhere,
 #     are dropped by SRC_REF_ID (OGIM_EXCLUDED; a record citing several
 #     sources is dropped if any of them is excluded).
 #   - Only what is (or was) there: wells drilled and not plugged, sites
@@ -1899,18 +1899,13 @@ def ore_rows(con: duckdb.DuckDBPyConnection, path: str) -> dict:
 # so a Gulf platform BSEE already added is not added twice.
 
 OGIM_EXCLUDED = {
-    # Terms that do not allow commercial reuse (the ODbL grants it downstream).
+    # Terms that restrict reuse (the ODbL grants commercial reuse downstream).
+    # A source with no stated licence is used (Guillaume, 2026-09-28): only
+    # explicit restrictions keep a source out.
     "Alberta Energy Regulator, non-commercial": [1, 2, 4, 5, 6, 7, 8, 9, 222],
     "Petrinex (Alberta, Manitoba), AER terms": [3, 52],
     "North Sea Transition Authority, non-commercial (published apart, nsta/)": [12, 13, 265],
-    "BC Energy Regulator, 'representation purposes only', no open licence": [25, 26, 27, 29, 33],
-    "Government of Alberta rural gas utilities, licence not verified": [11],
-    # No licence at all, or third parties' compilations.
-    "oilandgasinfrastructure.com, defunct website": [22],
-    "ArcGIS Online items uploaded by individuals": [131, 132, 166, 261],
-    "company web pages": [168, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179],
-    "Princeton University Library map": [130],
-    "Marchese et al. 2015, paper supplement": [90],
+    "BC Energy Regulator, 'representation purposes only'": [25, 26, 27, 29, 33],
     # Our earlier decisions.
     "HIFLD, measured only (licence 'other', some layers of commercial origin)": [87, 91, 93, 94, 95, 96, 244],
     "Chen et al. 2024, tanks detected from satellite imagery": [242],
@@ -2572,8 +2567,8 @@ def main() -> None:
     b.add_argument("--ore", help="Agence ORE HTA/BT substations as CSV (infra.py fetch-ore): "
                    "the French distribution substations OSM lacks, added to power_substation")
     b.add_argument("--ogim", help="OGIM v3.0 GeoPackage (EDF/MethaneSAT, CC BY 4.0): the "
-                   "wells, sites, platforms and pipelines OSM lacks, worldwide, from "
-                   "the sources whose terms allow it")
+                   "wells, sites, platforms and pipelines OSM lacks, worldwide, except "
+                   "from the sources whose terms restrict reuse")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
     o = sub.add_parser("fetch-ore", help="download Agence ORE's HTA/BT substations as CSV")

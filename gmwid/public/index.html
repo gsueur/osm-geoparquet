@@ -194,7 +194,7 @@ footer a { color: var(--muted); }
     <tr><td><a href="https://www.fcc.gov/uls/transactions/daily-weekly">Antenna Structure Registration</a>, Federal Communications Commission</td><td>US communication towers OpenStreetMap lacks (<code>telecom_mast</code>, <code>origin = 'fcc'</code>)</td><td>Public domain</td></tr>
     <tr><td><a href="https://www.data.bsee.gov/">BSEE</a> and <a href="https://www.data.boem.gov/">BOEM</a></td><td>US offshore wells, platforms and pipelines OpenStreetMap lacks (<code>origin = 'boem'</code>)</td><td>Public domain</td></tr>
     <tr><td><a href="https://opendata.agenceore.fr/">Agence ORE</a></td><td>French HTA/BT substations OpenStreetMap lacks, every distribution operator (<code>power_substation</code>, <code>origin = 'ore'</code>)</td><td>Licence Ouverte 2.0</td></tr>
-    <tr><td><a href="https://doi.org/10.5281/zenodo.22835235">OGIM v3.0</a>, Environmental Defense Fund and MethaneSAT</td><td>Oil and gas wells, sites, platforms and pipelines OpenStreetMap lacks, worldwide, from the sources in it whose terms allow commercial reuse (<code>origin = 'ogim'</code>)</td><td>CC BY 4.0</td></tr>
+    <tr><td><a href="https://doi.org/10.5281/zenodo.22835235">OGIM v3.0</a>, Environmental Defense Fund and MethaneSAT</td><td>Oil and gas wells, sites, platforms and pipelines OpenStreetMap lacks, worldwide, except from the sources in it whose terms restrict reuse (<code>origin = 'ogim'</code>)</td><td>CC BY 4.0</td></tr>
     <tr><td><a href="https://opendata-nstauthority.hub.arcgis.com/">NSTA open data</a>, North Sea Transition Authority</td><td>UK wells, platforms and pipelines OpenStreetMap lacks, in <code>gmwid/nsta/</code> only (see below)</td><td>NSTA User Agreement, <strong>non-commercial</strong></td></tr>
     <tr><td><a href="https://data.apps.fao.org/">FAO GAUL 2024</a></td><td>The <code>country</code> and <code>state</code> columns on land</td><td>CC BY 4.0</td></tr>
     <tr><td><a href="https://www.marineregions.org">Marine Regions</a>, Flanders Marine Institute</td><td>The country of offshore features (<code>state = '_offshore'</code>)</td><td>CC BY 4.0</td></tr>
@@ -399,7 +399,7 @@ const SOURCES = {
     ["petroleum_well", "US offshore wells", "wells, drilled and not plugged", false],
     ["offshore_platform", "US offshore platforms", "platforms and structures in place", false],
     ["pipeline", "US offshore pipelines", "pipeline segments", true]] },
-  ogim: { name: "OGIM v3.0", short: "OGIM", note: "Sources whose terms do not allow commercial reuse are left out.", layers: [
+  ogim: { name: "OGIM v3.0", short: "OGIM", note: "Sources whose terms restrict reuse are left out.", layers: [
     ["petroleum_well", "Oil and gas wells, worldwide", "wells, drilled and not plugged", false],
     ["petroleum_site", "Oil and gas sites, worldwide", "refineries, plants, terminals and stations", false],
     ["offshore_platform", "Offshore platforms, worldwide", "platforms", false],

@@ -373,8 +373,8 @@ jobs:
             Omara, M., et al. (2023), Developing a spatially explicit global oil and
             gas infrastructure database for characterizing methane emission sources
             at high resolution, Earth Syst. Sci. Data, 15, 3761-3790.
-            Records from sources whose terms do not allow commercial reuse, or that
-            are taken from their producer, are left out: see latest/_coverage.json
+            Records from sources whose terms restrict reuse, or that are taken
+            from their producer, are left out: see latest/_coverage.json
             (ogim.excluded_sources).
 
           French distribution substations OSM does not have (origin = 'ore' in power_substation)

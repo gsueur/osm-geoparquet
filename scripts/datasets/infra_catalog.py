@@ -142,7 +142,8 @@ PROVIDERS = [
         "name": "Environmental Defense Fund and MethaneSAT, LLC",
         "description": "Publish the Oil and Gas Infrastructure Mapping (OGIM) database "
                        "v3.0; the wells, sites, platforms and pipelines OpenStreetMap lacks "
-                       "are added from the sources in it whose terms allow it (CC BY 4.0).",
+                       "are added, except from the sources in it whose terms restrict reuse "
+                       "(CC BY 4.0).",
         "url": "https://doi.org/10.5281/zenodo.22835235",
         "roles": ["producer"],
     },
