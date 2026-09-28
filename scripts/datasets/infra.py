@@ -848,10 +848,11 @@ def load_regions(con: duckdb.DuckDBPyConnection, land: str, eez: str) -> None:
     subdivide(con, "sea_src", "sea")
 
 
-def assign_region(con: duckdb.DuckDBPyConnection, table: str) -> None:
+def assign_region(con: duckdb.DuckDBPyConnection, table: str,
+                  source_id: bool = False) -> None:
     """Add `country` and `state` to a source table: GAUL L1 on land, else
-    EEZ, else _intl. Each step joins plain tables so DuckDB plans a
-    SPATIAL_JOIN."""
+    EEZ, else _intl, and with `source_id` an empty source_id column (see
+    add_rows). Each step joins plain tables so DuckDB plans a SPATIAL_JOIN."""
     con.execute(f"""CREATE OR REPLACE TEMP TABLE pt AS
         SELECT osm_type, osm_id, ST_PointOnSurface(geometry) AS g FROM {table}""")
     con.execute("""CREATE OR REPLACE TEMP TABLE hit AS
@@ -864,6 +865,7 @@ def assign_region(con: duckdb.DuckDBPyConnection, table: str) -> None:
         FROM pt JOIN sea ON ST_Contains(sea.geometry, pt.g) GROUP BY ALL""")
     con.execute(f"""CREATE OR REPLACE TABLE {table} AS
         SELECT t.* EXCLUDE (r), split_part(r, '/', 1) AS country, split_part(r, '/', 2) AS state
+               {", NULL::VARCHAR AS source_id" if source_id else ""}
         FROM (SELECT t.*, coalesce(hit.region, '_intl/_intl') AS r
               FROM {table} t LEFT JOIN hit USING (osm_type, osm_id)) t""")
 
@@ -2429,9 +2431,12 @@ def build(pbf: Path, out: Path, work: Path, land: str, eez: str,
     build_sources(con)
     memory("relations and generators", con)
     load_regions(con, land, eez)
+    # source_id is added while the table is rewritten anyway: DuckDB 1.5.2
+    # fails to commit an INSERT into a stored table with a GEOMETRY column
+    # after ALTER TABLE ADD COLUMN ("Unsupported geometry type in legacy
+    # geometry" on the planet build).
     for table in SOURCE_TABLES:
-        assign_region(con, table)
-        con.execute(f"ALTER TABLE {table} ADD COLUMN source_id VARCHAR")
+        assign_region(con, table, source_id=True)
     memory("regions", con)
     # How OSM compares with each authoritative source, and what was added:
     # _coverage.json, keyed by source.
