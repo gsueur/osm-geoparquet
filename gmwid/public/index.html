@@ -105,6 +105,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
 .bar .id { background: var(--c-id); }
 .bar .loc { background: var(--c-loc); }
 .bar .add { background: var(--c-add); }
+.bar .skip { background: var(--muted); opacity: .45; }
 .legend { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: .84rem; color: var(--muted); margin: .4rem 0 .2rem; }
 .legend span::before { content: ""; display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .35rem; vertical-align: -1px; background: var(--sw); }
 .cov table { font-size: .86rem; margin-top: .6rem; }
@@ -167,6 +168,7 @@ footer a { color: var(--muted); }
   <span style="--sw: var(--c-id)">in OpenStreetMap, by identifier</span>
   <span style="--sw: var(--c-loc)">in OpenStreetMap, by location</span>
   <span style="--sw: var(--c-add)">added by GMWID</span>
+  <span style="--sw: var(--muted)">left out (the source itself has doubts)</span>
 </div>
 <div id="coverage-blocks"><p class="loading">Loading this week's coverage…</p></div>
 
@@ -188,6 +190,11 @@ footer a { color: var(--muted); }
     <tr><td><a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, via <a href="https://download.geofabrik.de/">Geofabrik</a> extracts</td><td>Every layer, every <code>origin = 'osm'</code> row</td><td>ODbL 1.0</td></tr>
     <tr><td><a href="https://www.eia.gov/electricity/data/eia860m/">EIA-860M</a>, U.S. Energy Information Administration</td><td>US power plants OpenStreetMap lacks (<code>power_plant</code>, <code>origin = 'eia'</code>)</td><td>Public domain</td></tr>
     <tr><td><a href="https://energy.usgs.gov/uspvdb/">USPVDB</a>, USGS and Lawrence Berkeley National Laboratory</td><td>Outlines of the solar farms added from EIA</td><td>Public domain</td></tr>
+    <tr><td><a href="https://energy.usgs.gov/uswtdb/">USWTDB</a>, USGS, American Clean Power and Lawrence Berkeley National Laboratory</td><td>US wind turbines OpenStreetMap lacks (<code>power_generator</code>, <code>origin = 'uswtdb'</code>)</td><td>Public domain</td></tr>
+    <tr><td><a href="https://www.fcc.gov/uls/transactions/daily-weekly">Antenna Structure Registration</a>, Federal Communications Commission</td><td>US communication towers OpenStreetMap lacks (<code>telecom_mast</code>, <code>origin = 'fcc'</code>)</td><td>Public domain</td></tr>
+    <tr><td><a href="https://www.data.bsee.gov/">BSEE</a> and <a href="https://www.data.boem.gov/">BOEM</a></td><td>US offshore wells, platforms and pipelines OpenStreetMap lacks (<code>origin = 'boem'</code>)</td><td>Public domain</td></tr>
+    <tr><td><a href="https://opendata.agenceore.fr/">Agence ORE</a></td><td>French HTA/BT substations OpenStreetMap lacks, every distribution operator (<code>power_substation</code>, <code>origin = 'ore'</code>)</td><td>Licence Ouverte 2.0</td></tr>
+    <tr><td><a href="https://doi.org/10.5281/zenodo.22835235">OGIM v3.0</a>, Environmental Defense Fund and MethaneSAT</td><td>Oil and gas wells, sites, platforms and pipelines OpenStreetMap lacks, worldwide, from the sources in it whose terms allow commercial reuse (<code>origin = 'ogim'</code>)</td><td>CC BY 4.0</td></tr>
     <tr><td><a href="https://opendata-nstauthority.hub.arcgis.com/">NSTA open data</a>, North Sea Transition Authority</td><td>UK wells, platforms and pipelines OpenStreetMap lacks, in <code>gmwid/nsta/</code> only (see below)</td><td>NSTA User Agreement, <strong>non-commercial</strong></td></tr>
     <tr><td><a href="https://data.apps.fao.org/">FAO GAUL 2024</a></td><td>The <code>country</code> and <code>state</code> columns on land</td><td>CC BY 4.0</td></tr>
     <tr><td><a href="https://www.marineregions.org">Marine Regions</a>, Flanders Marine Institute</td><td>The country of offshore features (<code>state = '_offshore'</code>)</td><td>CC BY 4.0</td></tr>
@@ -202,13 +209,17 @@ footer a { color: var(--muted); }
 <p>Some authoritative sources are open, but only for non-commercial use: the UK's NSTA is one. Their rows cannot go into an ODbL file, since the ODbL lets anyone reuse it commercially. So they are published beside it, in <a href="https://parquetry.geomermaids.com/gmwid/nsta/"><code>gmwid/nsta/</code></a>, under the source's own terms (<a href="https://parquetry.geomermaids.com/gmwid/nsta/LICENSE.txt">LICENSE.txt</a>), with the same columns as the layer they complete. Add them with one <code>UNION ALL BY NAME</code> when your use allows it; leave them out and everything else stays ODbL. The coverage figures themselves are published for every source.</p>
 </div>
 
+<h3>Abandoned features, kept apart</h3>
+<div class="callout">
+<p>What is abandoned (<code>abandoned:*</code> in OpenStreetMap, abandoned in place in a source, such as the Gulf of Mexico's decommissioned pipelines) is not in the layer files, so they hold what stands or is being built. It is published beside them, in <a href="https://parquetry.geomermaids.com/gmwid/latest/abandoned/"><code>gmwid/latest/abandoned/</code></a>, the same layers with the same columns. Disused features, out of service but still standing, stay in the layers with <code>lifecycle = 'disused'</code>.</p>
+</div>
+
 <h2 id="next">What is next</h2>
 <p>Every layer was surveyed for open authoritative sources. The next additions, in order:</p>
 <ol>
-  <li><strong>United States, public domain:</strong> FCC Antenna Structure Registration (telecom masts), BSEE (Gulf of Mexico platforms, pipelines and wells), EPA NPDES (wastewater plants).</li>
   <li><strong>Europe, matched by identifier:</strong> ANFR (French masts and water towers), Sandre and the EEA's Urban Waste Water Treatment reporting (wastewater plants), the UK Renewable Energy Planning Database, Germany's Marktstammdatenregister (plants and wind turbines).</li>
-  <li><strong>France's distribution grid</strong> from Enedis and Agence ORE: a million local substations, overhead medium-voltage lines and six million poles.</li>
-  <li><strong>Oil and gas worldwide</strong> from OGIM (EDF and MethaneSAT), keeping only records whose upstream licence allows open reuse.</li>
+  <li><strong>United States:</strong> EPA NPDES (wastewater plants).</li>
+  <li><strong>France's distribution grid, continued:</strong> Enedis's overhead medium-voltage lines and poles.</li>
   <li><strong>The Global South:</strong> ANEEL (Brazil's power plants), the Water Point Data Exchange (wells, mostly in Africa), HydroWASTE (wastewater plants outside Europe and the US).</li>
 </ol>
 <p>Know a source we should use, or one you need measured? <a href="mailto:contact@geomermaids.com?subject=GMWID%20source">Tell us</a>.</p>
@@ -250,6 +261,7 @@ GROUP BY ALL ORDER BY ALL;</code></pre>
   <li><strong>Browse the files:</strong> <a href="https://parquetry.geomermaids.com/gmwid/">parquetry.geomermaids.com/gmwid/</a></li>
   <li><strong>Portolan catalog</strong> (STAC, one collection per layer, column docs, agent guides): <a href="https://parquetry.geomermaids.com/gmwid/catalog/">gmwid/catalog/</a></li>
   <li><strong>On a map:</strong> <a href="https://www.geomermaids.com/geopq-workbench">GeoPQ Workbench</a> has GMWID built in as a repository.</li>
+  <li><strong>Abandoned features:</strong> <a href="https://parquetry.geomermaids.com/gmwid/latest/abandoned/">gmwid/latest/abandoned/</a>, one file per layer</li>
   <li><strong>Region and state slugs:</strong> <a href="https://parquetry.geomermaids.com/gmwid/latest/_regions.json">_regions.json</a></li>
 </ul>
 
@@ -279,22 +291,22 @@ const LAYERS = {
   power_line: ["Power lines and cables", "planned", "Enedis (FR, medium voltage)"],
   power_circuit: ["Circuits", "none"],
   power_tower: ["Towers and poles", "planned", "Enedis poles (FR)"],
-  power_substation: ["Substations", "planned", "Enedis and ORE (FR), UKPN (GB)"],
+  power_substation: ["Substations", "live", "Agence ORE (FR); next UKPN (GB)"],
   power_plant: ["Power plants", "live", "EIA-860M + USPVDB (US)"],
-  power_generator: ["Generators and wind turbines", "planned", "Marktstammdatenregister (DE)"],
+  power_generator: ["Generators and wind turbines", "live", "USWTDB (US); next Marktstammdatenregister (DE)"],
   power_switchgear: ["Switchgear and transformers", "none"],
   power_other: ["Other power features", "none"],
   telecom_cable: ["Telecom cables", "planned", "EMODnet (EU waters)"],
   telecom_building: ["Data centres and exchanges", "none"],
   telecom_location: ["Connection points", "none"],
-  telecom_mast: ["Masts and towers", "planned", "FCC ASR (US), ANFR (FR)"],
+  telecom_mast: ["Masts and towers", "live", "FCC ASR (US); next ANFR (FR)"],
   telecom_antenna: ["Antennas", "planned", "attributes from ANFR, Arcep"],
   utility_pole: ["Utility poles", "none"],
   street_cabinet: ["Street cabinets", "none"],
-  pipeline: ["Pipelines", "apart", "NSTA (GB); next BSEE (US Gulf)"],
-  petroleum_site: ["Oil and gas sites", "planned", "OGIM"],
-  petroleum_well: ["Oil and gas wells", "apart", "NSTA (GB); next BSEE, OGIM"],
-  offshore_platform: ["Offshore platforms", "apart", "NSTA (GB); next BSEE (US Gulf)"],
+  pipeline: ["Pipelines", "live", "BOEM (US offshore), OGIM; NSTA (GB) apart"],
+  petroleum_site: ["Oil and gas sites", "live", "OGIM"],
+  petroleum_well: ["Oil and gas wells", "live", "BSEE (US offshore), OGIM; NSTA (GB) apart"],
+  offshore_platform: ["Offshore platforms", "live", "BSEE (US offshore), OGIM; NSTA (GB) apart"],
   pipeline_feature: ["Valves and pig traps", "none"],
   marker: ["Pipeline markers", "none"],
   water_treatment_plant: ["Water treatment plants", "none"],
@@ -362,11 +374,40 @@ function renderLayers(layers) {
   }
 }
 
-// _coverage.json tiers -> the three bar segments.
-const TIER_KIND = { ref: "id", inside: "loc", near: "loc", generators: "loc", added: "add" };
+// _coverage.json tiers -> the bar segments.
+const TIER_KIND = {
+  ref: "id", inside: "loc", near: "loc", generators: "loc", near_substation: "loc",
+  near_transformer: "loc", added: "add", unverified: "skip",
+};
 const TIER_LABEL = {
   ref: "by identifier", inside: "inside an OSM outline", near: "nearby",
-  generators: "OSM generators within 500 m", added: "added by GMWID",
+  generators: "OSM generators within 500 m", near_substation: "a substation within 30 m",
+  near_transformer: "a transformer within 30 m", added: "added by GMWID",
+  unverified: "not seen on imagery by the source, not added",
+};
+
+// The sources after EIA, with the layers each completes:
+// [layer, title, what the source counts, true when measured in km].
+const SOURCES = {
+  uswtdb: { name: "USWTDB, US Wind Turbine Database", short: "USWTDB", layers: [
+    ["power_generator", "US wind turbines", "turbines", false]] },
+  fcc: { name: "FCC Antenna Structure Registration", short: "the FCC", layers: [
+    ["telecom_mast", "US communication towers", "constructed towers and masts", false]] },
+  ore: { name: "Agence ORE", short: "ORE", layers: [
+    ["power_substation", "French distribution substations", "HTA/BT substations, every operator", false]] },
+  boem: { name: "BSEE and BOEM", short: "BSEE and BOEM", layers: [
+    ["petroleum_well", "US offshore wells", "wells, drilled and not plugged", false],
+    ["offshore_platform", "US offshore platforms", "platforms and structures in place", false],
+    ["pipeline", "US offshore pipelines", "pipeline segments", true]] },
+  ogim: { name: "OGIM v3.0", short: "OGIM", note: "Sources whose terms do not allow commercial reuse are left out.", layers: [
+    ["petroleum_well", "Oil and gas wells, worldwide", "wells, drilled and not plugged", false],
+    ["petroleum_site", "Oil and gas sites, worldwide", "refineries, plants, terminals and stations", false],
+    ["offshore_platform", "Offshore platforms, worldwide", "platforms", false],
+    ["pipeline", "Pipelines, worldwide", "pipelines", true]] },
+  nsta: { name: "NSTA open data", short: "the NSTA", note: "Added rows are in gmwid/nsta/ (non-commercial licence).", layers: [
+    ["petroleum_well", "UK oil and gas wells", "wellbores, onshore England and offshore", false],
+    ["offshore_platform", "UK offshore platforms", "platforms and floating production units", false],
+    ["pipeline", "UK offshore pipelines", "pipelines (not umbilicals)", true]] },
 };
 
 // One block per (source, layer): what the source reports and how it matched.
@@ -390,28 +431,36 @@ function blocks(cov) {
         : "",
     });
   }
-  if (cov.nsta) {
-    const n = cov.nsta;
-    const defs = [
-      ["petroleum_well", "UK oil and gas wells", "wellbores, onshore England and offshore", null],
-      ["offshore_platform", "UK offshore platforms", "platforms and floating production units", null],
-      ["pipeline", "UK offshore pipelines", "pipelines (not umbilicals)", "km"],
-    ];
-    for (const [layer, title, what, km] of defs) {
-      const d = n[layer];
+  // Every other source: one block per layer it completes. A source's count
+  // key is its own name (bsee for BOEM's), and OGIM's sites are tiered per
+  // category: summed here.
+  for (const [key, def] of Object.entries(SOURCES)) {
+    const c = cov[key];
+    if (!c) continue;
+    for (const [layer, title, what, km] of def.layers) {
+      const d = c[layer];
       if (!d) continue;
-      const tiers = Object.entries(d.tiers).map(([t, v]) => ({ t, n: v.features, m: v.km }));
+      const count = Object.entries(d).find(([k, v]) => typeof v === "number" && k !== "near_m");
+      const flat = {};
+      for (const [t, v] of Object.entries(d.tiers)) {
+        for (const [tt, vv] of v.features === undefined ? Object.entries(v) : [[t, v]]) {
+          const f = (flat[tt] = flat[tt] || { n: 0, m: 0 });
+          f.n += vv.features; f.m += vv.km || vv.mw || 0;
+        }
+      }
+      const tiers = Object.entries(flat).map(([t, v]) => ({ t, n: v.n, m: v.m }));
       const total = tiers.reduce((a, x) => a + x.n, 0);
-      const totalKm = km ? tiers.reduce((a, x) => a + (x.m || 0), 0) : null;
-      const added = d.tiers.added ? d.tiers.added : { features: 0, km: 0 };
-      const share = km ? 1 - added.km / totalKm : 1 - added.features / total;
+      const totalM = km ? tiers.reduce((a, x) => a + x.m, 0) : null;
+      const added = flat.added || { n: 0, m: 0 };
+      const skipped = flat.unverified || { n: 0, m: 0 };
+      const share = km ? 1 - (added.m + skipped.m) / totalM : 1 - (added.n + skipped.n) / total;
       out.push({
         title, layer,
-        src: `NSTA open data (${n.source}), ${fmt.format(d.nsta)} ${what}. Added rows are in gmwid/nsta/ (non-commercial licence).`,
-        measure: km ? "km" : "n", unit: km ? "km" : "", totalN: total, totalM: totalKm,
+        src: `${def.name} (${c.source}), ${fmt.format(count ? count[1] : total)} ${what}.${def.note ? " " + def.note : ""}`,
+        measure: km ? "km" : "n", unit: km ? "km" : "", totalN: total, totalM,
         headline: `${f1.format(100 * share)}%`,
-        headlineSub: km ? "of NSTA's pipeline length was already in OpenStreetMap"
-                        : `of NSTA's ${what.split(",")[0]} were already in OpenStreetMap`,
+        headlineSub: km ? `of ${def.short}'s length was already in OpenStreetMap`
+                        : `of ${def.short}'s ${what.split(",")[0]} were already in OpenStreetMap`,
         tiers, note: "",
       });
     }
@@ -438,7 +487,8 @@ function renderBlock(b) {
 
   const val = (x) => (b.measure === "n" ? x.n : x.m || 0);
   const total = b.tiers.reduce((a, x) => a + val(x), 0) || 1;
-  const order = ["ref", "inside", "near", "generators", "added"];
+  const order = ["ref", "inside", "near", "generators", "near_substation", "near_transformer",
+                 "added", "unverified"];
   const tiers = [...b.tiers].sort((a, z) => order.indexOf(a.t) - order.indexOf(z.t));
   const bar = el("div", { class: "bar", role: "img",
     "aria-label": tiers.map((x) => `${TIER_LABEL[x.t] || x.t}: ${fmt.format(Math.round(val(x)))}`).join(", ") });
@@ -465,6 +515,7 @@ function renderBlock(b) {
   for (const x of tiers) {
     const r = el("tr");
     r.append(el("td", {}, TIER_KIND[x.t] === "add" ? "Added by GMWID"
+                               : TIER_KIND[x.t] === "skip" ? "Not added: " + TIER_LABEL[x.t]
                                : "In OpenStreetMap, " + (TIER_LABEL[x.t] || x.t)));
     r.append(el("td", { class: "num" }, fmt.format(x.n)));
     if (b.measure !== "n") r.append(el("td", { class: "num" }, fmt.format(Math.round(x.m || 0))));

@@ -58,6 +58,8 @@ env:
   REMOTE: parquetry:parquetry/gmwid
   PUBLIC: https://parquetry.geomermaids.com/gmwid
   GAUL_L1: https://parquetry.geomermaids.com/gaul/2024/GAUL_2024_L1.parquet
+  OGIM_RECORD: "22835235"
+  OGIM_MD5: 99d94e96eefe4d7f561d1a2dbcc1a313
   EEZ_WFS: https://geo.vliz.be/geoserver/MarineRegions/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=MarineRegions:eez_land&outputFormat=application/json
   LC_ALL: C.UTF-8
   RCLONE_CONFIG_PARQUETRY_TYPE: s3
@@ -235,6 +237,65 @@ jobs:
             https://datanstauthority.blob.core.windows.net/external/OpenDataZips/UKCS_OFF_WGS84_SHP.zip
           unzip -l "$WORK/UKCS_OFF_WGS84_SHP.zip" | grep -c '\.shp$'
 
+      # USWTDB (USGS/LBNL/ACP): every US utility-scale wind turbine; the ones
+      # OSM lacks go into power_generator. Public domain. Required like EIA.
+      - name: USWTDB, wind turbines
+        run: |
+          curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors \
+            -o "$WORK/uswtdb.zip" https://energy.usgs.gov/uswtdb/assets/data/uswtdbCSV.zip
+          unzip -l "$WORK/uswtdb.zip" | grep -o 'uswtdb_V[0-9_]*\.csv' | tee "$WORK/uswtdb_version.txt"
+
+      # FCC Antenna Structure Registration, the weekly complete file (rebuilt
+      # every Sunday): constructed US communication towers, into telecom_mast.
+      - name: FCC ASR, antenna structures
+        run: |
+          curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors \
+            -o "$WORK/r_tower.zip" https://data.fcc.gov/download/pub/uls/complete/r_tower.zip
+          unzip -l "$WORK/r_tower.zip" | grep -E ' (RA|CO|EN)\.dat$'
+
+      # BSEE boreholes and platform structures (daily) and BOEM pipeline
+      # segments (monthly): the US offshore wells, platforms and pipelines.
+      - name: BOEM/BSEE, US offshore oil and gas
+        run: |
+          mkdir -p "$WORK/boem"
+          for url in https://www.data.bsee.gov/Well/Files/BoreholeRawData.zip \
+                     https://www.data.bsee.gov/Platform/Files/PlatStrucRawData.zip \
+                     https://www.data.boem.gov/Mapping/Files/ppl_arcs.zip; do
+            curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors -o "$WORK/boem.zip" "$url"
+            unzip -oq "$WORK/boem.zip" -d "$WORK/boem"
+          done
+          rm "$WORK/boem.zip"
+          ls -lR "$WORK/boem" | grep -E '\.(txt|shp)$'
+
+      # Agence ORE: the HTA/BT substations of every French distribution
+      # operator (Licence Ouverte 2.0). No bulk file: paged through its API.
+      - name: ORE, French distribution substations
+        run: |
+          uv run --project scripts python scripts/datasets/infra.py fetch-ore "$WORK/ore.csv"
+
+      # OGIM v3.0 (EDF/MethaneSAT, CC BY 4.0): the world's oil and gas
+      # infrastructure from ~190 public sources, one 3.4 GB GeoPackage. A
+      # fixed release, so it is cached between runs; Zenodo serves one stream
+      # at ~1 MB/s, so a cold download uses parallel ranges. A new release is
+      # a change to OGIM_RECORD and OGIM_MD5.
+      - name: OGIM, cached
+        id: ogim
+        uses: actions/cache@v6.1.0
+        with:
+          path: ${{ env.WORK }}/ogim.gpkg
+          key: ogim-${{ env.OGIM_RECORD }}-${{ env.OGIM_MD5 }}
+
+      - name: OGIM, download
+        if: steps.ogim.outputs.cache-hit != 'true'
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+          aria2c -q -x 12 -s 12 --retry-wait 30 --max-tries 5 -d "$WORK" -o ogim.gpkg \
+            "https://zenodo.org/api/records/$OGIM_RECORD/files/OGIM_v3.0.gpkg/content"
+
+      - name: OGIM, check
+        run: |
+          echo "$OGIM_MD5  $WORK/ogim.gpkg" | md5sum -c -
+
       - name: Build and verify every file
         working-directory: ${{ env.WORK }}   # DuckDB spill files land here, not on /
         env:
@@ -249,6 +310,8 @@ jobs:
             --out-dir "$WORK/out/latest" --work-dir "$WORK/build" \
             --land "$GAUL_L1" --eez "$WORK/eez_land.json" --eia "$WORK/eia860m.xlsx" \
             --uspvdb "$WORK/uspvdb.zip" --nsta "$WORK/UKCS_OFF_WGS84_SHP.zip" \
+            --uswtdb "$WORK/uswtdb.zip" --fcc "$WORK/r_tower.zip" --boem "$WORK/boem" \
+            --ore "$WORK/ore.csv" --ogim "$WORK/ogim.gpkg" \
             2> >(tee "$WORK/time.txt" >&2)
           grep -E "Elapsed|Maximum resident" "$WORK/time.txt"
           rm -rf "$WORK/build"
@@ -285,6 +348,39 @@ jobs:
             Berkeley National Laboratory, United States Large-Scale Solar
             Photovoltaic Database (USPVDB), $(cat "$WORK/uspvdb_version.txt" 2>/dev/null).
             https://energy.usgs.gov/uspvdb/. Public domain.
+
+          US wind turbines OSM does not have (origin = 'uswtdb' in power_generator)
+            Hoen, B.D., Diffendorfer, J.E., Rand, J.T., Kramer, L.A., Garrity, C.P.,
+            and Hunt, H.E., United States Wind Turbine Database, $(cat "$WORK/uswtdb_version.txt" 2>/dev/null).
+            U.S. Geological Survey, American Clean Power Association, and Lawrence
+            Berkeley National Laboratory. https://energy.usgs.gov/uswtdb/. Public domain.
+
+          US communication towers OSM does not have (origin = 'fcc' in telecom_mast)
+            Federal Communications Commission, Antenna Structure Registration,
+            weekly complete file, https://www.fcc.gov/uls/transactions/daily-weekly.
+            Public domain (U.S. federal government work).
+
+          US offshore wells, platforms and pipelines OSM does not have (origin = 'boem')
+            Bureau of Safety and Environmental Enforcement, borehole and platform
+            structure data (https://www.data.bsee.gov/), and Bureau of Ocean Energy
+            Management, pipeline segments (https://www.data.boem.gov/). Public domain
+            (U.S. federal government work).
+
+          Oil and gas wells, sites, platforms and pipelines OSM does not have (origin = 'ogim')
+            Contains data from the Oil and Gas Infrastructure Mapping (OGIM) database
+            v3.0, Environmental Defense Fund and MethaneSAT, LLC,
+            https://doi.org/10.5281/zenodo.22835235. Licence: CC BY 4.0.
+            Omara, M., et al. (2023), Developing a spatially explicit global oil and
+            gas infrastructure database for characterizing methane emission sources
+            at high resolution, Earth Syst. Sci. Data, 15, 3761-3790.
+            Records from sources whose terms do not allow commercial reuse, or that
+            are taken from their producer, are left out: see latest/_coverage.json
+            (ogim.excluded_sources).
+
+          French distribution substations OSM does not have (origin = 'ore' in power_substation)
+            Agence ORE, Postes de distribution publique (postes HTA/BT),
+            https://opendata.agenceore.fr/, downloaded $(date -u +'%-d %B %Y').
+            Licence Ouverte 2.0 (Etalab), https://www.etalab.gouv.fr/licence-ouverte-open-licence/.
 
           UK wells, platforms and pipelines OSM does not have: nsta/, NOT ODbL
             Contains information provided by the North Sea Transition Authority
@@ -359,7 +455,7 @@ jobs:
         run: |
           set +e
           fail=0
-          for f in index.json ATTRIBUTION.txt latest/_manifest.json \
+          for f in index.json ATTRIBUTION.txt latest/_manifest.json latest/abandoned/_manifest.json \
                    latest/power_line.parquet latest/power_tower.parquet \
                    latest/water_well.parquet latest/_coverage.json \
                    nsta/LICENSE.txt nsta/petroleum_well.parquet \

@@ -106,6 +106,47 @@ PROVIDERS = [
         "roles": ["producer"],
     },
     {
+        "name": "U.S. Geological Survey, American Clean Power Association and Lawrence "
+                "Berkeley National Laboratory",
+        "description": "Publish the United States Wind Turbine Database (USWTDB); the "
+                       "turbines OpenStreetMap lacks are added from it (public domain).",
+        "url": "https://energy.usgs.gov/uswtdb/",
+        "roles": ["producer"],
+    },
+    {
+        "name": "Federal Communications Commission (FCC)",
+        "description": "Publishes the Antenna Structure Registration; the constructed "
+                       "communication towers OpenStreetMap lacks are added from it (public "
+                       "domain).",
+        "url": "https://www.fcc.gov/uls/transactions/daily-weekly",
+        "roles": ["producer"],
+    },
+    {
+        "name": "Bureau of Safety and Environmental Enforcement and Bureau of Ocean Energy "
+                "Management",
+        "description": "Publish the US Outer Continental Shelf's boreholes, platform "
+                       "structures and pipeline segments; those OpenStreetMap lacks are "
+                       "added from them (public domain).",
+        "url": "https://www.data.bsee.gov/",
+        "roles": ["producer"],
+    },
+    {
+        "name": "Agence ORE",
+        "description": "Publishes the HTA/BT substations of every French distribution "
+                       "operator; those OpenStreetMap lacks are added from it (Licence "
+                       "Ouverte 2.0).",
+        "url": "https://opendata.agenceore.fr/",
+        "roles": ["producer"],
+    },
+    {
+        "name": "Environmental Defense Fund and MethaneSAT, LLC",
+        "description": "Publish the Oil and Gas Infrastructure Mapping (OGIM) database "
+                       "v3.0; the wells, sites, platforms and pipelines OpenStreetMap lacks "
+                       "are added from the sources in it whose terms allow it (CC BY 4.0).",
+        "url": "https://doi.org/10.5281/zenodo.22835235",
+        "roles": ["producer"],
+    },
+    {
         "name": "Geomermaids",
         "description": "Extracts the infrastructure, derives the typed columns following "
                        "Open Infrastructure Map's data model, and maintains and hosts "
@@ -131,7 +172,9 @@ LAYER_DOCS = {
                     "transformers."),
     "power_substation": ("Substations",
                          "Substations, with their voltages in kV. Site relations are "
-                         "merged into one feature, and the circuits ending there are listed."),
+                         "merged into one feature, and the circuits ending there are listed. "
+                         "In France, completed with the HTA/BT substations Agence ORE "
+                         "publishes and OpenStreetMap lacks (origin = 'ore')."),
     "power_plant": ("Power plants",
                     "Power plants, with source, method and output in MW, tagged or "
                     "estimated from their generators (and, for solar farms, their area). "
@@ -139,7 +182,9 @@ LAYER_DOCS = {
                     "OpenStreetMap lacks (origin = 'eia')."),
     "power_generator": ("Generators",
                         "Individual generators (wind turbines, solar panels, hydro units), "
-                        "with source, method and output in MW, tagged or estimated."),
+                        "with source, method and output in MW, tagged or estimated. In the "
+                        "US, completed with the wind turbines USWTDB lists and "
+                        "OpenStreetMap lacks (origin = 'uswtdb')."),
     "power_switchgear": ("Switchgear and transformers",
                          "Switches, transformers, compensators, insulators, terminals "
                          "and converters, with their voltages."),
@@ -155,7 +200,9 @@ LAYER_DOCS = {
                          "distribution points)."),
     "telecom_mast": ("Masts and communication towers",
                      "Masts and towers carrying antennas, with their height and the "
-                     "services they host (mobile, television, radio...)."),
+                     "services they host (mobile, television, radio...). In the US, "
+                     "completed with the constructed towers of the FCC's Antenna Structure "
+                     "Registration OpenStreetMap lacks (origin = 'fcc')."),
     "telecom_antenna": ("Antennas", "Antennas mapped on their own (man_made=antenna)."),
     "utility_pole": ("Utility poles", "Poles for other utilities (man_made=utility_pole)."),
     "street_cabinet": ("Street cabinets",
@@ -163,12 +210,20 @@ LAYER_DOCS = {
                        "water...)."),
     "pipeline": ("Pipelines",
                  "Pipelines, with the substance they carry, a category (oil, gas, "
-                 "water...) and their length."),
+                 "water...) and their length. Completed with the pipelines BOEM (US "
+                 "offshore) and OGIM (worldwide) report and OpenStreetMap lacks."),
     "petroleum_site": ("Oil and gas sites",
                        "Refineries, terminals, storage, well clusters and other oil and "
-                       "gas industrial sites."),
-    "petroleum_well": ("Oil and gas wells", "Petroleum and oil wells."),
-    "offshore_platform": ("Offshore platforms", "Offshore platforms (man_made=offshore_platform)."),
+                       "gas industrial sites. Completed from OGIM with the refineries, "
+                       "processing plants, LNG terminals and stations OpenStreetMap lacks."),
+    "petroleum_well": ("Oil and gas wells",
+                       "Petroleum and oil wells. Completed with the drilled, unplugged "
+                       "wells BSEE (US offshore) and OGIM (worldwide) report and "
+                       "OpenStreetMap lacks."),
+    "offshore_platform": ("Offshore platforms",
+                          "Offshore platforms (man_made=offshore_platform). Completed with "
+                          "the platforms BSEE (US offshore) and OGIM report and OpenStreetMap "
+                          "lacks."),
     "pipeline_feature": ("Pipeline features",
                          "Valves, compressors, pig launchers and other features on "
                          "pipelines."),
@@ -200,12 +255,19 @@ COMMON_DOCS = {
     "osm_id": "OSM element id. With osm_type, the key back to openstreetmap.org.",
     "osm_type": "OSM element type: node, way or relation. NULL on rows from another "
                 "source (origin).",
-    "origin": "Where the row comes from: osm, or eia for a US power plant the EIA-860M "
-              "inventory reports and OpenStreetMap does not have (no osm_id and no tags; "
-              "a point at EIA's coordinates, or for solar farms the USPVDB outline; see "
-              "_coverage.json). NSTA's UK wells, platforms and pipelines OSM lacks are "
-              "not in these files: their licence is non-commercial, so they are published "
-              "apart, with the same schema and origin nsta, in nsta/.",
+    "origin": "Where the row comes from: osm, or the authoritative source that reports "
+              "a feature OpenStreetMap does not have (no osm_id and no tags; see "
+              "_coverage.json): eia (US power plants, EIA-860M; solar farms with their "
+              "USPVDB outline), uswtdb (US wind turbines), fcc (US communication towers, "
+              "FCC Antenna Structure Registration), ore (French HTA/BT substations, Agence "
+              "ORE), boem (US offshore wells, platforms and pipelines, BSEE and BOEM), ogim "
+              "(oil and gas worldwide, OGIM v3.0). NSTA's UK wells, platforms and pipelines "
+              "OSM lacks are not in these files: their licence is non-commercial, so they "
+              "are published apart, with the same schema and origin nsta, in nsta/.",
+    "source_id": "On a row from another source, its ID there: EIA plant ID, USWTDB "
+                 "case_id, FCC registration number, API well number or BSEE "
+                 "complex/structure or BOEM segment number, OGIM_ID. NULL on OSM rows and "
+                 "on ORE's, which publishes no code.",
     "country": "ISO 3166-1 alpha-2 code of the country the feature is in (FAO GAUL "
                "codes for disputed areas), or _intl on the high seas. Rows are "
                "Hilbert-sorted, so a filter on it skips most row groups.",
@@ -214,8 +276,9 @@ COMMON_DOCS = {
              "Filter with country: the same slug can exist in two countries.",
     "type": "The feature's kind within the layer: the value of the layer's main tag "
             "(line, minor_line, cable for power_line), whatever its lifecycle.",
-    "lifecycle": "active, construction, proposed, disused or abandoned, read from the "
-                 "lifecycle prefixes and values of the layer's main tag.",
+    "lifecycle": "active, construction, proposed or disused, read from the lifecycle "
+                 "prefixes and values of the layer's main tag. Abandoned features are not "
+                 "in this file: they are in abandoned/, the same layers and schema.",
     "name": "The name tag.",
     "names": "Every name and name:<lang> tag, keyed by tag.",
     "operator": "The operator tag.",
@@ -456,11 +519,16 @@ def build_root(collections: list[dict], interval: list[str], updated: str) -> di
             {"rel": "related", "href": f"{PUBLIC_DATA}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, sources and their licences"},
             {"rel": "related", "href": f"{DATA_URL}/_coverage.json", "type": "application/json",
-             "title": "OSM against authoritative sources (EIA, NSTA): how many each "
+             "title": "OSM against authoritative sources (EIA, USWTDB, FCC, ORE, BOEM/BSEE, "
+                      "OGIM, NSTA): how many each "
                       "reports, how many OSM has, what was added"},
             {"rel": "related", "href": f"{PUBLIC_DATA}/nsta/LICENSE.txt", "type": "text/plain",
              "title": "UK wells, platforms and pipelines OSM lacks, from the NSTA: a "
                       "separate folder, non-commercial licence, not ODbL"},
+            {"rel": "related", "href": f"{DATA_URL}/abandoned/_manifest.json",
+             "type": "application/json",
+             "title": "Abandoned features, kept apart from the layers: the same layers and "
+                      "schema in latest/abandoned/<layer>.parquet"},
             {"rel": "related", "href": f"{DATA_URL}/_regions.json", "type": "application/json",
              "title": "Every country and state slug, with its names and GAUL code"},
             {"rel": "related", "href": OIM_URL, "type": "text/html",
