@@ -110,3 +110,33 @@ no STAC catalog to link as canonical):
 Rendered from the published files on 2026-09-23 with rashid 0.1.8: 0
 errors, 3 warnings (`PTL-COL-003`, fixed by lower-casing the ids) and the
 info findings above.
+
+## FEMA NFHL
+
+A third catalog describes the FEMA National Flood Hazard Layer at
+`https://parquetry.geomermaids.com/nfhl/catalog/catalog.json`, rendered by
+`scripts/datasets/nfhl_catalog.py` with the same constants, rashid wrapper
+and uploader. One collection (`flood-hazard-areas`) describing two layouts of
+the same rows: the United States file as the `data` asset, and the per-state
+files under `state=<XX>/` through the partition extension and one
+`data-<xx>` asset each. It describes the snapshot `snapshots.json` names as
+latest; a snapshot folder is immutable, so every data asset carries
+`file:size` and `file:checksum` from the manifests `nfhl.py` writes. There is
+no workflow: the input is built on a workstation, and `publish` renders,
+checks and uploads in one command.
+
+The licence is `CC-PDM-1.0`: the NFHL is a US federal work, not subject to
+copyright (17 U.S.C. 105), and the Public Domain Mark is the SPDX id that says
+so. The license link points at usa.gov's page on government works.
+
+Findings accepted as they stand:
+
+| Rule | Severity | Why |
+|---|---|---|
+| `PTL-PRO-002` | info | FEMA publishes no STAC catalog to link as canonical; the `via` link names the FEMA portal. |
+| `PTL-VIZ-004` | info | The data assets are 3 MB to 35.6 GB with no PMTiles derivative. A national flood-zone tile set is a separate project. |
+| `PTL-DAT-005` | warning | Data pass only, once per state asset. rashid compares every asset's data extent with the collection's `extent.spatial.bbox`, which is the whole United States, so a state file (a subset by design) cannot match. The national asset passes. |
+
+Checked on 2026-09-30 with rashid 0.1.8, metadata pass and data pass (the
+latter against the local state files, 47 minutes, every checksum and size
+read back from the bucket): 0 errors.
