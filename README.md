@@ -84,6 +84,23 @@ file. The source is the published Europe file itself (the Copernicus
 download needs an EU Login); the first publish keeps its original bytes in
 `clc/_source/`.
 
+FEMA's National Flood Hazard Layer (`scripts/datasets/nfhl.py`) sits under
+`https://parquetry.geomermaids.com/nfhl/<snapshot>/` as one United States
+file (`flood_hazard_areas.parquet`) and one file per state
+(`state=<XX>/flood_hazard_areas.parquet`), EPSG:4269 as FEMA delivers it.
+The source is not built here: the county-by-county download, normalization
+and subdivision are the pipeline of
+[nfhl-geoparquet-workshop](https://github.com/gsueur/nfhl-geoparquet-workshop),
+run on a workstation (90 GB of FEMA ZIPs, 2,500 county deliveries). Its
+national file of pieces is the input; the script sorts it by state then
+along a Hilbert curve, writes the bbox covering, the state files, the
+manifests, `index.json`, `snapshots.json` and `ATTRIBUTION.txt`, and checks
+that rows and geometries are unchanged. Rows are pieces of at most 100
+vertices, not FEMA zones: `ATTRIBUTION.txt` says how to count and
+reassemble zones, and that the files are not for official flood
+determinations. A new snapshot is a new dated folder and a new `latest` in
+`snapshots.json`.
+
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to
 `https://parquetry.geomermaids.com/meta/repositories.json` by `meta.yml` when

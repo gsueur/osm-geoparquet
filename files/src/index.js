@@ -198,6 +198,12 @@ const DATASETS = {
       "and a country layer (L0) dissolved here.",
     attribution: "gaul/2024/ATTRIBUTION.txt",
   },
+  "nfhl/": {
+    subtitle: "FEMA National Flood Hazard Layer, flood hazard areas of the United States: " +
+      "one file for the country and one per state, zones cut into pieces of at most 100 vertices.",
+    attribution: "nfhl/2026-09-30/ATTRIBUTION.txt",
+    snapshots: "nfhl/snapshots.json",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
