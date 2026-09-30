@@ -99,7 +99,10 @@ that rows and geometries are unchanged. Rows are pieces of at most 100
 vertices, not FEMA zones: `ATTRIBUTION.txt` says how to count and
 reassemble zones, and that the files are not for official flood
 determinations. A new snapshot is a new dated folder and a new `latest` in
-`snapshots.json`.
+`snapshots.json`. Its Portolan catalog is at
+`https://parquetry.geomermaids.com/nfhl/catalog/catalog.json`, rendered by
+`scripts/datasets/nfhl_catalog.py` from the manifests and the national
+file's footer; it describes the latest snapshot.
 
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to
