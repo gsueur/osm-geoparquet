@@ -123,9 +123,8 @@ jobs:
 
       - name: Download ${{ matrix.id }} from Geofabrik
         run: |
-          curl -fL --retry 5 --retry-delay 30 --retry-all-errors -sS \
-            -A "osm-geoparquet-infrastructure/1.0 (+https://geoparquet.geomermaids.com/)" \
-            -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
+          "$GITHUB_WORKSPACE/scripts/fetch_pbf.sh" "${{ matrix.url }}" "$WORK/source.osm.pbf" \
+            "osm-geoparquet-infrastructure/1.0 (+https://geoparquet.geomermaids.com/)"
           ls -lh "$WORK/source.osm.pbf"
           osmium fileinfo -g header.option.osmosis_replication_timestamp "$WORK/source.osm.pbf" \
             | tee "$WORK/${{ matrix.id }}.timestamp"
