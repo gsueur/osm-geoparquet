@@ -137,9 +137,8 @@ jobs:
 
       - name: Download ${{ matrix.id }} from Geofabrik
         run: |
-          curl -fL --retry 5 --retry-delay 30 --retry-all-errors \
-            -A "osm-geoparquet-nightly/1.0 (+https://geoparquet.geomermaids.com/)" \
-            -o "$WORK/source.osm.pbf" "${{ matrix.url }}"
+          "$GITHUB_WORKSPACE/scripts/fetch_pbf.sh" "${{ matrix.url }}" "$WORK/source.osm.pbf" \
+            "osm-geoparquet-nightly/1.0 (+https://geoparquet.geomermaids.com/)"
           ls -lh "$WORK/source.osm.pbf"
 
       # The parent-extract boundaries job: a country extract is 12 GB, and
