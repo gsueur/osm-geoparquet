@@ -30,6 +30,12 @@
       "kind": "Parquetry"
     },
     {
+      "name": "Geomermaids FEMA NFHL flood hazard areas (US)",
+      "url": "https://parquetry.geomermaids.com/nfhl",
+      "kind": "Parquetry",
+      "attribution": "FEMA National Flood Hazard Layer"
+    },
+    {
       "name": "Overture Maps (STAC)",
       "url": "https://stac.overturemaps.org",
       "kind": "Stac",

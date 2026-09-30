@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>geomermaids · GeoParquet</title>
 
-<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, geoBoundaries and Corine Land Cover. No account, no download.">
+<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, geoBoundaries, Corine Land Cover and FEMA flood zones. No account, no download.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://geoparquet.geomermaids.com/">
 <meta property="og:title" content="geomermaids · GeoParquet: open datasets you query from a URL">
-<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, geoBoundaries and Corine Land Cover in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
+<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, geoBoundaries, Corine Land Cover and FEMA flood zones in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
 <meta property="og:image" content="https://geoparquet.geomermaids.com/logo-384.png">
 <meta property="og:image:width" content="384">
 <meta property="og:image:height" content="384">
@@ -232,6 +232,11 @@ Open geospatial datasets in <strong>GeoParquet 2.0</strong>, free to use and <st
     <h4><a href="https://parquetry.geomermaids.com/clc/">Corine Land Cover 2018</a></h4>
     <p>Europe's land cover: 2.4 million polygons with their CLC class, area and country, in one file for Europe and one per country (<code>country=FR/</code>). EPSG:3035, not lon/lat: reproject before joining with the others.</p>
     <p class="meta"><code>clc/</code> · 2.7 GB for Europe · 48 countries · Copernicus</p>
+  </div>
+  <div class="dataset">
+    <h4><a href="https://parquetry.geomermaids.com/nfhl/">FEMA National Flood Hazard Layer</a></h4>
+    <p>US flood zones from 2,502 county deliveries in the 50 states and Puerto Rico: 5.8 million zones with their FEMA zone, subtype and base flood elevation, cut into 95.6 million pieces of at most 100 vertices for fast point lookups. One file for the country and one per state (<code>state=LA/</code>). Not for official flood determinations.</p>
+    <p class="meta"><code>nfhl/</code> · 35.6 GB for the US · 51 states and territories · public domain</p>
   </div>
 </div>
 
