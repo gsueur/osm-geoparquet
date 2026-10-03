@@ -1,0 +1,190 @@
+# FEMA National Flood Hazard Layer, daily.
+#
+# FEMA republishes the NFHL one county-wide delivery at a time, about three
+# a day on a day that has any. The published layout is one file per
+# delivery (nfhl/latest/state=<XX>/<DFIRM_ID>.parquet) and an index
+# (nfhl/latest/counties.parquet), so a run only reads FEMA's list, runs the
+# pipeline on what changed since the index, and uploads those files, then
+# the index and the manifests that point at them. scripts/datasets/nfhl.py
+# documents the layout; the pipeline is gsueur/nfhl-geoparquet-workshop,
+# pinned below.
+#
+# The index is the memory: a run that fails leaves it unchanged, and the
+# next run picks up what this one missed. The whole country is built once,
+# locally (nfhl.py bootstrap).
+#
+# The first run of a month also freezes latest/ under nfhl/<YYYY-MM-DD>/,
+# copied server side, and prunes the oldest copy past three.
+
+name: dataset-nfhl
+
+on:
+  schedule:
+    # FEMA's portal stamps new ZIPs overnight US time. Off the hour on purpose.
+    - cron: "37 9 * * *"
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "Deliveries processed in this run; the rest waits for the next"
+        required: false
+        default: "200"
+      publish:
+        description: "Upload to R2 (off: build and keep the output as an artifact)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: nfhl
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/nfhl
+  PUBLIC: https://parquetry.geomermaids.com/nfhl
+  # The pipeline (catalog reader, ingest, normalize, subdivide).
+  WORKSHOP_REPO: gsueur/nfhl-geoparquet-workshop
+  WORKSHOP_REF: 5f25060f916c724cccfaf9557d72468995e2f5e7
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files in latest/ are replaced in place: a short cache, so a reader never
+  # mixes a cached footer with new bytes for long.
+  CACHE: "Cache-Control: public, max-age=300"
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      summary: ${{ steps.update.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.WORKSHOP_REPO }}
+          ref: ${{ env.WORKSHOP_REF }}
+          path: workshop
+
+      - name: Work dir on the runner's big scratch disk
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Tools
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: |
+          uv sync --project workshop
+          uv sync --project scripts
+
+      - name: Update from FEMA's list
+        id: update
+        run: |
+          uv run --project workshop --with pycountry python scripts/datasets/nfhl.py update \
+            --out-dir "$WORK/out" --work-dir "$WORK/work" --max "${{ inputs.max || 200 }}"
+          jq -r '"replaced \(.replaced|length), added \(.added|length), skipped \(.skipped|length), failed \(.failed|length), deferred \(.deferred)"' \
+            "$WORK/out/run.json" | tee /dev/stderr | sed 's/^/summary=/' >> "$GITHUB_OUTPUT"
+          find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: env.PUBLISH != 'true'
+        with:
+          name: nfhl
+          path: ${{ env.WORK }}/out
+          retention-days: 3
+
+      # Order matters: the delivery files, then the index and manifests that
+      # name them, then the repository files. A reader never finds a path
+      # that is not there yet. copy, never sync: out/ holds only what changed.
+      - name: Publish
+        if: env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out/latest" "$REMOTE/latest" --include "state=*/*.parquet" \
+            --header-upload "$CACHE" --transfers 8 --stats-one-line
+          rclone copy "$out/latest" "$REMOTE/latest" --exclude "state=*/*.parquet" --ignore-times \
+            --header-upload "$CACHE" --transfers 16 --stats-one-line
+          snap=$(cat "$out/snapshot_new.txt")
+          if [ -n "$snap" ]; then
+            echo "freezing latest/ as $snap"
+            rclone copy "$REMOTE/latest" "$REMOTE/$snap" --transfers 32 --checkers 32 --stats-one-line
+          fi
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --ignore-times --header-upload "$CACHE"
+          while read -r old; do
+            [ -n "$old" ] || continue
+            case "$old" in
+              20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]/) echo "pruning $old"; rclone purge "$REMOTE/$old" ;;
+              *) echo "not a snapshot path: '$old', left alone"; exit 1 ;;
+            esac
+          done < "$out/snapshot_prune.txt"
+
+      # After the data, so the catalog never links a file that is not there.
+      # Rendered from the files just published: counts and the index checksum
+      # match them.
+      - name: Portolan catalog, published
+        if: env.PUBLISH == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/nfhl_catalog.py publish \
+            --out-dir "$WORK/out" --remote "$REMOTE"
+
+      - name: Check what is live
+        if: env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          one=$(jq -r '.states | keys[0]' "$WORK/out/latest/_manifest.json")
+          file=$(jq -r '.files[0].file' "$WORK/out/latest/state=$one/_manifest.json")
+          for f in index.json snapshots.json latest/_manifest.json latest/counties.parquet \
+                   latest/changes.json latest/skipped.json latest/ATTRIBUTION.txt \
+                   "latest/state=$one/_manifest.json" "latest/state=$one/$file" \
+                   catalog/catalog.json catalog/flood-hazard-areas/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          exit $fail
+
+      # Last, so a delivery that failed does not hold back the others: they
+      # are published, the failed one stays as it was and is tried again
+      # tomorrow, and the run goes red.
+      - name: Deliveries that failed
+        run: |
+          jq -e '.failed | length == 0' "$WORK/out/run.json" >/dev/null && exit 0
+          jq -r '.failed[] | "\(.state) \(.county) \(.dfirm_id) \(.zip_name): \(.error)"' "$WORK/out/run.json"
+          exit 1
+
+  notify:
+    needs: [update]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RESULT: ${{ needs.update.result }}
+          SUMMARY: ${{ needs.update.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
+          # A quiet day is not news: only failures, and days that changed something.
+          if [[ "$RESULT" == "success" ]]; then
+            [[ "$SUMMARY" == "replaced 0, added 0, skipped 0, failed 0, deferred 0" ]] && exit 0
+            title="NFHL OK"; tags="white_check_mark"; prio="low"
+          else
+            title="NFHL FAILED"; tags="warning"; prio="high"
+          fi
+          curl -fsS --max-time 10 -H "Title: $title" -H "Tags: $tags" \
+            -H "Priority: $prio" -H "Click: $RUN_URL" -d "${SUMMARY:-no summary}" \
+            "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || echo "ntfy POST failed"

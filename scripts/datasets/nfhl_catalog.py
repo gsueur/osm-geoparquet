@@ -2,20 +2,19 @@
 """
 Render, validate and publish the Portolan catalog for the FEMA NFHL.
 
-One STAC Collection, the flood hazard areas, published in two layouts that
-the collection describes both: the United States file as the `data` asset,
-and the per-state files under state=<XX>/ through the partition extension
-(`partition:glob`) and one `data-<xx>` asset each. A snapshot is a dated
-folder that never changes, so every asset carries a checksum. Row counts,
-sizes and checksums come from the _manifest.json files nfhl.py writes;
-column types and the extent are read from the Parquet footer, which is a
-range request when the source is a URL. The prose lives here. Spec:
-portolan-spec v0.2.0. Validator: rashid, pinned in pyproject.toml, shared
-with the other catalogs (scripts/catalog.py), as are the STAC constants,
-the rashid wrapper and the uploader.
+One STAC Collection, the flood hazard areas: one file per FEMA county-wide
+delivery under latest/state=<XX>/<DFIRM_ID>.parquet, described through the
+partition extension (`partition:glob`), and the index of those files,
+latest/counties.parquet, as the `index` asset. latest/ is updated in place
+every day by nfhl.py, so the catalog is rendered again after each update:
+counts, sizes and the index checksum come from the manifests and the index
+just published, column types from one delivery's footer (a range request
+when the source is a URL). The prose lives here. Spec: portolan-spec
+v0.2.0. Validator: rashid, pinned in pyproject.toml, shared with the other
+catalogs (scripts/catalog.py), as are the STAC constants, the rashid wrapper
+and the uploader.
 
-The catalog is published beside the data, at /nfhl/catalog/catalog.json,
-and describes the snapshot snapshots.json names as latest.
+The catalog is published beside the data, at /nfhl/catalog/catalog.json.
 
 Usage:
   # render from a local nfhl.py output dir (footers read locally)
@@ -42,7 +41,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets.nfhl import ROW_GROUP_ROWS, STEM
+from datasets.nfhl import INDEX, LATEST, ROW_GROUP_ROWS, STEM
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -134,7 +133,7 @@ COLUMN_DOCS = {
     "county": "County (parish, borough...) of the delivery, title case, without the "
               "COUNTY / PARISH suffix.",
     "dfirm_id": "FEMA DFIRM_ID of the delivery: the county FIPS code and C for "
-                "county-wide (22071C).",
+                "county-wide (22071C). Also the file name.",
     "fema_update_date": "Date of the county delivery on the FEMA portal, from its "
                         "file name. Counties are updated independently.",
     "source_feature_id": "FEMA's FLD_AR_ID of the zone the piece comes from. Not "
@@ -173,13 +172,22 @@ def read_json(out_dir: Path | None, rel: str) -> dict:
         return json.load(r)
 
 
-def read_inputs(out_dir: Path | None) -> tuple[str, dict, dict[str, dict]]:
-    """(snapshot, national manifest, state manifests by code)."""
-    snapshot = read_json(out_dir, "snapshots.json")["latest"].strip("/")
-    manifest = read_json(out_dir, f"{snapshot}/_manifest.json")
-    states = {code: read_json(out_dir, f"{snapshot}/{PARTITION_KEY}={code}/_manifest.json")
-              for code in manifest["states"]}
-    return snapshot, manifest, states
+def read_inputs(out_dir: Path | None) -> tuple[dict, dict]:
+    """(national manifest, one state's manifest: its first file gives the schema)."""
+    manifest = read_json(out_dir, f"{LATEST}/_manifest.json")
+    first = next(iter(manifest["states"]))
+    return manifest, read_json(out_dir, f"{LATEST}/{PARTITION_KEY}={first}/_manifest.json")
+
+
+def index_facts(out_dir: Path | None) -> tuple[int, str]:
+    """(size, multihash) of counties.parquet, read whole: it is a few hundred KB."""
+    if out_dir is not None:
+        path = out_dir / LATEST / INDEX
+        return path.stat().st_size, multihash(path)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / INDEX
+        urllib.request.urlretrieve(f"{PUBLIC_DATA}/{LATEST}/{INDEX}", path)
+        return path.stat().st_size, multihash(path)
 
 
 def footer(con, source: str) -> tuple[list[tuple[str, str]], dict]:
@@ -206,38 +214,18 @@ def connect(remote: bool):
 
 # ---------- STAC ----------
 
-def state_assets(snapshot: str, states: dict[str, dict]) -> dict:
-    """One asset per state file, keyed data-<xx>, checksummed."""
-    assets = {}
-    for code, m in states.items():
-        e = m["files"][0]
-        path = f"{DATASET_PREFIX}/{snapshot}/{PARTITION_KEY}={code}/{STEM}.parquet"
-        assets[f"data-{code.lower()}"] = {
-            "href": f"{PUBLIC_BASE}/{path}",
-            "type": PARQUET_TYPE,
-            "title": f"{m['state_name']} ({code})",
-            "description": f"{e['features']:,} pieces, {len(m['counties'])} counties",
-            "roles": ["data"],
-            "file:size": e["bytes"],
-            "file:checksum": "1220" + e["sha256"],
-            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
-                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
-        }
-    return assets
+GLOB = f"s3://{BUCKET}/{DATASET_PREFIX}/{LATEST}/{PARTITION_KEY}=*/*.parquet"
 
 
-def build_collection(snapshot: str, manifest: dict, states: dict[str, dict],
-                     columns: list[tuple[str, str]], geo: dict, updated: str) -> dict:
-    entry = manifest["files"][0]
-    glob = f"s3://{BUCKET}/{DATASET_PREFIX}/{snapshot}/{PARTITION_KEY}=*/{STEM}.parquet"
+def build_collection(manifest: dict, columns: list[tuple[str, str]], geo: dict,
+                     index: tuple[int, str], updated: str) -> dict:
     x0, y0, x1, y1 = geo["columns"]["geometry"]["bbox"]
-    bbox = [max(-180.0, round(x0, 6)), max(-90.0, round(y0, 6)),
-            min(180.0, round(x1, 6)), min(90.0, round(y1, 6))]
     first, _ = manifest["fema_update_dates"]
-    path = f"{DATASET_PREFIX}/{snapshot}/{entry['file']}"
+    day = manifest["updated"]
     undocumented = [c for c, _ in columns if c not in COLUMN_DOCS]
     if undocumented:
         sys.exit(f"no column doc for {undocumented}")
+    index_path = f"{DATASET_PREFIX}/{LATEST}/{INDEX}"
     return {
         "type": "Collection",
         "stac_version": "1.1.0",
@@ -246,24 +234,25 @@ def build_collection(snapshot: str, manifest: dict, states: dict[str, dict],
         "id": COLLECTION_ID,
         "title": TITLE,
         "description": (
-            f"{ABOUT} Snapshot {snapshot}: {manifest['zones']:,} zones in "
-            f"{manifest['total_features']:,} pieces from {manifest['county_deliveries']:,} "
-            f"county deliveries. Published twice from the same rows: one United States "
-            f"GeoParquet 2.0 file ({entry['bytes'] / 1e9:,.1f} GB, the data asset), and "
-            f"one file per state under {PARTITION_KEY}=<XX>/ ({len(states)} files, the "
-            f"data-<xx> assets and the partition glob {glob}). Both carry a bbox covering "
-            f"and read in place over HTTPS or through the anonymous S3 endpoint "
-            f"{S3_ENDPOINT}. Public domain, FEMA. {NOT_OFFICIAL}"
+            f"{ABOUT} {manifest['zones']:,} zones in {manifest['total_features']:,} pieces "
+            f"from {manifest['county_deliveries']:,} county deliveries, checked against "
+            f"FEMA's list every day (last: {day}). One GeoParquet 2.0 file per delivery, "
+            f"{PARTITION_KEY}=<XX>/<DFIRM_ID>.parquet, so a delivery FEMA republishes "
+            f"replaces one file; {INDEX} (the index asset) gives each file's bbox, date, "
+            f"rows and checksum, and the partition glob {GLOB} reads them all. Every file "
+            f"carries a bbox covering and reads in place over HTTPS or through the "
+            f"anonymous S3 endpoint {S3_ENDPOINT}. Public domain, FEMA. {NOT_OFFICIAL}"
         ),
         "keywords": ["NFHL", "FEMA", "flood", "flood zones", "FIRM", "flood hazard",
                      "GeoParquet", "United States"],
         "license": LICENSE,
-        "version": snapshot,
+        "version": day,
         "updated": updated,
         "providers": PROVIDERS,
         "extent": {
-            "spatial": {"bbox": [bbox]},
-            "temporal": {"interval": [[f"{first}T00:00:00Z", f"{snapshot}T23:59:59Z"]]},
+            "spatial": {"bbox": [[max(-180.0, round(x0, 6)), max(-90.0, round(y0, 6)),
+                                  min(180.0, round(x1, 6)), min(90.0, round(y1, 6))]]},
+            "temporal": {"interval": [[f"{first}T00:00:00Z", f"{day}T23:59:59Z"]]},
         },
         "partition:scheme": "hive",
         "partition:strategy": "attribute",
@@ -271,30 +260,32 @@ def build_collection(snapshot: str, manifest: dict, states: dict[str, dict],
             {"name": PARTITION_KEY, "type": "string",
              "description": "US postal code of the state or territory: the 50 states "
                             "and PR where FEMA has county-wide deliveries. The same "
-                            "value as the state column in the files."},
+                            "value as the state column in the files. Inside a state, "
+                            "one file per delivery, named by its dfirm_id."},
         ],
-        "partition:file_count": len(states),
-        "partition:glob": glob,
+        "partition:file_count": manifest["county_deliveries"],
+        "partition:glob": GLOB,
         "table:row_count": manifest["total_features"],
         "table:primary_geometry": "geometry",
         "table:columns": [
             {"name": n, "type": t, "description": COLUMN_DOCS[n]} for n, t in columns
         ],
         "assets": {
-            "data": {
-                "href": f"{PUBLIC_BASE}/{path}",
+            "index": {
+                "href": f"{PUBLIC_BASE}/{index_path}",
                 "type": PARQUET_TYPE,
-                "title": f"{TITLE}, United States in one file",
-                "description": f"{entry['features']:,} pieces in {entry['row_groups']:,} "
-                               f"row groups, the largest "
-                               f"{entry['largest_row_group_bytes'] / 1e6:,.0f} MB.",
-                "roles": ["data"],
-                "file:size": entry["bytes"],
-                "file:checksum": "1220" + entry["sha256"],
-                "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                "title": "Index of the delivery files",
+                "description": (
+                    f"{manifest['county_deliveries']:,} rows, one per file: state, county, "
+                    f"dfirm_id, fema_update_date, zip_name, path (relative to {LATEST}/), "
+                    f"features, zones, bytes, sha256, the file's bbox as geometry and "
+                    f"bbox columns. Filter it, then read the files it names."),
+                "roles": ["metadata"],
+                "file:size": index[0],
+                "file:checksum": index[1],
+                "alternate": {"s3": {"href": f"s3://{BUCKET}/{index_path}",
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
-            **state_assets(snapshot, states),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -311,16 +302,18 @@ def build_collection(snapshot: str, manifest: dict, states: dict[str, dict],
             md_link("agents", "./AGENTS.md", f"{TITLE}: agent guide"),
             LICENSE_LINK,
             VIA_LINK,
-            {"rel": "related", "href": f"{PUBLIC_DATA}/{snapshot}/ATTRIBUTION.txt",
+            {"rel": "related", "href": f"{PUBLIC_DATA}/{LATEST}/ATTRIBUTION.txt",
              "type": "text/plain", "title": "Attribution, what was changed, and the "
                                            "not-for-official-use notice"},
-            {"rel": "alternate", "href": f"{PUBLIC_DATA}/{snapshot}/", "type": "text/html",
-             "title": f"Browse the {snapshot} files"},
+            {"rel": "related", "href": f"{PUBLIC_DATA}/{LATEST}/changes.json",
+             "type": "application/json", "title": "Deliveries replaced, added or skipped, by day"},
+            {"rel": "alternate", "href": f"{PUBLIC_DATA}/{LATEST}/", "type": "text/html",
+             "title": "Browse the files"},
         ],
     }
 
 
-def build_root(collection: dict, snapshot: str, updated: str) -> dict:
+def build_root(collection: dict, day: str, updated: str) -> dict:
     return {
         "type": "Catalog",
         "stac_version": "1.1.0",
@@ -330,11 +323,11 @@ def build_root(collection: dict, snapshot: str, updated: str) -> dict:
         "description": (
             f"The flood zones of FEMA's National Flood Hazard Layer for the United "
             f"States, assembled from the county-by-county shapefile deliveries into "
-            f"GeoParquet 2.0 with a bbox covering: one file for the country and one "
-            f"per state. Snapshot {snapshot}; a snapshot is a dated folder whose files "
-            f"never change. Public domain, FEMA. {NOT_OFFICIAL}"
+            f"GeoParquet 2.0 with a bbox covering, one file per delivery, checked against "
+            f"FEMA's list every day (last: {day}): a delivery FEMA republishes replaces "
+            f"its file. Public domain, FEMA. {NOT_OFFICIAL}"
         ),
-        "version": snapshot,
+        "version": day,
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
@@ -346,7 +339,7 @@ def build_root(collection: dict, snapshot: str, updated: str) -> dict:
             {"rel": "icon", "href": "./logo.png", "type": "image/png", "title": "Geomermaids"},
             LICENSE_LINK,
             VIA_LINK,
-            {"rel": "related", "href": f"{PUBLIC_DATA}/{snapshot}/ATTRIBUTION.txt",
+            {"rel": "related", "href": f"{PUBLIC_DATA}/{LATEST}/ATTRIBUTION.txt",
              "type": "text/plain", "title": "Attribution and what was changed"},
             {"rel": "related", "href": PIPELINE_URL, "type": "text/html",
              "title": "The pipeline that assembles the county deliveries"},
@@ -362,32 +355,38 @@ def build_root(collection: dict, snapshot: str, updated: str) -> dict:
 
 # ---------- markdown ----------
 
-def access_section(snapshot: str, entry: dict) -> str:
+def access_section() -> str:
     return f"""\
-Two layouts of the same rows, both immutable and readable in place with
-HTTP range requests. One state, a smaller file:
+Every file reads in place with HTTP range requests. A point: find the
+delivery in the index, then read its file.
 
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
+SELECT path FROM read_parquet('{PUBLIC_DATA}/{LATEST}/{INDEX}')
+WHERE bbox.xmin <= -90.07 AND bbox.xmax >= -90.07
+  AND bbox.ymin <= 29.95 AND bbox.ymax >= 29.95;
+-- state=LA/22071C.parquet
 SELECT flood_zone, zone_subtype, risk
-FROM read_parquet('{PUBLIC_DATA}/{snapshot}/{PARTITION_KEY}=LA/{STEM}.parquet')
+FROM read_parquet('{PUBLIC_DATA}/{LATEST}/{PARTITION_KEY}=LA/22071C.parquet')
 WHERE bbox.xmin <= -90.07 AND bbox.xmax >= -90.07
   AND bbox.ymin <= 29.95 AND bbox.ymax >= 29.95
   AND ST_Contains(geometry, ST_Point(-90.07, 29.95));
 ```
 
-The United States in one file, `{PUBLIC_DATA}/{snapshot}/{entry['file']}`,
-{entry['bytes'] / 1e9:,.1f} GB in {entry['row_groups']:,} row groups of {ROW_GROUP_ROWS:,} pieces:
-the same query on it reads the footer and one row group. Every state at once,
-through the anonymous S3 endpoint `{S3_ENDPOINT}` (path-style, empty credentials):
+A file is sorted along a Hilbert curve in row groups of {ROW_GROUP_ROWS:,} pieces,
+so the second query reads the footer and one row group. A state or the
+country at once, through the anonymous S3 endpoint `{S3_ENDPOINT}`
+(path-style, empty credentials), where a glob lists the files:
 
 ```sql
 SET s3_endpoint='{S3_ENDPOINT}'; SET s3_url_style='path';
 SET s3_access_key_id=''; SET s3_secret_access_key='';
 SELECT state, risk, count(*) FILTER (WHERE piece_id = 0) AS zones
-FROM read_parquet('s3://{BUCKET}/{DATASET_PREFIX}/{snapshot}/{PARTITION_KEY}=*/{STEM}.parquet')
+FROM read_parquet('s3://{BUCKET}/{DATASET_PREFIX}/{LATEST}/{PARTITION_KEY}=*/*.parquet')
 GROUP BY ALL ORDER BY ALL;
-```"""
+```
+
+Over HTTPS, where there is no listing, take the paths from the index."""
 
 
 def pieces_md(manifest: dict) -> str:
@@ -395,8 +394,8 @@ def pieces_md(manifest: dict) -> str:
 FEMA zones reach hundreds of thousands of vertices. Each was cut into pieces
 of at most 100 vertices (DuckDB `ST_Subdivide`), so {manifest['zones']:,} zones make
 {manifest['total_features']:,} rows. Count zones with `piece_id = 0`. Dissolve on
-(`state`, `county`, `source_feature_id`) to get a zone's outline back, with one
-caveat: FEMA does not keep FLD_AR_ID unique inside every county, and
+(`dfirm_id`, `source_feature_id`) to get a zone's outline back, with one
+caveat: FEMA does not keep FLD_AR_ID unique inside every delivery, and
 {manifest['zones_sharing_a_source_feature_id']:,} zones share theirs with another zone,
 so a dissolve on that key merges them."""
 
@@ -406,17 +405,19 @@ def provenance(manifest: dict) -> str:
     return f"""\
 FEMA publishes the NFHL one county at a time, as zipped shapefiles, on the
 [Flood Map Service Center]({FEMA_NFHL_URL}). The
-[pipeline]({PIPELINE_URL}) reads the portal's list of
-county-wide deliveries on the snapshot day, reads S_FLD_HAZ_AR from each ZIP
-in memory, maps FEMA's fields to the columns documented here, makes invalid
-geometries valid, and cuts the zones into pieces. Deliveries date from {first}
-to {last}; each row carries its own in `fema_update_date`. Counties without a
-digital FIRM are absent, and so are community-level deliveries. The
-[packaging script]({REPO_URL}/blob/main/scripts/datasets/nfhl.py) sorts the
-pieces by state then along a Hilbert curve, writes the bbox covering and the
-state files, and checks rows and geometry hashes against its input. The
-manifests record each file's size and sha256, which this catalog publishes as
-`file:size` and `file:checksum`."""
+[pipeline]({PIPELINE_URL}) reads S_FLD_HAZ_AR from each
+county-wide delivery's ZIP in memory, maps FEMA's fields to the columns
+documented here, makes invalid geometries valid, and cuts the zones into
+pieces. Every day the [packaging script]({REPO_URL}/blob/main/scripts/datasets/nfhl.py)
+reads the portal's list of deliveries, runs the pipeline on those FEMA
+republished since the last run, sorts each one along a Hilbert curve with a
+bbox covering, checks rows and geometry hashes against the pipeline's
+output, and replaces its file and its row in the index; `changes.json` lists
+what each day replaced. Deliveries date from {first} to {last}; each row
+carries its own in `fema_update_date`. Counties without a digital FIRM are
+absent, and so are community-level deliveries; `skipped.json` names the
+listed deliveries that hold no flood hazard layer. The index records each
+file's size and sha256."""
 
 
 LICENSE_MD = f"""\
@@ -427,11 +428,9 @@ States (17 U.S.C. 105): no restriction on use or redistribution. Credit
 {NOT_OFFICIAL}"""
 
 
-def collection_readme(col: dict, snapshot: str, manifest: dict, states: dict) -> str:
-    entry = manifest["files"][0]
+def collection_readme(col: dict, manifest: dict) -> str:
     schema = "\n".join(
         f"| `{c['name']}` | `{c['type']}` | {c['description']} |" for c in col["table:columns"])
-    state_bytes = sum(m["files"][0]["bytes"] for m in states.values())
     return f"""\
 # {col['title']}
 
@@ -440,16 +439,15 @@ def collection_readme(col: dict, snapshot: str, manifest: dict, states: dict) ->
 | | |
 |---|---|
 | Rows | {manifest['total_features']:,} pieces of {manifest['zones']:,} zones |
-| Counties | {manifest['county_deliveries']:,} county-wide deliveries in {len(states)} states and territories |
-| United States file | `{entry['file']}`, {entry['bytes'] / 1e9:,.1f} GB, {entry['row_groups']:,} row groups, sha256 `{entry['sha256'][:12]}...` |
-| Per-state files | {len(states)} under `{PARTITION_KEY}=<XX>/`, {state_bytes / 1e9:,.1f} GB in all |
+| Files | {manifest['county_deliveries']:,} county-wide deliveries in {len(manifest['states'])} states and territories, {manifest['bytes'] / 1e9:,.1f} GB, `{PARTITION_KEY}=<XX>/<DFIRM_ID>.parquet` |
+| Index | `{LATEST}/{INDEX}`: one row per file, with its bbox, date, rows and sha256 |
 | Extent | {shared.fmt_bbox(col['extent']['spatial']['bbox'][0])} (lon/lat, NAD83) |
-| Snapshot | {snapshot}, deliveries from {manifest['fema_update_dates'][0]} to {manifest['fema_update_dates'][1]} |
+| Updates | daily, last {manifest['updated']}; deliveries from {manifest['fema_update_dates'][0]} to {manifest['fema_update_dates'][1]} |
 | License | Public domain (US federal work), FEMA |
 
 ## Access
 
-{access_section(snapshot, entry)}
+{access_section()}
 
 ## Pieces, not zones
 
@@ -471,26 +469,28 @@ def collection_readme(col: dict, snapshot: str, manifest: dict, states: dict) ->
 """
 
 
-def collection_agents(col: dict, snapshot: str, manifest: dict) -> str:
-    entry = manifest["files"][0]
+def collection_agents(col: dict, manifest: dict) -> str:
     return f"""\
 # {col['title']}: agent guide
 
 Each row is one piece (at most 100 vertices) of a FEMA flood zone, Polygon,
-NAD83 lon/lat (EPSG:4269). Snapshot {snapshot}.
+NAD83 lon/lat (EPSG:4269). One file per FEMA county-wide delivery, updated
+daily (last: {manifest['updated']}).
 
 ## Access
 
-{access_section(snapshot, entry)}
+{access_section()}
 
 ## Query tips
 
-- Filter on `bbox` before any geometry function: it is the covering, and the
-  files are sorted by state then along a Hilbert curve, so a bbox filter
+- Start from `{INDEX}`: filter it on `bbox` or `state`, then read only the
+  files it names. Over HTTPS there is no listing; through the S3 endpoint
+  the partition glob reads them all.
+- Inside a file, filter on `bbox` before any geometry function: it is the
+  covering, and the file is sorted along a Hilbert curve, so a bbox filter
   reads only the row groups it touches.
-- One state or a small window: the per-state file. The whole country: the
-  United States file ({entry['bytes'] / 1e9:,.1f} GB), never downloaded, always
-  read in place.
+- A file can be replaced between two reads when FEMA republishes its
+  delivery: compare `sha256` in the index when that matters.
 - A point can fall in two pieces only on a shared edge; zones themselves can
   overlap where FEMA mapped them so (dual zones).
 - Count zones with `count(*) FILTER (WHERE piece_id = 0)`, not `count(*)`.
@@ -501,32 +501,32 @@ NAD83 lon/lat (EPSG:4269). Snapshot {snapshot}.
 """
 
 
-def root_readme(root: dict, col: dict, snapshot: str, manifest: dict, states: dict) -> str:
-    entry = manifest["files"][0]
+def root_readme(root: dict, col: dict, manifest: dict) -> str:
     return f"""\
 # {root['title']}
 
 {root['description']}
 
-| Collection | United States file | Rows | Size | Per-state files |
+| Collection | Files | Rows | Size | Index |
 |---|---|---|---|---|
-| [{col['title']}](./{col['id']}/README.md) | `{entry['file']}` | {entry['features']:,} | {entry['bytes'] / 1e9:,.1f} GB | {len(states)} |
+| [{col['title']}](./{col['id']}/README.md) | {manifest['county_deliveries']:,} | {manifest['total_features']:,} | {manifest['bytes'] / 1e9:,.1f} GB | `{LATEST}/{INDEX}` |
 
 ## Versions
 
-A snapshot is the NFHL as FEMA listed it on one day, under
-`{PUBLIC_DATA}/<YYYY-MM-DD>/`, and never changes afterwards.
-`{PUBLIC_DATA}/snapshots.json` names the latest; this catalog describes it
-({snapshot}).
+`{PUBLIC_DATA}/{LATEST}/` is checked against FEMA's list every day and a
+delivery FEMA republished replaces its file (`changes.json` lists them by
+day). The first run of each month also freezes a copy under
+`{PUBLIC_DATA}/<YYYY-MM-DD>/`; `{PUBLIC_DATA}/snapshots.json` lists the
+copies kept. This catalog describes `{LATEST}/`.
 
 ## Access
 
-`{PUBLIC_DATA}/{snapshot}/{STEM}.parquet` for the country, and
-`{PUBLIC_DATA}/{snapshot}/{PARTITION_KEY}=<XX>/{STEM}.parquet` per state. Both
-read in place with HTTP range requests, and the same paths exist under
-`s3://{BUCKET}/{DATASET_PREFIX}/{snapshot}/` on the anonymous S3 endpoint
-`{S3_ENDPOINT}`, where a glob over `{PARTITION_KEY}=*/` reads every state. The
-collection's README shows the queries.
+`{PUBLIC_DATA}/{LATEST}/{PARTITION_KEY}=<XX>/<DFIRM_ID>.parquet`, one file per
+delivery, read in place with HTTP range requests; `{LATEST}/{INDEX}` lists
+them with their bbox. The same paths exist under
+`s3://{BUCKET}/{DATASET_PREFIX}/{LATEST}/` on the anonymous S3 endpoint
+`{S3_ENDPOINT}`, where a glob reads every file. The collection's README
+shows the queries.
 
 ## Pieces, not zones
 
@@ -546,13 +546,14 @@ Geomermaids, {CONTACT_EMAIL}. Source and issues: {REPO_URL}.
 """
 
 
-def root_agents(col: dict, snapshot: str) -> str:
+def root_agents(col: dict, manifest: dict) -> str:
     return f"""\
 # {CATALOG_ID}: agent guide
 
 FEMA's National Flood Hazard Layer flood zones as GeoParquet 2.0, United
-States, snapshot {snapshot}: one file for the country, one per state under
-`{PARTITION_KEY}=<XX>/`. Immutable files.
+States: one file per FEMA county-wide delivery under
+`{LATEST}/{PARTITION_KEY}=<XX>/<DFIRM_ID>.parquet`, replaced when FEMA
+republishes it (checked daily, last {manifest['updated']}).
 
 ## Collections
 
@@ -560,13 +561,12 @@ States, snapshot {snapshot}: one file for the country, one per state under
 
 ## Access
 
-- One state: `{PUBLIC_DATA}/{snapshot}/{PARTITION_KEY}=<XX>/{STEM}.parquet` over
-  HTTPS, no credentials.
-- The country: `{PUBLIC_DATA}/{snapshot}/{STEM}.parquet`, read in place. Every
-  state at once: the collection's `partition:glob` through the S3 endpoint
-  `{S3_ENDPOINT}`, path-style, empty credentials.
-- The collection documents its columns in `table:columns` and carries
-  `file:size` and `file:checksum` on every data asset.
+- The index: `{PUBLIC_DATA}/{LATEST}/{INDEX}`, one row per file with its bbox,
+  date, rows and sha256. Filter it, then read the files it names, over HTTPS,
+  no credentials.
+- Every file at once: the collection's `partition:glob` through the S3
+  endpoint `{S3_ENDPOINT}`, path-style, empty credentials.
+- The collection documents its columns in `table:columns`.
 
 ## Conventions
 
@@ -582,31 +582,37 @@ States, snapshot {snapshot}: one file for the country, one per state under
 
 def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> dict:
     """Render the catalog tree into dest (replaced). Returns the national manifest."""
-    snapshot, manifest, states = read_inputs(out_dir)
+    manifest, state = read_inputs(out_dir)
     if not THUMB.is_file():
         sys.exit(f"missing thumbnail {THUMB}: run the thumbnails command")
-    entry = manifest["files"][0]
-    source = (str(out_dir / snapshot / entry["file"]) if out_dir is not None
-              else f"{PUBLIC_DATA}/{snapshot}/{entry['file']}")
-    con = connect(remote=out_dir is None)
+    rel = f"{LATEST}/{PARTITION_KEY}={state['state']}/{state['files'][0]['file']}"
+    # A daily output dir holds only the deliveries it replaced: the schema is
+    # then read from a published file.
+    local = out_dir is not None and (out_dir / rel).is_file()
+    source = str(out_dir / rel) if local else f"{PUBLIC_DATA}/{rel}"
+    con = connect(remote=not local)
     columns, geo = footer(con, source)
+    # The extent is the country's, not one delivery's: the index's own footer.
+    index_source = (str(out_dir / LATEST / INDEX) if out_dir is not None
+                    else f"{PUBLIC_DATA}/{LATEST}/{INDEX}")
+    _, index_geo = footer(con, index_source)
     updated = updated or now_rfc3339()
 
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    col = build_collection(snapshot, manifest, states, columns, geo, updated)
+    col = build_collection(manifest, columns, index_geo, index_facts(out_dir), updated)
     cdir = dest / col["id"]
     write_json(cdir / "collection.json", col)
     shutil.copyfile(THUMB, cdir / "thumbnail.png")
-    (cdir / "README.md").write_text(collection_readme(col, snapshot, manifest, states))
-    (cdir / "AGENTS.md").write_text(collection_agents(col, snapshot, manifest))
+    (cdir / "README.md").write_text(collection_readme(col, manifest))
+    (cdir / "AGENTS.md").write_text(collection_agents(col, manifest))
 
-    root = build_root(col, snapshot, updated)
+    root = build_root(col, manifest["updated"], updated)
     write_json(dest / "catalog.json", root)
     shutil.copyfile(LOGO, dest / "logo.png")
-    (dest / "README.md").write_text(root_readme(root, col, snapshot, manifest, states))
-    (dest / "AGENTS.md").write_text(root_agents(col, snapshot))
+    (dest / "README.md").write_text(root_readme(root, col, manifest))
+    (dest / "AGENTS.md").write_text(root_agents(col, manifest))
     return manifest
 
 
@@ -642,8 +648,7 @@ def thumbnails(out_dir: Path) -> None:
 
     from thumbnails import BACKGROUND, frame
 
-    snapshot, manifest, _ = read_inputs(out_dir)
-    src = out_dir / snapshot / manifest["files"][0]["file"]
+    src = out_dir / LATEST / f"{PARTITION_KEY}=*" / "*.parquet"
     con = connect(remote=False)
     x0, y0, x1, y1, aspect = frame(*CONUS)
     xy = con.execute(f"""
@@ -681,7 +686,7 @@ def main() -> None:
 
     def out_dir_arg(sp, required=False):
         sp.add_argument("--out-dir", type=Path, default=None, required=required,
-                        help="nfhl.py output dir, the one holding snapshots.json "
+                        help="nfhl.py output dir, the one holding latest/ "
                              "(default: read the published files)")
 
     b = sub.add_parser("build", help="render the catalog tree")
