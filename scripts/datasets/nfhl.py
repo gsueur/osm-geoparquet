@@ -263,6 +263,18 @@ def get_json(url: str, default):
         raise
 
 
+def exists(url: str) -> bool:
+    if not url.startswith(("http://", "https://")):
+        return Path(url).exists()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=60):
+            return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+
+
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n")
@@ -474,7 +486,10 @@ def update(args) -> None:
     rows = {r["dfirm_id"]: r for r in read_index(con, f"{args.public}/{LATEST}/{INDEX}")}
     changes = get_json(f"{args.public}/{LATEST}/changes.json", {"runs": []})
     skipped = get_json(f"{args.public}/{LATEST}/skipped.json", {})
-    published = get_json(f"{args.public}/snapshots.json", {}).get("snapshots", [])
+    # Only snapshots of this layout (they hold the index): the 2026-09-30
+    # national-file snapshot is not one and is neither listed nor pruned here.
+    published = [s for s in get_json(f"{args.public}/snapshots.json", {}).get("snapshots", [])
+                 if exists(f"{args.public}/{s['path']}{INDEX}")]
     print(f"  published: {len(rows):,} deliveries, {len(skipped)} skipped", flush=True)
 
     listed = fema.list_datasets()
