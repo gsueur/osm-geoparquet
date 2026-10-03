@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FEMA flood zones as GeoParquet · geomermaids</title>
+<meta name="description" content="FEMA's National Flood Hazard Layer as GeoParquet: one file per county delivery, checked against FEMA every day, read in place from a URL with DuckDB. Public domain, with a live map and a point lookup.">
+<link rel="canonical" href="https://nfhl.geomermaids.com/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#d2553a">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://nfhl.geomermaids.com/">
+<meta property="og:title" content="FEMA flood zones as GeoParquet">
+<meta property="og:description" content="FEMA's National Flood Hazard Layer, one GeoParquet file per county delivery, updated daily. Query it from a URL, no account, no download.">
+<meta property="og:image" content="https://nfhl.geomermaids.com/logo-384.png">
+<meta property="og:site_name" content="geomermaids">
+<meta name="twitter:card" content="summary">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --accent: #d2553a;
+  --accent-soft: #fae0d8;
+  --border: #e5e5e5;
+  --code-bg: #f6f6f4;
+  --code-fg: #1a1a1a;
+  --panel: rgba(255, 255, 255, .94);
+  /* Ordinal blue, validated on the light surface: recent deliveries darkest. */
+  --age-0: #0d366b; --age-1: #1c5cab; --age-2: #3987e5; --age-3: #86b6ef;
+  --none: #d6d5d0;
+  --z-100: #2a78d6; --z-500: #86b6ef; --z-d: #a9a8a2;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --accent: #f08a6e;
+    --accent-soft: #2e1f1a;
+    --border: #2e2e2e;
+    --code-bg: #0f0f0f;
+    --code-fg: #e8e8e8;
+    --panel: rgba(26, 26, 25, .94);
+    /* Same ramp, stepped for the dark surface: recent deliveries lightest. */
+    --age-0: #cde2fb; --age-1: #86b6ef; --age-2: #3987e5; --age-3: #184f95;
+    --none: #3a3a37;
+    --z-100: #3987e5; --z-500: #184f95; --z-d: #55544f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+body { font-family: var(--sans); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+main { max-width: 860px; margin: 0 auto; padding: 3rem 1rem 6rem; }
+@media (min-width: 600px) { main { padding-left: 1.5rem; padding-right: 1.5rem; } }
+.topnav { display: flex; justify-content: flex-end; gap: 1.2rem; margin-bottom: 1rem; font-size: .9rem; flex-wrap: wrap; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.hero-logo { width: 96px; height: 96px; display: block; margin: 0 0 1rem; border-radius: 8px; }
+h1 { font-size: 2.4rem; margin: 0; letter-spacing: -0.03em; line-height: 1.1; }
+h1 .brand { color: var(--accent); }
+.expansion { font-size: 1.1rem; color: var(--muted); margin: .3rem 0 1.2rem; }
+h2 { font-size: 1.35rem; margin: 3rem 0 .75rem; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 1.8rem 0 .4rem; color: var(--muted); font-weight: 600; }
+p { margin: .8rem 0; }
+.lead { font-size: 1.08rem; }
+a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+.stats { display: flex; flex-wrap: wrap; gap: 1.5rem 2.2rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 1rem 0; margin: 1.5rem 0 2rem; }
+.stat strong { display: block; font-family: var(--mono); font-size: 1.4rem; letter-spacing: -0.02em; }
+.stat span { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: .1em .3em; border-radius: 3px; }
+pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: 6px; overflow-x: auto; font-family: var(--mono); font-size: .85rem; line-height: 1.55; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: .5rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.date { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+ul, ol { padding-left: 1.3rem; }
+li { margin: .35rem 0; }
+.steps { counter-reset: step; list-style: none; padding: 0; display: grid; gap: .8rem; }
+.steps li { counter-increment: step; border: 1px solid var(--border); border-radius: 6px; padding: .8rem 1rem .8rem 3.2rem; position: relative; margin: 0; }
+.steps li::before { content: counter(step); position: absolute; left: 1rem; top: .8rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: .85rem; display: flex; align-items: center; justify-content: center; }
+.steps strong { display: block; }
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: .9rem 1.1rem; margin: 1rem 0 1.5rem; border-radius: 0 4px 4px 0; }
+.callout p { margin: .25rem 0; }
+.loading { color: var(--muted); font-style: italic; }
+.code-block { position: relative; }
+.code-block pre { padding-right: 4.5rem; }
+.copy-btn { position: absolute; top: .55rem; right: .55rem; background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: .25rem .6rem; font-size: .78rem; font-family: var(--sans); cursor: pointer; line-height: 1.3; }
+.copy-btn:hover, .copy-btn.copied { border-color: var(--accent); color: var(--accent); }
+.cta { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 2.5rem 0 1rem; }
+.cta h2 { margin-top: 0; color: var(--accent); }
+footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
+footer a { color: var(--muted); }
+@media (max-width: 600px) { h1 { font-size: 2rem; } }
+
+/* The map: wider than the text column. */
+.map-wrap { position: relative; width: min(1200px, calc(100vw - 2rem)); left: 50%; transform: translateX(-50%); margin: 1rem 0 .6rem; }
+#map { width: 100%; height: min(72vh, 680px); min-height: 420px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.places { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 0; font-size: .85rem; align-items: center; }
+.places span { color: var(--muted); margin-right: .2rem; }
+.places button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 999px; padding: .2rem .75rem; font: inherit; cursor: pointer; }
+.places button:hover { border-color: var(--accent); color: var(--accent); }
+.overlay { position: absolute; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; line-height: 1.45; backdrop-filter: blur(4px); }
+#legend { left: .6rem; bottom: .6rem; padding: .55rem .7rem; max-width: calc(100% - 1.2rem); }
+#legend .title { font-weight: 600; margin-bottom: .25rem; }
+#legend .row { display: flex; align-items: center; gap: .45rem; white-space: nowrap; }
+#legend .sw { width: .8rem; height: .8rem; border-radius: 2px; flex: none; }
+#legend .sw.ring { background: transparent !important; border: 2px solid var(--accent); }
+#legend .hint { color: var(--muted); margin-top: .3rem; white-space: normal; max-width: 15rem; }
+#status { right: .6rem; bottom: .6rem; padding: .3rem .6rem; color: var(--muted); max-width: 60%; }
+#status:empty { display: none; }
+#panel { top: .6rem; left: .6rem; width: min(330px, calc(100% - 1.2rem)); padding: .75rem .9rem .8rem; display: none; max-height: calc(100% - 7rem); overflow-y: auto; }
+#panel.open { display: block; }
+#panel .close { position: absolute; top: .3rem; right: .45rem; border: 0; background: none; color: var(--muted); font-size: 1.15rem; cursor: pointer; line-height: 1; padding: .2rem; }
+#panel h4 { margin: 0 1.2rem .1rem 0; font-size: 1rem; }
+#panel .sub { color: var(--muted); margin: 0 0 .5rem; }
+#panel .zone { font-family: var(--mono); font-size: 1.35rem; letter-spacing: -0.02em; margin: .2rem 0 0; }
+#panel .risk { margin: 0 0 .5rem; font-weight: 600; }
+#panel dl { display: grid; grid-template-columns: auto 1fr; gap: .1rem .7rem; margin: .4rem 0; }
+#panel dt { color: var(--muted); }
+#panel dd { margin: 0; font-family: var(--mono); font-size: .8rem; overflow-wrap: anywhere; }
+#panel .warn { color: var(--muted); font-size: .76rem; border-top: 1px solid var(--border); padding-top: .45rem; margin: .5rem 0 0; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: .8rem; padding: .35rem .55rem; border-radius: 4px; opacity: 0; transition: opacity .1s; z-index: 5; max-width: 280px; }
+.maplibregl-ctrl-attrib { font-size: 11px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="topnav">
+  <a href="#map-section">Map</a>
+  <a href="#updates">Daily updates</a>
+  <a href="#data">Get the data</a>
+  <a href="https://www.geomermaids.com" rel="noopener">geomermaids.com&nbsp;↗</a>
+</nav>
+
+<picture>
+  <source type="image/webp" srcset="/logo-96.webp 1x, /logo-192.webp 2x, /logo-384.webp 4x">
+  <img class="hero-logo" src="/logo-384.png" alt="geomermaids" width="96" height="96">
+</picture>
+<h1><span class="brand">FEMA flood zones</span>, as GeoParquet</h1>
+<p class="expansion">The National Flood Hazard Layer, one file per county, kept current every day</p>
+
+<p class="lead">FEMA publishes its flood maps one county at a time, as zipped shapefiles, and replaces a county whenever its map changes. Here they are as <strong>GeoParquet you query from a URL</strong>: one file per county delivery, checked against FEMA's list every morning, and replaced the day FEMA republishes it.</p>
+<p>Flood zones are cut into pieces of at most 100 vertices, so finding the zone under a point reads one small row group, not a parish-sized polygon. Public domain, like FEMA's own data.</p>
+
+<div class="stats">
+  <div class="stat"><strong data-stat="deliveries">…</strong><span>county files</span></div>
+  <div class="stat"><strong data-stat="zones">…</strong><span>flood zones</span></div>
+  <div class="stat"><strong data-stat="recent">…</strong><span>replaced in 30 days</span></div>
+  <div class="stat"><strong data-stat="checked">…</strong><span>last checked</span></div>
+</div>
+
+<div class="callout">
+<p><strong>Not for official use.</strong> This is a repackaging, not the effective Flood Insurance Rate Map. Do not use it for flood zone determinations, insurance rating, regulatory or legal purposes: use FEMA's <a href="https://msc.fema.gov/portal/home">Flood Map Service Center</a> for those. FEMA has not reviewed or endorsed it.</p>
+</div>
+
+<h2 id="map-section">On the map</h2>
+<p>Each county is coloured by the date of the FEMA delivery it comes from. Zoom in past a city and the flood zones themselves appear, read straight from the county files by DuckDB running in your browser. Click anywhere for the zone under that point.</p>
+<div class="map-wrap">
+  <div id="map" role="region" aria-label="Map of FEMA flood map deliveries by county, and flood zones when zoomed in"></div>
+  <div class="overlay" id="legend" aria-live="polite"></div>
+  <div class="overlay" id="panel" aria-live="polite"></div>
+  <div class="overlay" id="status" aria-live="polite"></div>
+  <div class="tip" id="tip" role="tooltip"></div>
+</div>
+<div class="places">
+  <span>Try:</span>
+  <button type="button" data-place="-90.072,29.951,13.5">New Orleans</button>
+  <button type="button" data-place="-80.134,25.790,14">Miami Beach</button>
+  <button type="button" data-place="-95.4605,29.6870,14">Houston, Meyerland</button>
+  <button type="button" data-place="-121.505,38.567,13">Sacramento</button>
+  <button type="button" data-place="-74.0110,40.6770,14.5">Brooklyn, Red Hook</button>
+</div>
+
+<h2 id="updates">Updated every day</h2>
+<p>Every morning a job reads FEMA's list of county-wide deliveries, compares it with the published index, and runs the pipeline only on the counties FEMA republished: download, read the flood layer, normalize, cut into pieces, check rows and geometries, replace the file. A quiet day changes nothing. The last replacements, from <a href="https://parquetry.geomermaids.com/nfhl/latest/changes.json"><code>changes.json</code></a>:</p>
+<div class="table-wrap">
+<table id="changes">
+  <thead><tr><th>Checked</th><th>County</th><th>Delivery</th><th>FEMA date</th><th>Was</th></tr></thead>
+  <tbody><tr><td colspan="5" class="loading">Loading…</td></tr></tbody>
+</table>
+</div>
+<p>FEMA often republishes a county without changing its zones: the date moves, the pieces stay the same. Deliveries that carry no flood layer at all are listed in <a href="https://parquetry.geomermaids.com/nfhl/latest/skipped.json"><code>skipped.json</code></a> and tried again when FEMA replaces them. The first run of each month also freezes a copy of the whole dataset, and the last three are kept.</p>
+
+<h2 id="how">How it is built</h2>
+<ol class="steps">
+  <li><strong>Read FEMA's list</strong>The Flood Map Service Center lists every county-wide NFHL delivery with its date in the file name (<code>22071C_20261001.zip</code>). If the list comes back much shorter than usual, the run stops: a truncated page is not a withdrawal.</li>
+  <li><strong>Read the flood layer, in memory</strong>Layer S_FLD_HAZ_AR is read from the ZIP without unpacking it, FEMA's fields mapped to plain columns, invalid geometries made valid, and three readings added: <code>risk</code>, <code>floodplain</code> and <code>subzone</code>.</li>
+  <li><strong>Cut into pieces</strong>Each zone becomes pieces of at most 100 vertices (<code>ST_Subdivide</code>). A row is a piece: <code>piece_id = 0</code> counts zones, and dissolving on (<code>dfirm_id</code>, <code>source_feature_id</code>) gives a zone's outline back.</li>
+  <li><strong>Sort, check, publish</strong>Each county file is sorted along a Hilbert curve with a bbox column declared as the GeoParquet covering, checked against the pipeline's output (same rows, same geometry hashes), uploaded, then the index and manifests that name it.</li>
+</ol>
+<p>The pipeline is public: <a href="https://github.com/gsueur/nfhl-geoparquet-workshop">nfhl-geoparquet-workshop</a>. So is the packaging and the daily job: <a href="https://github.com/gsueur/osm-geoparquet">osm-geoparquet</a>.</p>
+
+<h2 id="data">Get the data</h2>
+<pre><code>https://parquetry.geomermaids.com/nfhl/latest/counties.parquet            the index
+https://parquetry.geomermaids.com/nfhl/latest/state=&lt;XX&gt;/&lt;DFIRM_ID&gt;.parquet  one county
+s3://parquetry/nfhl/latest/state=*/*.parquet   (endpoint s3.geomermaids.com, anonymous)</code></pre>
+<p>The index has one row per county file: <code>state</code>, <code>county</code>, <code>dfirm_id</code>, <code>fema_update_date</code>, <code>path</code>, rows, size, <code>sha256</code>, and the file's bbox. Filter it, then read only the files it names.</p>
+
+<h3>The flood zone at a point</h3>
+<div class="code-block">
+<pre><code>INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
+SELECT path FROM read_parquet('https://parquetry.geomermaids.com/nfhl/latest/counties.parquet')
+WHERE bbox.xmin &lt;= -90.07 AND bbox.xmax &gt;= -90.07
+  AND bbox.ymin &lt;= 29.95 AND bbox.ymax &gt;= 29.95;
+-- state=LA/22071C.parquet, among others
+SELECT flood_zone, zone_subtype, risk, static_bfe, fema_update_date
+FROM read_parquet('https://parquetry.geomermaids.com/nfhl/latest/state=LA/22071C.parquet')
+WHERE bbox.xmin &lt;= -90.07 AND bbox.xmax &gt;= -90.07
+  AND bbox.ymin &lt;= 29.95 AND bbox.ymax &gt;= 29.95
+  AND ST_Contains(geometry, ST_Point(-90.07, 29.95));</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<h3>Zones by risk, every county at once</h3>
+<div class="code-block">
+<pre><code>SET s3_endpoint = 's3.geomermaids.com'; SET s3_url_style = 'path';
+SET s3_access_key_id = ''; SET s3_secret_access_key = '';
+SELECT state, risk, count(*) FILTER (WHERE piece_id = 0) AS zones
+FROM read_parquet('s3://parquetry/nfhl/latest/state=*/*.parquet')
+GROUP BY ALL ORDER BY ALL;</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<ul>
+  <li><strong>Browse the files:</strong> <a href="https://parquetry.geomermaids.com/nfhl/">parquetry.geomermaids.com/nfhl/</a></li>
+  <li><strong>Portolan catalog</strong> (STAC, column docs, agent guide): <a href="https://parquetry.geomermaids.com/nfhl/catalog/catalog.json">nfhl/catalog/</a></li>
+  <li><strong>On a map, on your desktop:</strong> <a href="https://www.geomermaids.com/geopq-workbench">GeoPQ Workbench</a> has it built in as a repository: pick a state, its counties load as layers.</li>
+  <li><strong>Monthly copies:</strong> <a href="https://parquetry.geomermaids.com/nfhl/snapshots.json">snapshots.json</a></li>
+  <li><strong>Credits and what was changed:</strong> <a href="https://parquetry.geomermaids.com/nfhl/latest/ATTRIBUTION.txt">ATTRIBUTION.txt</a></li>
+</ul>
+
+<h2 id="licence">Licence</h2>
+<p>The NFHL is a work of the US federal government, not subject to copyright in the United States (17 U.S.C. 105): no restriction on use or redistribution. Credit "FEMA National Flood Hazard Layer". The county outlines on the map are the US Census Bureau's cartographic boundaries, also public domain.</p>
+
+<div class="cta">
+<h2>Need it tailored?</h2>
+<p>We also deliver it joined to your parcels or portfolio, with the zone history per county, on your own cadence, or into your bucket with freshness guarantees.</p>
+<p><a href="mailto:contact@geomermaids.com?subject=FEMA%20NFHL">contact@geomermaids.com</a></p>
+</div>
+
+<footer>
+Built by <a href="https://www.geomermaids.com">Geomermaids</a> from FEMA's National Flood Hazard Layer. Not affiliated with or endorsed by FEMA. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles by <a href="https://openfreemap.org">OpenFreeMap</a>. Other datasets: <a href="https://geoparquet.geomermaids.com">geoparquet.geomermaids.com</a>.
+</footer>
+</main>
+
+<script type="module">
+import * as maplibregl from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
+
+// ?base= points the page at another copy of the data (a local rehearsal).
+const BASE = new URLSearchParams(location.search).get("base") || "https://parquetry.geomermaids.com/nfhl";
+const LATEST = `${BASE}/latest`;
+const fmt = new Intl.NumberFormat("en-US");
+const f1 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const ZONES_FROM = 11;      // zoom where the flood zones replace the county colours
+const MAX_FILES = 8;        // county files read for one view
+const MAX_PIECES = 40000;   // pieces drawn for one view
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+
+const AGE = [
+  ["within the last year", 365],
+  ["1 to 3 years ago", 3 * 365],
+  ["3 to 6 years ago", 6 * 365],
+  ["more than 6 years ago", Infinity],
+];
+const RISK = {
+  "1 percent flood zone": ["--z-100", "1 percent annual chance (Special Flood Hazard Area)"],
+  "0.2 percent flood zone": ["--z-500", "0.2 percent annual chance"],
+  "undetermined": ["--z-d", "Undetermined (zone D)"],
+};
+const RISK_WORDS = {
+  "1 percent flood zone": "1 percent annual chance of flooding",
+  "0.2 percent flood zone": "0.2 percent annual chance of flooding",
+  "minimal": "Minimal flood hazard",
+  "undetermined": "Flood hazard undetermined",
+  "water": "Open water",
+  "unmapped": "Not mapped by FEMA here",
+};
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
+}
+function el(tag, attrs = {}, text) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const statusEl = document.getElementById("status");
+const setStatus = (t) => { statusEl.textContent = t || ""; };
+const daysAgo = (iso, today) => (Date.parse(today) - Date.parse(iso)) / 864e5;
+
+// ---------- the repository: manifests, changes ----------
+
+let deliveries = {};      // dfirm_id -> {state, county, file, date, features}
+let recent = new Set();   // dfirm_ids replaced or added in the last 30 days
+let today = new Date().toISOString().slice(0, 10);
+
+async function loadRepository() {
+  const manifest = await getJSON(`${LATEST}/_manifest.json`);
+  today = manifest.updated || today;
+  const states = Object.keys(manifest.states);
+  const manifests = await Promise.all(states.map((s) => getJSON(`${LATEST}/state=${s}/_manifest.json`)));
+  for (const m of manifests) {
+    for (const f of m.files) {
+      deliveries[f.dfirm_id] = { state: m.state, stateName: m.state_name, county: f.county,
+        file: `state=${m.state}/${f.file}`, date: f.fema_update_date, features: f.features, zones: f.zones };
+    }
+  }
+  document.querySelector('[data-stat="deliveries"]').textContent = fmt.format(manifest.county_deliveries);
+  document.querySelector('[data-stat="zones"]').textContent = `${f1.format(manifest.zones / 1e6)} M`;
+  document.querySelector('[data-stat="checked"]').textContent = manifest.updated;
+  return manifest;
+}
+
+async function loadChanges(changesPromise) {
+  const tbody = document.querySelector("#changes tbody");
+  try {
+    const changes = await changesPromise;
+    const rows = [];
+    for (const run of changes.runs || []) {
+      for (const [kind, list] of [["replaced", run.replaced], ["added", run.added]]) {
+        for (const c of list || []) {
+          rows.push({ ...c, run: run.date, kind });
+          if (daysAgo(run.date, today) <= 30) recent.add(c.dfirm_id);
+        }
+      }
+    }
+    document.querySelector('[data-stat="recent"]').textContent = fmt.format(recent.size);
+    tbody.textContent = "";
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="loading">No county replaced yet.</td></tr>';
+      return;
+    }
+    for (const c of rows.slice(0, 15)) {
+      const tr = el("tr");
+      tr.append(el("td", { class: "date" }, c.run), el("td", {}, `${c.county}, ${c.state}`));
+      const d = el("td"); d.append(el("code", {}, c.dfirm_id)); tr.append(d);
+      tr.append(el("td", { class: "date" }, c.fema_update_date),
+                el("td", { class: "date" }, c.kind === "added" ? "new" : c.previous_date));
+      tbody.append(tr);
+    }
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="loading">The change log could not be read right now.</td></tr>';
+  }
+}
+
+// A Census county (FIPS) -> its delivery. Puerto Rico is one territory-wide delivery.
+function deliveryFor(fips) {
+  return deliveries[`${fips}C`] ? `${fips}C` : (fips.startsWith("72") && deliveries["72000C"] ? "72000C" : null);
+}
+function ageBucket(date) {
+  const d = daysAgo(date, today);
+  return AGE.findIndex(([, max]) => d <= max);
+}
+
+// ---------- DuckDB-WASM, started on first need ----------
+
+let connPromise = null;
+function duck() {
+  if (!connPromise) {
+    connPromise = (async () => {
+      setStatus("Starting DuckDB in your browser…");
+      const duckdb = await import("https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm");
+      const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+      const conn = await db.connect();
+      await conn.query("INSTALL spatial; LOAD spatial;");
+      setStatus("");
+      return conn;
+    })();
+    connPromise.catch(() => { connPromise = null; });
+  }
+  return connPromise;
+}
+const num = (x) => Number(x).toFixed(6);
+
+// ---------- the map ----------
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: `https://tiles.openfreemap.org/styles/${dark ? "dark" : "positron"}`,
+  center: [-96.5, 38.5], zoom: 3.3, minZoom: 2.5, maxZoom: 17,
+  attributionControl: { compact: true },
+  cooperativeGestures: matchMedia("(pointer: coarse)").matches,
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+const tip = document.getElementById("tip");
+const panel = document.getElementById("panel");
+const legend = document.getElementById("legend");
+
+function renderLegend() {
+  legend.textContent = "";
+  const zoomed = map.getZoom() >= ZONES_FROM;
+  legend.append(el("div", { class: "title" }, zoomed ? "Flood zones" : "FEMA delivery, dated"));
+  const row = (color, label, ring) => {
+    const r = el("div", { class: "row" });
+    const sw = el("span", { class: ring ? "sw ring" : "sw" });
+    if (!ring) sw.style.background = color;
+    r.append(sw, el("span", {}, label));
+    legend.append(r);
+  };
+  if (zoomed) {
+    for (const [, [v, label]] of Object.entries(RISK)) row(css(v), label);
+    legend.append(el("div", { class: "hint" }, "Minimal hazard and open water are left uncoloured. Click for the zone at a point."));
+  } else {
+    AGE.forEach(([label], i) => row(css(`--age-${i}`), label));
+    row(css("--none"), "no county-wide delivery");
+    row(null, "replaced in the last 30 days", true);
+    legend.append(el("div", { class: "hint" }, "Zoom in to a city to see the flood zones."));
+  }
+}
+
+async function addCounties(geo) {
+  for (const f of geo.features) {
+    const id = deliveryFor(f.properties.fips);
+    const d = id && deliveries[id];
+    f.properties.dfirm = id || "";
+    f.properties.bucket = d ? ageBucket(d.date) : -1;
+    f.properties.recent = id && recent.has(id) ? 1 : 0;
+    // The county's bbox: which files a view needs.
+    let [x0, y0, x1, y1] = [180, 90, -180, -90];
+    const walk = (c) => { if (typeof c[0] === "number") { x0 = Math.min(x0, c[0]); x1 = Math.max(x1, c[0]); y0 = Math.min(y0, c[1]); y1 = Math.max(y1, c[1]); } else c.forEach(walk); };
+    walk(f.geometry.coordinates);
+    f.bbox = [x0, y0, x1, y1];
+  }
+  counties = geo.features;
+  map.addSource("counties", { type: "geojson", data: geo });
+  const fade = ["interpolate", ["linear"], ["zoom"], ZONES_FROM - 1.5, 0.78, ZONES_FROM, 0];
+  map.addLayer({
+    id: "county-fill", type: "fill", source: "counties",
+    paint: {
+      "fill-color": ["match", ["get", "bucket"],
+        0, css("--age-0"), 1, css("--age-1"), 2, css("--age-2"), 3, css("--age-3"), css("--none")],
+      "fill-opacity": fade,
+    },
+  }, firstSymbolLayer());
+  map.addLayer({
+    id: "county-line", type: "line", source: "counties",
+    paint: { "line-color": dark ? "#141414" : "#ffffff", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 8, 0.8],
+             "line-opacity": ["interpolate", ["linear"], ["zoom"], ZONES_FROM - 1, 0.9, ZONES_FROM, 0.25] },
+  }, firstSymbolLayer());
+  map.addLayer({
+    id: "county-recent", type: "line", source: "counties", filter: ["==", ["get", "recent"], 1],
+    paint: { "line-color": css("--accent"), "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.2, 8, 2.5],
+             "line-opacity": ["interpolate", ["linear"], ["zoom"], ZONES_FROM - 1, 1, ZONES_FROM, 0] },
+  });
+}
+let counties = [];
+
+function firstRoadLayer() {
+  return map.getStyle().layers.find((l) => l["source-layer"] === "transportation")?.id || firstSymbolLayer();
+}
+function firstSymbolLayer() {
+  return map.getStyle().layers.find((l) => l.type === "symbol")?.id;
+}
+
+function addZoneLayers() {
+  const empty = { type: "FeatureCollection", features: [] };
+  map.addSource("zones", { type: "geojson", data: empty });
+  map.addSource("hit", { type: "geojson", data: empty });
+  map.addLayer({
+    id: "zones-fill", type: "fill", source: "zones", minzoom: ZONES_FROM - 0.01,
+    paint: {
+      "fill-color": ["match", ["get", "risk"],
+        "1 percent flood zone", css("--z-100"), "0.2 percent flood zone", css("--z-500"), css("--z-d")],
+      // Opaque, under the roads and labels: pieces share edges, and only an
+      // opaque fill outlined in its own colour hides the seams between them.
+      "fill-outline-color": ["match", ["get", "risk"],
+        "1 percent flood zone", css("--z-100"), "0.2 percent flood zone", css("--z-500"), css("--z-d")],
+    },
+  }, firstRoadLayer());
+  map.addLayer({
+    id: "hit-point", type: "circle", source: "hit",
+    paint: { "circle-radius": 6, "circle-color": css("--accent"), "circle-stroke-width": 2,
+             "circle-stroke-color": dark ? "#141414" : "#ffffff" },
+  });
+}
+
+// The county files under a box, nearest the centre first.
+function filesIn(w, s, e, n) {
+  const cx = (w + e) / 2, cy = (s + n) / 2;
+  const hits = new Map();
+  for (const f of counties) {
+    const [x0, y0, x1, y1] = f.bbox;
+    if (!f.properties.dfirm || x0 > e || x1 < w || y0 > n || y1 < s) continue;
+    const dist = Math.hypot((x0 + x1) / 2 - cx, (y0 + y1) / 2 - cy);
+    const id = f.properties.dfirm;
+    if (!hits.has(id) || hits.get(id) > dist) hits.set(id, dist);
+  }
+  return [...hits.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+}
+const bboxWhere = (w, s, e, n) =>
+  `bbox.xmin <= ${num(e)} AND bbox.xmax >= ${num(w)} AND bbox.ymin <= ${num(n)} AND bbox.ymax >= ${num(s)}`;
+const fileList = (ids) => ids.map((id) => `'${LATEST}/${deliveries[id].file}'`).join(", ");
+
+let seq = 0;
+async function refreshZones() {
+  renderLegend();
+  if (map.getZoom() < ZONES_FROM) {
+    map.getSource("zones")?.setData({ type: "FeatureCollection", features: [] });
+    setStatus("");
+    return;
+  }
+  const my = ++seq;
+  const b = map.getBounds();
+  const [w, s, e, n] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  const ids = filesIn(w, s, e, n);
+  if (!ids.length) { setStatus("No county-wide FEMA delivery in view."); return; }
+  const used = ids.slice(0, MAX_FILES);
+  try {
+    const conn = await duck();
+    if (my !== seq) return;
+    setStatus(`Reading ${used.length} county file${used.length > 1 ? "s" : ""}…`);
+    const t0 = performance.now();
+    const res = await conn.query(`
+      SELECT risk, ST_AsGeoJSON(geometry) AS g
+      FROM read_parquet([${fileList(used)}])
+      WHERE ${bboxWhere(w, s, e, n)}
+        AND risk IN ('1 percent flood zone', '0.2 percent flood zone', 'undetermined')
+      LIMIT ${MAX_PIECES}`);
+    if (my !== seq) return;
+    const features = res.toArray().map((r) => ({ type: "Feature", properties: { risk: r.risk }, geometry: JSON.parse(r.g) }));
+    map.getSource("zones").setData({ type: "FeatureCollection", features });
+    const more = ids.length > used.length ? ` (the ${used.length} nearest of ${ids.length} counties)` : "";
+    const capped = features.length >= MAX_PIECES ? ", capped: zoom in for all" : "";
+    setStatus(`${fmt.format(features.length)} pieces from ${used.length} file${used.length > 1 ? "s" : ""}${more}${capped}, ${Math.round(performance.now() - t0)} ms`);
+  } catch (err) {
+    if (my === seq) setStatus(`Could not read the flood zones: ${String(err.message || err).slice(0, 140)}`);
+  }
+}
+
+// ---------- the point lookup ----------
+
+async function lookup(lng, lat) {
+  const pt = { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [lng, lat] } };
+  map.getSource("hit").setData({ type: "FeatureCollection", features: [pt] });
+  panel.className = "overlay open";
+  panel.innerHTML = '<p class="loading">Looking up…</p>';
+  const d = 0.0005;
+  const ids = filesIn(lng - d, lat - d, lng + d, lat + d);
+  const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  if (!ids.length) {
+    return showPanel({ coords, none: true });
+  }
+  try {
+    const conn = await duck();
+    const res = await conn.query(`
+      SELECT dfirm_id, county, state, fema_update_date::VARCHAR AS fema_date, flood_zone, zone_subtype,
+             risk, sfha, static_bfe, source_feature_id
+      FROM read_parquet([${fileList(ids.slice(0, 4))}])
+      WHERE ${bboxWhere(lng, lat, lng, lat)}
+        AND ST_Contains(geometry, ST_Point(${num(lng)}, ${num(lat)}))
+      LIMIT 1`);
+    const rows = res.toArray().map((r) => r.toJSON());
+    if (!rows.length) return showPanel({ coords, ids });
+    const z = rows[0];
+    showPanel({ coords, z });
+  } catch (err) {
+    panel.innerHTML = "";
+    panel.append(el("p", { class: "loading" }, `The lookup failed: ${String(err.message || err).slice(0, 160)}`));
+  }
+}
+
+function showPanel({ coords, z, ids, none }) {
+  panel.textContent = "";
+  const close = el("button", { class: "close", type: "button", "aria-label": "Close" }, "×");
+  close.onclick = () => { panel.className = "overlay"; map.getSource("hit").setData({ type: "FeatureCollection", features: [] }); };
+  panel.append(close);
+  if (none || !z) {
+    const d = ids && deliveries[ids[0]];
+    panel.append(el("h4", {}, d ? `${d.county}, ${d.state}` : "No county-wide delivery"));
+    panel.append(el("p", { class: "sub" }, coords));
+    panel.append(el("p", {}, none
+      ? "FEMA has no county-wide flood map delivery here. A community may be mapped on its own, or the area is not mapped digitally."
+      : "No flood zone under this point in the county's delivery: it may fall outside the mapped area."));
+  } else {
+    panel.append(el("h4", {}, `${z.county}, ${z.state}`));
+    panel.append(el("p", { class: "sub" }, coords));
+    panel.append(el("p", { class: "zone" }, `Zone ${z.flood_zone}`));
+    panel.append(el("p", { class: "risk" }, RISK_WORDS[z.risk] || z.risk));
+    const dl = el("dl");
+    const add = (k, v) => { if (v === null || v === undefined || v === "") return; dl.append(el("dt", {}, k), el("dd", {}, String(v))); };
+    add("Subtype", z.zone_subtype);
+    add("In the SFHA", z.sfha === null ? null : (z.sfha ? "yes" : "no"));
+    add("Base flood elev.", z.static_bfe === null ? null : `${z.static_bfe} ft`);
+    add("Delivery", z.dfirm_id);
+    add("FEMA date", z.fema_date);
+    add("File", deliveries[z.dfirm_id]?.file);
+    panel.append(dl);
+  }
+  const [lat, lng] = coords.split(", ");
+  const p = el("p", { class: "warn" });
+  p.append(document.createTextNode("Not an official determination. "));
+  const a = el("a", { href: `https://msc.fema.gov/portal/search?AddressQuery=${encodeURIComponent(`${lat},${lng}`)}`, rel: "noopener", target: "_blank" }, "Check this point on FEMA's Map Service Center");
+  p.append(a, document.createTextNode("."));
+  panel.append(p);
+}
+
+// ---------- wiring ----------
+
+// Everything the first view needs, fetched at once while the base map loads.
+setStatus("Loading the county files…");
+const repository = loadRepository();
+const changes = getJSON(`${LATEST}/changes.json`);
+const outlines = getJSON("/counties.json");
+changes.catch(() => {});
+repository.catch(() => {});
+outlines.catch(() => {});
+map.on("load", async () => {
+  try {
+    await repository;
+    await loadChanges(changes);
+    await addCounties(await outlines);
+    addZoneLayers();
+    renderLegend();
+    setStatus("");
+  } catch (err) {
+    setStatus(`The data could not be read right now (${String(err.message || err).slice(0, 120)}).`);
+  }
+});
+map.on("moveend", refreshZones);
+map.on("click", (ev) => lookup(ev.lngLat.lng, ev.lngLat.lat));
+map.on("mousemove", "county-fill", (ev) => {
+  if (map.getZoom() >= ZONES_FROM) { tip.style.opacity = 0; return; }
+  const p = ev.features[0].properties;
+  const d = p.dfirm && deliveries[p.dfirm];
+  tip.textContent = d
+    ? `${p.name}, ${p.state} · ${p.dfirm} · FEMA ${d.date} · ${fmt.format(d.zones)} zones${p.recent ? " · replaced recently" : ""}`
+    : `${p.name}, ${p.state} · no county-wide delivery`;
+  tip.style.opacity = 1;
+  const box = map.getContainer().getBoundingClientRect();
+  tip.style.left = `${Math.min(ev.point.x + 12, box.width - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${ev.point.y + 14}px`;
+  map.getCanvas().style.cursor = "pointer";
+});
+map.on("mouseleave", "county-fill", () => { tip.style.opacity = 0; map.getCanvas().style.cursor = ""; });
+
+document.querySelectorAll("[data-place]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const [lng, lat, zoom] = btn.dataset.place.split(",").map(Number);
+    map.flyTo({ center: [lng, lat], zoom, speed: 1.6 });
+    map.once("moveend", () => lookup(lng, lat));
+    document.getElementById("map-section").scrollIntoView({ behavior: "smooth" });
+  });
+});
+
+document.querySelectorAll(".copy-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const code = btn.parentElement.querySelector("code").innerText;
+    try {
+      await navigator.clipboard.writeText(code);
+      btn.textContent = "Copied"; btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1500);
+    } catch (e) { /* clipboard blocked */ }
+  });
+});
+</script>
+</body>
+</html>

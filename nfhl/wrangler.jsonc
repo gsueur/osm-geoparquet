@@ -1,0 +1,18 @@
+// The FEMA NFHL page. Workers + Static Assets, like site/ and gmwid/. The
+// page reads the live data (manifests, changes.json, the county files) from
+// parquetry.geomermaids.com/nfhl/ in the browser, so the daily update shows
+// without a redeploy. public/counties.json is the Census county outlines the
+// map colours (nfhl/counties.py builds it).
+//
+// Deploy from nfhl/:
+//   npx wrangler deploy
+// The custom domain is declared below, so the first deploy creates the
+// DNS record and the certificate for nfhl.geomermaids.com.
+{
+  "name": "nfhl",
+  "compatibility_date": "2026-04-01",
+  "routes": [{ "pattern": "nfhl.geomermaids.com", "custom_domain": true }],
+  "assets": {
+    "directory": "./public"
+  }
+}
