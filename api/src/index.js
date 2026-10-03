@@ -313,10 +313,10 @@ function landingText() {
     `    SELECT country, count(*) FROM read_parquet(\n` +
     `      's3://${BUCKET_NAME}/clc/2018/country=*/clc_2018.parquet')\n` +
     `    GROUP BY 1;\n` +
-    `  nfhl/           FEMA National Flood Hazard Layer, flood hazard areas. One US\n` +
-    `                  file (flood_hazard_areas.parquet) and one file per state to glob:\n` +
+    `  nfhl/           FEMA National Flood Hazard Layer, flood hazard areas, updated\n` +
+    `                  daily. One file per county delivery, indexed by counties.parquet:\n` +
     `    SELECT state, risk, count(*) FROM read_parquet(\n` +
-    `      's3://${BUCKET_NAME}/nfhl/2026-09-30/state=*/flood_hazard_areas.parquet')\n` +
+    `      's3://${BUCKET_NAME}/nfhl/latest/state=*/*.parquet')\n` +
     `    GROUP BY ALL;\n` +
     `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
     `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/geoboundaries/6.0.0/cgaz_adm1.parquet');\n` +

@@ -85,24 +85,26 @@ download needs an EU Login); the first publish keeps its original bytes in
 `clc/_source/`.
 
 FEMA's National Flood Hazard Layer (`scripts/datasets/nfhl.py`) sits under
-`https://parquetry.geomermaids.com/nfhl/<snapshot>/` as one United States
-file (`flood_hazard_areas.parquet`) and one file per state
-(`state=<XX>/flood_hazard_areas.parquet`), EPSG:4269 as FEMA delivers it.
-The source is not built here: the county-by-county download, normalization
-and subdivision are the pipeline of
-[nfhl-geoparquet-workshop](https://github.com/gsueur/nfhl-geoparquet-workshop),
-run on a workstation (90 GB of FEMA ZIPs, 2,500 county deliveries). Its
-national file of pieces is the input; the script sorts it by state then
-along a Hilbert curve, writes the bbox covering, the state files, the
-manifests, `index.json`, `snapshots.json` and `ATTRIBUTION.txt`, and checks
-that rows and geometries are unchanged. Rows are pieces of at most 100
-vertices, not FEMA zones: `ATTRIBUTION.txt` says how to count and
-reassemble zones, and that the files are not for official flood
-determinations. A new snapshot is a new dated folder and a new `latest` in
-`snapshots.json`. Its Portolan catalog is at
+`https://parquetry.geomermaids.com/nfhl/latest/` as one file per FEMA
+county-wide delivery (`state=<XX>/<DFIRM_ID>.parquet`), EPSG:4269 as FEMA
+delivers it, with an index of those files (`counties.parquet`: bbox, date,
+rows, sha256). FEMA replaces a delivery when it changes, about three a day
+on a day that has any, so the layout follows that unit: `dataset-nfhl.yml`
+runs daily, reads FEMA's list, runs the pipeline of
+[nfhl-geoparquet-workshop](https://github.com/gsueur/nfhl-geoparquet-workshop)
+(download, normalization, subdivision) on the deliveries republished since
+the index, and uploads only those files, then the index and the manifests.
+The script sorts each delivery along a Hilbert curve, writes the bbox
+covering, and checks that rows and geometries are the pipeline's.
+`changes.json` lists what each day replaced; `skipped.json` the listed
+deliveries that hold no flood layer. The first run of a month freezes a copy
+of `latest/` under `nfhl/<YYYY-MM-DD>/`, three kept. The whole country was
+built once on a workstation (90 GB of FEMA ZIPs, `nfhl.py bootstrap`). Rows
+are pieces of at most 100 vertices, not FEMA zones: `ATTRIBUTION.txt` says
+how to count and reassemble zones, and that the files are not for official
+flood determinations. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/nfhl/catalog/catalog.json`, rendered by
-`scripts/datasets/nfhl_catalog.py` from the manifests and the national
-file's footer; it describes the latest snapshot.
+`scripts/datasets/nfhl_catalog.py` after each daily update.
 
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to

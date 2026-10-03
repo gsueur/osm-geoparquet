@@ -116,14 +116,14 @@ info findings above.
 A third catalog describes the FEMA National Flood Hazard Layer at
 `https://parquetry.geomermaids.com/nfhl/catalog/catalog.json`, rendered by
 `scripts/datasets/nfhl_catalog.py` with the same constants, rashid wrapper
-and uploader. One collection (`flood-hazard-areas`) describing two layouts of
-the same rows: the United States file as the `data` asset, and the per-state
-files under `state=<XX>/` through the partition extension and one
-`data-<xx>` asset each. It describes the snapshot `snapshots.json` names as
-latest; a snapshot folder is immutable, so every data asset carries
-`file:size` and `file:checksum` from the manifests `nfhl.py` writes. There is
-no workflow: the input is built on a workstation, and `publish` renders,
-checks and uploads in one command.
+and uploader. One collection (`flood-hazard-areas`): one file per FEMA
+county-wide delivery under `latest/state=<XX>/<DFIRM_ID>.parquet`, through
+the partition extension, and their index (`latest/counties.parquet`) as the
+`index` asset with `file:size` and `file:checksum`. `latest/` is updated in
+place every day by `dataset-nfhl.yml`, which renders, checks and uploads the
+catalog after each update, so counts and the index checksum match the files
+just published. Per-file checksums are in the index, not in the catalog: a
+file is replaced whenever FEMA republishes its delivery.
 
 The licence is `CC-PDM-1.0`: the NFHL is a US federal work, not subject to
 copyright (17 U.S.C. 105), and the Public Domain Mark is the SPDX id that says
