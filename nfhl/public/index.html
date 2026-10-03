@@ -176,7 +176,8 @@ footer a { color: var(--muted); }
   <button type="button" data-place="-80.134,25.790,14">Miami Beach</button>
   <button type="button" data-place="-95.4605,29.6870,14">Houston, Meyerland</button>
   <button type="button" data-place="-121.505,38.567,13">Sacramento</button>
-  <button type="button" data-place="-74.0110,40.6770,14.5">Brooklyn, Red Hook</button>
+  <button type="button" data-place="-79.9350,32.7760,14">Charleston</button>
+  <button type="button" data-place="-71.0490,42.3480,14.5">Boston, Fort Point</button>
 </div>
 
 <h2 id="updates">Updated every day</h2>
@@ -546,17 +547,38 @@ async function refreshZones() {
 
 // ---------- the point lookup ----------
 
+// The Census county under a point: ray casting on its outline.
+function countyAt(lng, lat) {
+  const inRing = (ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  const inPolygon = (rings) => inRing(rings[0]) && !rings.slice(1).some(inRing);
+  for (const f of counties) {
+    const [x0, y0, x1, y1] = f.bbox;
+    if (lng < x0 || lng > x1 || lat < y0 || lat > y1) continue;
+    const g = f.geometry;
+    if ((g.type === "Polygon" ? [g.coordinates] : g.coordinates).some(inPolygon)) return f.properties;
+  }
+  return null;
+}
+
 async function lookup(lng, lat) {
   const pt = { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [lng, lat] } };
   map.getSource("hit").setData({ type: "FeatureCollection", features: [pt] });
   panel.className = "overlay open";
   panel.innerHTML = '<p class="loading">Looking up…</p>';
+  // The county's own delivery first; the neighbours' cover the generalised
+  // Census borders, where a point may sit in the next county's map.
+  const here = countyAt(lng, lat);
   const d = 0.0005;
-  const ids = filesIn(lng - d, lat - d, lng + d, lat + d);
+  const ids = [...new Set([here?.dfirm, ...filesIn(lng - d, lat - d, lng + d, lat + d)].filter(Boolean))];
   const coords = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  if (!ids.length) {
-    return showPanel({ coords, none: true });
-  }
+  if (!ids.length) return showPanel({ coords, here });
   try {
     const conn = await duck();
     const res = await conn.query(`
@@ -567,7 +589,7 @@ async function lookup(lng, lat) {
         AND ST_Contains(geometry, ST_Point(${num(lng)}, ${num(lat)}))
       LIMIT 1`);
     const rows = res.toArray().map((r) => r.toJSON());
-    if (!rows.length) return showPanel({ coords, ids });
+    if (!rows.length) return showPanel({ coords, here });
     const z = rows[0];
     showPanel({ coords, z });
   } catch (err) {
@@ -576,18 +598,17 @@ async function lookup(lng, lat) {
   }
 }
 
-function showPanel({ coords, z, ids, none }) {
+function showPanel({ coords, z, here }) {
   panel.textContent = "";
   const close = el("button", { class: "close", type: "button", "aria-label": "Close" }, "×");
   close.onclick = () => { panel.className = "overlay"; map.getSource("hit").setData({ type: "FeatureCollection", features: [] }); };
   panel.append(close);
-  if (none || !z) {
-    const d = ids && deliveries[ids[0]];
-    panel.append(el("h4", {}, d ? `${d.county}, ${d.state}` : "No county-wide delivery"));
+  if (!z) {
+    panel.append(el("h4", {}, here ? `${here.name}, ${here.state}` : "Outside the US counties"));
     panel.append(el("p", { class: "sub" }, coords));
-    panel.append(el("p", {}, none
-      ? "FEMA has no county-wide flood map delivery here. A community may be mapped on its own, or the area is not mapped digitally."
-      : "No flood zone under this point in the county's delivery: it may fall outside the mapped area."));
+    panel.append(el("p", {}, here?.dfirm
+      ? `No flood zone under this point in the county's delivery (${here.dfirm}): it may fall outside the mapped area.`
+      : "FEMA has no county-wide flood map delivery here. The area may be mapped community by community (New York City is), which this dataset leaves out, or not mapped digitally."));
   } else {
     panel.append(el("h4", {}, `${z.county}, ${z.state}`));
     panel.append(el("p", { class: "sub" }, coords));
