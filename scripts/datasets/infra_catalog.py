@@ -280,7 +280,10 @@ COMMON_DOCS = {
     "lifecycle": "active, construction, proposed or disused, read from the lifecycle "
                  "prefixes and values of the layer's main tag. Abandoned features are not "
                  "in this file: they are in abandoned/, the same layers and schema.",
-    "name": "The name tag.",
+    "name": "The name tag; where there is none, the first of its lifecycle form "
+            "(disused:name...), official_name, name:en, short_name, alt_name, "
+            "loc_name, seamark:name, substation:name, site_name, or the only "
+            "name:<lang>. The tags keep every original.",
     "names": "Every name and name:<lang> tag, keyed by tag.",
     "operator": "The operator tag.",
     "operator_wikidata": "The operator:wikidata tag.",
@@ -332,6 +335,7 @@ DERIVED_DOCS = {
     "eia_plant_id": "The plant's EIA plant ID: from ref:US:EIA on OSM plants, EIA's own "
                     "on the rows it adds. The key to join EIA's generator, capacity and "
                     "generation data.",
+    "field_name": "The field_name tag: the oil or gas field, not the feature's own name.",
     "category": "Pipeline category from the substance (oil, gas, water, "
                 "heat, ...), Open Infrastructure Map's grouping.",
 }
