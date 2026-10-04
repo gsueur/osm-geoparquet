@@ -226,6 +226,16 @@ CREATE OR REPLACE MACRO names_of(t) AS map_from_entries(list_transform(
     list_filter(map_entries(t), e -> starts_with(e.key, 'name:')),
     e -> {'key': substr(e.key, 6), 'value': e.value}));
 
+-- The feature's name: name, else its lifecycle form, else the tags that name
+-- the feature itself (not its address, operator, design, oil field or a
+-- former name), else its only name:<lang>.
+CREATE OR REPLACE MACRO best_name(t) AS coalesce(
+    t['name'], t['construction:name'], t['proposed:name'], t['planned:name'],
+    t['disused:name'], t['abandoned:name'],
+    t['official_name'], t['name:en'], t['short_name'], t['alt_name'], t['loc_name'],
+    t['seamark:name'], t['substation:name'], t['site_name'],
+    CASE WHEN cardinality(names_of(t)) = 1 THEN map_values(names_of(t))[1] END);
+
 -- Geodesic measures. DuckDB's spheroid functions read (lat, lon).
 CREATE OR REPLACE MACRO length_km(g) AS
     round(ST_Length_Spheroid(ST_FlipCoordinates(g)) / 1000, 3);
@@ -416,6 +426,7 @@ LAYERS: list[Layer] = [
               ("pressure", s("pressure")),
               ("material", s("material")),
               ("location", s("location")),
+              ("field_name", s("field_name")),
               ("length_km", "length_km(geometry)"),
           ]),
     Layer("petroleum_site", "petroleum", "industrial",
@@ -424,14 +435,17 @@ LAYERS: list[Layer] = [
                  'natural_gas', 'wellsite', 'well_cluster', 'refinery')
              OR tags['pipeline'] = 'substation'""", [
               ("industrial", s("industrial")),
+              ("field_name", s("field_name")),
               ("area_m2", "area_m2(geometry)"),
           ]),
     Layer("petroleum_well", "petroleum", "man_made",
           "lc_val(tags, 'man_made') IN ('petroleum_well', 'oil_well')", [
               ("substance", s("substance")),
+              ("field_name", s("field_name")),
           ]),
     Layer("offshore_platform", "petroleum", "man_made",
           "lc_val(tags, 'man_made') = 'offshore_platform'", [
+              ("field_name", s("field_name")),
               ("area_m2", "area_m2(geometry)"),
           ]),
     Layer("pipeline_feature", "petroleum", "pipeline",
@@ -490,7 +504,7 @@ TYPE_EXPR = {
 COMMON = [
     ("type", None),  # TYPE_EXPR[layer.key]
     ("lifecycle", None),
-    ("name", "tags['name']"),
+    ("name", "best_name(tags)"),
     ("names", "names_of(tags)"),
     ("operator", "tags['operator']"),
     ("operator_wikidata", "tags['operator:wikidata']"),
