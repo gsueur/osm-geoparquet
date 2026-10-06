@@ -188,11 +188,6 @@ const DATASETS = {
     attribution: "clc/2018/ATTRIBUTION.txt",
     snapshots: "clc/snapshots.json",
   },
-  "geoboundaries/": {
-    subtitle: "geoBoundaries CGAZ, global administrative boundaries, ADM0 to ADM2.",
-    attribution: "geoboundaries/6.0.0/ATTRIBUTION.txt",
-    snapshots: "geoboundaries/snapshots.json",
-  },
   "gaul/": {
     subtitle: "FAO GAUL 2024, global administrative units, L1 and L2 as published " +
       "and a country layer (L0) dissolved here.",
@@ -200,8 +195,9 @@ const DATASETS = {
   },
   "nfhl/": {
     subtitle: "FEMA National Flood Hazard Layer, flood hazard areas of the United States: " +
-      "one file for the country and one per state, zones cut into pieces of at most 100 vertices.",
-    attribution: "nfhl/2026-09-30/ATTRIBUTION.txt",
+      "one file per FEMA county delivery under latest/state=XX/, indexed by latest/counties.parquet, " +
+      "updated daily. Zones are cut into pieces of at most 100 vertices.",
+    attribution: "nfhl/latest/ATTRIBUTION.txt",
     snapshots: "nfhl/snapshots.json",
   },
   "meta/": {
