@@ -63,11 +63,10 @@ The repository also carries the builder for FAO GAUL 2024
 them, and a country layer L0 dissolved here), each in two layouts of the same
 rows: one whole-world file (`GAUL_2024_L1.parquet`) for a single download,
 and one file per country (`country=<iso3>/L1.parquet`) for small reads.
-The whole-world L1 and L2 online were rewritten by hand with pyarrow and
-geoarrow into row groups of at most 42 MB, since DuckDB writes none under
-2,048 rows; the release is static and the workflow is dispatch-only, so a
-`publish` re-run must not happen without reading the note at the top of
-`dataset-gaul.yml`. Every file has a bbox covering and a sha256 in
+Row groups are capped at 4 MiB of geometry (pyarrow and geoarrow, since
+DuckDB writes none under 2,048 rows), so a bbox filter on one point reads a
+couple of MB even in the largest country file. A `publish` re-run replaces
+immutable bytes: read the note at the top of `dataset-gaul.yml` first. Every file has a bbox covering and a sha256 in
 `_manifest.json`. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
 `scripts/datasets/gaul_catalog.py`. The licence obligations (citation,

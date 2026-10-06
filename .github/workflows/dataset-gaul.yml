@@ -31,12 +31,13 @@ on:
         required: false
         default: ""
 
-# GAUL 2024 is a static release, published once (2026-09-23). The whole-world
-# L1 and L2 files online are NOT this workflow's output: they were rewritten
-# by hand with pyarrow + geoarrow into 15 and 24 row groups of at most 42 MB
-# (DuckDB writes none under 2,048 rows). Re-running stage=publish would put
-# the converter's larger-grouped files back and rewrite the manifest to
-# match. Do not, unless gaul.py has learned to write them the same way.
+# GAUL 2024 is a static release. gaul.py caps row groups at 4 MiB of
+# geometry (pyarrow + geoarrow, since DuckDB writes none under 2,048 rows),
+# for the whole-world files and the per-country ones alike, so a publish
+# re-run reproduces what is online. A publish replaces bytes that were
+# uploaded as immutable: purge the Cloudflare cache for
+# parquetry.geomermaids.com/gaul/ right after, or a reader can combine a
+# cached footer with new pages.
 
 concurrency:
   group: dataset-gaul
