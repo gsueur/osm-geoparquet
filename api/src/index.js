@@ -318,8 +318,6 @@ function landingText() {
     `    SELECT state, risk, count(*) FROM read_parquet(\n` +
     `      's3://${BUCKET_NAME}/nfhl/latest/state=*/*.parquet')\n` +
     `    GROUP BY ALL;\n` +
-    `  geoboundaries/  geoBoundaries CGAZ, ADM0 to ADM2:\n` +
-    `    SELECT count(*) FROM read_parquet('s3://${BUCKET_NAME}/geoboundaries/6.0.0/cgaz_adm1.parquet');\n` +
     `\n` +
     `Every https://parquetry.geomermaids.com/<key> is s3://${BUCKET_NAME}/<key> here.\n` +
     `Fast browser-friendly downloads: https://parquetry.geomermaids.com/\n`

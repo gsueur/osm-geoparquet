@@ -15,11 +15,6 @@
       "attribution": "© OpenStreetMap contributors"
     },
     {
-      "name": "Geomermaids geoBoundaries (global admin)",
-      "url": "https://parquetry.geomermaids.com/geoboundaries",
-      "kind": "Parquetry"
-    },
-    {
       "name": "Geomermaids FAO GAUL 2024 (global admin)",
       "url": "https://parquetry.geomermaids.com/gaul",
       "kind": "Parquetry"

@@ -21,7 +21,7 @@ Column projection, bbox filtering, and row-group pruning all work via HTTP range
 
 Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See `https://parquetry.geomermaids.com/osm/ATTRIBUTION.txt` for redistribution terms.
 
-The bucket holds several datasets, each self-contained under its own prefix (`osm/`, `clc/`, `geoboundaries/`, ...), so each can be registered with Portolan on its own. URLs published before that move still resolve: the Workers serve the old bucket-root layout indefinitely.
+The bucket holds several datasets, each self-contained under its own prefix (`osm/`, `gmwid/`, `gaul/`, `clc/`, `nfhl/`), so each can be registered with Portolan on its own. URLs published before that move still resolve: the Workers serve the old bucket-root layout indefinitely.
 
 ### Portolan catalog
 
