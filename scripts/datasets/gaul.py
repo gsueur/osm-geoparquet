@@ -15,18 +15,14 @@ covering, so a reader can prune row groups instead of downloading 775 MB.
 Each layer is written twice: once as a single whole-world file
 (GAUL_2024_<layer>.parquet), for anyone who wants one download, and once
 split per country under country=<iso3_code>/, for readers that want a small
-file (the map viewer, a bbox query on one country). DuckDB will not write
-row groups under 2,048 rows, so a whole-world L1 from here is two groups of
-~185 MB and L0 one group of 286 MB, and a bbox filter cannot skip anything.
+file (the map viewer, a bbox query on one country).
 
-The published whole-world L1 and L2 are therefore NOT this script's output:
-on 2026-09-23 they were replaced by hand with files written by
-geopq-workbench (pyarrow + geoarrow, 15 and 24 row groups of at most 42 MB,
-same rows, GAUL codes cast back to BIGINT). GAUL 2024 is a static release
-and this workflow is dispatch-only: re-running it with stage=publish would
-put this script's larger-grouped files back. Writing the whole-world files
-through pyarrow + geoarrow-pyarrow here, one small row group at a time,
-is the way to make a re-run safe; it is not done yet.
+Row groups are capped by bytes, not rows (GROUP_BYTES): a bbox filter skips
+whole row groups, and administrative units are few and heavy, so a cap in
+rows leaves the file in one group. DuckDB sorts, adds the bbox and writes
+the footer; pyarrow with geoarrow-pyarrow then cuts the row groups, because
+DuckDB writes none under 2,048 rows. Before this, country=USA/L2.parquet
+was one 69 MB group and a point lookup read all of it.
 
 FAO does not publish an L0. The GAUL 2024 package stops at L1, and a country
 layer is a boundary statement rather than a statistical convenience, so its
@@ -186,30 +182,52 @@ BBOX_STRUCT = """struct_pack(
                 ) AS bbox"""
 
 
-# DuckDB does not use ROW_GROUP_SIZE literally. Measured on a 45,524-row
-# file: asking for 256, 1,000 or 2,048 all give 23 groups of ~1,979 rows;
-# 3,000 and 5,000 give 12 of ~3,794; 20,000 gives 3. It snaps the request to a
-# power-of-two multiple of 1,024, and 2,048 rows is the floor. So asking for
-# LESS than 2,048 is how you get the smallest groups, and asking for exactly
-# 2,048 rounds up to 4,096 and gives you larger ones. ROW_GROUP_SIZE_BYTES
-# does not override any of it.
+# Uncompressed WKB per row group. A bbox filter on a point then reads one
+# group of 1 to 3 MB once compressed. A unit larger than the cap (Russia in
+# L0) gets a group of its own.
 #
-# The floor is what limits these layers. L1 has 3,110 features, so 2 groups is
-# the best available; L0 has 272 and lands in one whatever is asked. Only L2
-# has enough rows for the bbox covering to prune usefully. Partitioning by
-# country is the fix if that becomes a problem, not a smaller row group.
-SMALLEST_GROUP_REQUEST = 256
+# DuckDB cannot write this: it snaps ROW_GROUP_SIZE to a power-of-two
+# multiple of 1,024 rows with a 2,048-row floor (measured on L2: 256, 1,000
+# and 2,048 all give groups of ~1,979 rows), and ROW_GROUP_SIZE_BYTES does
+# not override that. Most country files hold fewer rows than the floor.
+GROUP_BYTES = 4 << 20
 
 
-def row_group_rows(feature_count: int, source_bytes: int) -> int:
-    """Rows per group, aimed at ~48 MB of geometry rather than a fixed count.
+def rewrite(src: Path, dest: Path) -> None:
+    """Copy a DuckDB-written file into row groups of at most GROUP_BYTES of
+    geometry, rows in the same (Hilbert) order.
 
-    pipeline.py's flat 50,000 suits OSM, whose features are small. A GAUL L1
-    unit averages 145 KB, so 50,000 rows would put the whole layer in one
-    group and a bbox filter would have nothing to skip.
+    pyarrow 22 with geoarrow-pyarrow registered keeps the native Parquet
+    GEOMETRY logical type, its geospatial statistics and the `geo` footer,
+    as infra.py's rewrite() relies on; verify() checks all three. The
+    largest GAUL layer fits in memory, so the table is read whole.
     """
-    avg = max(source_bytes / max(feature_count, 1), 1)
-    return max(SMALLEST_GROUP_REQUEST, min(20_000, int(48 * 1024 * 1024 / avg)))
+    import geoarrow.pyarrow  # noqa: F401  registers the geoarrow.wkb extension type
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(src)
+    wkb = pa.chunked_array([c.storage for c in table.column("geometry").chunks])
+    cuts, size = [0], 0
+    for i, n in enumerate(pc.binary_length(wkb).to_pylist()):
+        if size and size + n > GROUP_BYTES:
+            cuts.append(i)
+            size = 0
+        size += n
+    cuts.append(table.num_rows)
+
+    leaves = pq.ParquetFile(src).metadata.schema
+    strings = [leaves.column(k).path for k in range(len(leaves))
+               if leaves.column(k).physical_type == "BYTE_ARRAY"
+               and leaves.column(k).path != "geometry"]
+    floats = [leaves.column(k).path for k in range(len(leaves))
+              if leaves.column(k).physical_type in ("FLOAT", "DOUBLE")]
+    with pq.ParquetWriter(dest, table.schema, compression="zstd", compression_level=19,
+                          use_dictionary=strings, use_byte_stream_split=floats,
+                          write_statistics=True, data_page_size=1 << 20) as w:
+        for a, b in zip(cuts, cuts[1:]):
+            w.write_table(table.slice(a, b - a), row_group_size=b - a)
 
 
 def whole_world_file(name: str) -> str:
@@ -218,8 +236,7 @@ def whole_world_file(name: str) -> str:
     return f"GAUL_{VERSION}_{name}.parquet"
 
 
-def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
-                feature_count: int, source_bytes: int, *,
+def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path, *,
                 out: Path | None = None, quiet: bool = False) -> dict:
     con.execute(f"CREATE OR REPLACE TEMP VIEW layer AS {select_sql}")
     count, xmin, ymin, xmax, ymax, types = con.execute("""
@@ -235,12 +252,14 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
     out.parent.mkdir(parents=True, exist_ok=True)
     cols = [c for c in con.execute("DESCRIBE layer").fetchall() if c[0] != "geom"]
     attrs = ",\n                ".join(c[0] for c in cols)
-    rows = row_group_rows(feature_count, source_bytes)
     box = f"ST_Extent(ST_MakeEnvelope({xmin!r}, {ymin!r}, {xmax!r}, {ymax!r}))"
     # Bound to a local before the f-string below: interpolating the function's
     # own name would quietly write its repr into the footer.
     geo = geo_metadata((xmin, ymin, xmax, ymax), types)
 
+    # DuckDB writes a sorted intermediate in large groups and a fast codec;
+    # rewrite() cuts the published file's row groups and compresses it.
+    tmp = out.with_name(out.stem + ".duckdb.parquet")
     con.execute(f"""
         COPY (
             SELECT
@@ -249,15 +268,17 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
                 geom AS geometry
             FROM layer
             ORDER BY ST_Hilbert(geom, {box})
-        ) TO '{out}' (
+        ) TO '{tmp}' (
             FORMAT PARQUET,
             GEOPARQUET_VERSION 'NONE',
             COMPRESSION ZSTD,
-            COMPRESSION_LEVEL 15,
-            ROW_GROUP_SIZE {rows},
+            COMPRESSION_LEVEL 1,
+            ROW_GROUP_SIZE 1048576,
             KV_METADATA {{geo: '{geo}'}}
         )
     """)
+    rewrite(tmp, out)
+    tmp.unlink()
 
     size = out.stat().st_size
     groups, largest = con.execute(f"""
@@ -265,7 +286,7 @@ def write_layer(con, name: str, select_sql: str, source: str, out_dir: Path,
             SELECT row_group_id, sum(total_compressed_size) AS b
             FROM parquet_metadata('{out}') GROUP BY 1)
     """).fetchone()
-    note = "" if groups > 4 else "   <- too few rows to prune well"
+    note = "" if groups > 1 else "   (one group: the whole file is under the cap)"
     if not quiet:
         print(f"  {name}: {count:,} features, {size/1e6:.1f} MB, "
               f"{groups} row group(s), largest {largest/1e6:.1f} MB{note}")
@@ -298,19 +319,19 @@ def write_partitions(con, name: str, table: str, source: str, out_dir: Path) -> 
         names = [r[0] for r in con.execute(
             f"SELECT DISTINCT gaul0_name FROM {table} WHERE {PARTITION_COLUMN} = ? ORDER BY 1",
             [key]).fetchall()]
-        count = con.execute(
-            f"SELECT count(*) FROM {table} WHERE {PARTITION_COLUMN} = ?", [key]).fetchone()[0]
         e = write_layer(
             con, name,
             f"SELECT * FROM {table} WHERE {PARTITION_COLUMN} = '{key}'",
-            source, out_dir, feature_count=count, source_bytes=0,
+            source, out_dir,
             out=out_dir / f"{PARTITION_KEY}={key}" / f"{name}.parquet", quiet=True)
         entries.append({"country": key, "names": names, "features": e["features"],
                         "bytes": e["bytes"], "row_groups": e["row_groups"],
+                        "largest_row_group_bytes": e["largest_row_group_bytes"],
                         "sha256": e["sha256"]})
     total = sum(e["bytes"] for e in entries)
     print(f"  {name}: {len(entries)} per-country files, {total/1e6:.1f} MB, "
-          f"largest {max(e['bytes'] for e in entries)/1e6:.1f} MB")
+          f"largest {max(e['bytes'] for e in entries)/1e6:.1f} MB, largest row group "
+          f"{max(e['largest_row_group_bytes'] for e in entries)/1e6:.1f} MB")
     return {"name": name, "key": PARTITION_KEY, "column": PARTITION_COLUMN,
             "files": len(entries), "bytes": total, "entries": entries}
 
@@ -364,9 +385,29 @@ def verify(con, out_dir: Path, names: list[str]) -> None:
         if declared != actual:
             problems.append(f"{name}: declared bbox {declared} != actual {actual}")
 
+        # The rewrite must keep the native type: plain pyarrow writes a BLOB.
+        logical = con.execute(
+            f"SELECT logical_type FROM parquet_schema('{f}') WHERE name = 'geometry'"
+        ).fetchone()[0]
+        if not (logical and str(logical).startswith("GeometryType")):
+            problems.append(f"{name}: geometry logical type is {logical!r}, not GEOMETRY")
+
+        # Every group under the cap, unless it holds a single unit bigger
+        # than the cap on its own.
+        over = con.execute(f"""
+            SELECT count(*) FROM (
+                SELECT row_group_id, any_value(row_group_num_rows) AS n,
+                       sum(total_uncompressed_size) FILTER (WHERE path_in_schema = 'geometry') AS b
+                FROM parquet_metadata('{f}') GROUP BY 1)
+            WHERE n > 1 AND b > {GROUP_BYTES} * 1.1
+        """).fetchone()[0]
+        if over:
+            problems.append(f"{name}: {over} row group(s) over the {GROUP_BYTES >> 20} MiB cap")
+
     if problems:
         sys.exit("verification failed:\n  " + "\n  ".join(problems))
-    print(f"  verified {len(names)} files: one geo key, covering, bbox bounds, extent")
+    print(f"  verified {len(names)} files: one geo key, covering, bbox bounds, extent, "
+          f"GEOMETRY type, row groups under the cap")
 
 
 def main() -> None:
@@ -397,10 +438,8 @@ def main() -> None:
         cols = ", ".join(columns)
         con.execute(f"CREATE TEMP TABLE src_{lvl} AS "
                     f"SELECT {cols}, geom FROM ST_Read('{shp[lvl].as_posix()}')")
-        count = con.execute(f"SELECT count(*) FROM src_{lvl}").fetchone()[0]
         layers.append(write_layer(
-            con, lvl, f"SELECT * FROM src_{lvl}", SOURCE_ZIPS[lvl], args.out_dir,
-            feature_count=count, source_bytes=shp[lvl].stat().st_size))
+            con, lvl, f"SELECT * FROM src_{lvl}", SOURCE_ZIPS[lvl], args.out_dir))
         partitions.append(write_partitions(con, lvl, f"src_{lvl}", SOURCE_ZIPS[lvl],
                                            args.out_dir))
 
@@ -416,9 +455,7 @@ def main() -> None:
         GROUP BY ALL""")
     l0_source = "derived from " + SOURCE_ZIPS["L1"]
     layers.append(write_layer(
-        con, "L0_derived", "SELECT * FROM src_L0_derived", l0_source, args.out_dir,
-        feature_count=con.execute("SELECT count(*) FROM src_L0_derived").fetchone()[0],
-        source_bytes=shp["L1"].stat().st_size))
+        con, "L0_derived", "SELECT * FROM src_L0_derived", l0_source, args.out_dir))
     partitions.append(write_partitions(con, "L0_derived", "src_L0_derived", l0_source,
                                        args.out_dir))
 

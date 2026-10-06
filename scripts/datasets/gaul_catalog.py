@@ -436,11 +436,12 @@ and [GAUL_2024_L2.zip]({SOURCE_ZIPS['L2']}). The [converter]({REPO_URL})
 reads each with DuckDB, keeps every FAO attribute column under its FAO name,
 adds a `bbox` per row and writes GeoParquet 2.0 (zstd) with the bbox declared
 as the `covering`. L0 is `ST_Union_Agg` of the L1 units per `gaul0_code`; its
-total area equals L1's. The whole-world L1 and L2 files were then rewritten
-with pyarrow and geoarrow into 15 and 24 row groups of at most 42 MB (DuckDB
-writes none under 2,048 rows), same rows, GAUL codes as BIGINT. Each file's
-footer is verified, and the manifest records size and sha256, which this
-catalog publishes as `file:size` and `file:checksum`."""
+total area equals L1's. pyarrow and geoarrow then cut every file into row
+groups of at most 4 MiB of geometry (DuckDB writes none under 2,048 rows),
+so a bbox filter reads only the groups around the window. Each file's
+footer, geometry type and row groups are verified, and the manifest records
+size and sha256, which this catalog publishes as `file:size` and
+`file:checksum`."""
 
 
 def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:

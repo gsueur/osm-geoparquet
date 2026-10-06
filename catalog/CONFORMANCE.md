@@ -88,11 +88,11 @@ each describing two layouts of the same rows: the whole-world file as the
 `data` asset, and the per-country files under `country=<iso3>/` through the
 partition extension (`partition:glob`, one key) and one `data-<iso3>` asset
 each. The release is static and the files immutable, so every asset carries
-`file:size` and `file:checksum` from the converter's manifest. The whole-world
-L1 and L2 files were rewritten by hand on 2026-09-23 (pyarrow + geoarrow, row
-groups of at most 42 MB, GAUL codes as BIGINT); the manifest entries and the
-catalog were regenerated from the published files afterwards, so sizes,
-checksums and column types describe what is online.
+`file:size` and `file:checksum` from the converter's manifest. Every file,
+whole-world and per-country, has row groups of at most 4 MiB of geometry
+(pyarrow + geoarrow after DuckDB), and the manifest and the catalog are
+rendered from the same run, so sizes, checksums and column types describe
+what is online.
 
 `.github/workflows/dataset-gaul.yml` renders and checks the catalog on every
 run (stage `build`) and uploads it after the data (stage `publish`), so the
