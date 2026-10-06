@@ -174,6 +174,20 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
   line-height: 1.3;
 }
 .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 600px) {
+  /* The Copy button gets its own row: on a narrow screen the first line of
+     code runs under it, and padding-right only applies at the end of a
+     scrolled line. */
+  .code-block pre { padding-right: 1.1rem; padding-top: 2.6rem; }
+  /* The themes table: tighter cells. Theme names break only after an
+     underscore (<wbr> in the markup). */
+  table { font-size: .85rem; }
+  th, td { padding: .4rem .45rem; }
+}
+@media (max-width: 360px) {
+  table { font-size: .8rem; }
+  th, td { padding: .4rem .3rem; }
+}
 .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
 
 .cta {
@@ -344,16 +358,16 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 <tr><td><code>waterways</code></td><td>linestring</td><td>waterway, name, width, intermittent, tunnel</td></tr>
 <tr><td><code>water</code></td><td>polygon</td><td>water, natural, name, intermittent, salt</td></tr>
 <tr><td><code>landuse</code></td><td>polygon</td><td>landuse, name, operator</td></tr>
-<tr><td><code>natural_areas</code></td><td>polygon</td><td>natural, name, wetland</td></tr>
-<tr><td><code>natural_features</code></td><td>point</td><td>natural, name, ele, prominence</td></tr>
+<tr><td><code>natural_<wbr>areas</code></td><td>polygon</td><td>natural, name, wetland</td></tr>
+<tr><td><code>natural_<wbr>features</code></td><td>point</td><td>natural, name, ele, prominence</td></tr>
 <tr><td><code>places</code></td><td>point</td><td>place, name, population, admin_level, capital</td></tr>
 <tr><td><code>boundaries</code></td><td>polygon</td><td>boundary, admin_level, name, iso3166_*</td></tr>
 <tr><td><code>pois</code></td><td>point</td><td>amenity, shop, tourism, leisure, office, healthcare</td></tr>
-<tr><td><code>amenities_polygons</code></td><td>polygon</td><td>amenity, shop, tourism, leisure, brand</td></tr>
+<tr><td><code>amenities_<wbr>polygons</code></td><td>polygon</td><td>amenity, shop, tourism, leisure, brand</td></tr>
 <tr><td><code>power</code></td><td>point, linestring, polygon</td><td>power, name, voltage, voltages, frequency, operator, cables</td></tr>
 <tr><td><code>aeroways</code></td><td>point, linestring, polygon</td><td>aeroway, name, iata, icao, ref, surface</td></tr>
 <tr><td><code>barriers</code></td><td>point, linestring</td><td>barrier, name, access, height, material</td></tr>
-<tr><td><code>public_transport</code></td><td>point</td><td>public_transport, highway, railway, name, operator</td></tr>
+<tr><td><code>public_<wbr>transport</code></td><td>point</td><td>public_transport, highway, railway, name, operator</td></tr>
 </tbody>
 </table>
 
