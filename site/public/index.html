@@ -290,6 +290,15 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 </div>
 <p>More in the <a href="https://www.geomermaids.com/cookbook/parquetry"><strong>Querying Parquetry cookbook</strong></a>: spatial joins, nearest features, whole-continent queries through our anonymous S3 endpoint, GeoPandas and QGIS. New to DuckDB? Start with the <a href="https://www.geomermaids.com/cookbook/reading">Reading cookbook</a>.</p>
 
+<h3 id="agents">Ask an AI agent</h3>
+<p>The <a href="https://github.com/gsueur/parquetry-skills"><strong>parquetry skill</strong></a> lets an AI agent answer spatial questions by combining these datasets: <em>What is the predominant land use in Hérault?</em> <em>How many buildings in Eastern Massachusetts are in the 100-year floodplain?</em> <em>Which substations are within 5 km of this site?</em> The agent writes and runs the DuckDB query, then answers with the definitions it chose, the coverage gaps, the data dates and the credits. In Claude Code:</p>
+<div class="code-block">
+<pre><code>/plugin marketplace add gsueur/parquetry-skills
+/plugin install parquetry@geomermaids</code></pre>
+<button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
+</div>
+<p>The skill is plain Markdown with tested queries, so any agent that can run DuckDB can use it.</p>
+
 <hr>
 
 <h2 id="osm">OpenStreetMap, North America</h2>
