@@ -181,6 +181,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 3rem 0 2rem; }
   border-radius: 8px; padding: 1.25rem 1.5rem; margin: 2rem 0 1rem;
 }
 .cta h2 { margin-top: 0; color: var(--accent); }
+.agent-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0 .5rem; }
+.agent-cards figure { margin: 0; }
+.agent-cards a { display: block; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); line-height: 0; }
+.agent-cards img { width: 100%; height: auto; display: block; }
+.agent-cards figcaption { color: var(--muted); font-size: .85rem; margin-top: .45rem; line-height: 1.4; }
+@media (max-width: 600px) { .agent-cards { grid-template-columns: 1fr; } }
 footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
 footer a { color: var(--muted); }
 </style>
@@ -297,7 +303,23 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 /plugin install parquetry@geomermaids</code></pre>
 <button class="copy-btn" type="button" title="Copy to clipboard">Copy</button>
 </div>
-<p>The skill is plain Markdown with tested queries, so any agent that can run DuckDB can use it.</p>
+<p>The skill is plain Markdown with tested queries, so any agent that can run DuckDB can use it. Two answers it gave, mapped from the same files:</p>
+<div class="agent-cards">
+<figure>
+  <a href="/agent-boston-2400.webp" target="_blank" rel="noopener"><picture>
+    <source type="image/webp" srcset="/agent-boston-600.webp 600w, /agent-boston-1200.webp 1200w, /agent-boston-2400.webp 2400w" sizes="(max-width: 600px) 100vw, 400px">
+    <img src="/agent-boston-1200.png" width="1200" height="1200" loading="lazy" decoding="async" alt="Map of the Boston waterfront: OpenStreetMap buildings that touch a FEMA 1% annual-chance flood zone are highlighted. Answer card: 95,264 buildings in Eastern Massachusetts.">
+  </picture></a>
+  <figcaption>Eastern Massachusetts: 95,264 buildings touch a 100-year flood zone. FEMA NFHL and OpenStreetMap, Boston waterfront shown.</figcaption>
+</figure>
+<figure>
+  <a href="/agent-herault-2400.webp" target="_blank" rel="noopener"><picture>
+    <source type="image/webp" srcset="/agent-herault-600.webp 600w, /agent-herault-1200.webp 1200w, /agent-herault-2400.webp 2400w" sizes="(max-width: 600px) 100vw, 400px">
+    <img src="/agent-herault-1200.png" width="1200" height="1200" loading="lazy" decoding="async" alt="Land cover map of Hérault: forest and garrigue in the hills, vineyards on the plain, lagoons on the coast. Answer card: 49% forest and semi-natural land, 23.8% vineyards.">
+  </picture></a>
+  <figcaption>Hérault: 49% forest and semi-natural land, while vineyards are the largest single class at 23.8%. CORINE Land Cover 2018 clipped to FAO GAUL.</figcaption>
+</figure>
+</div>
 
 <hr>
 
