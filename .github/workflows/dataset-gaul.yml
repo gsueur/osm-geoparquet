@@ -34,10 +34,10 @@ on:
 # GAUL 2024 is a static release. gaul.py caps row groups at 4 MiB of
 # geometry (pyarrow + geoarrow, since DuckDB writes none under 2,048 rows),
 # for the whole-world files and the per-country ones alike, so a publish
-# re-run reproduces what is online. A publish replaces bytes that were
-# uploaded as immutable: purge the Cloudflare cache for
-# parquetry.geomermaids.com/gaul/ right after, or a reader can combine a
-# cached footer with new pages.
+# re-run reproduces what is online. The parquet files are uploaded as
+# immutable. Cloudflare does not cache them (the files Worker answers every
+# request from R2), but a browser can: after a publish that changes bytes, a
+# browser-based reader that saw the old file needs a hard reload.
 
 concurrency:
   group: dataset-gaul

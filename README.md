@@ -66,7 +66,8 @@ and one file per country (`country=<iso3>/L1.parquet`) for small reads.
 Row groups are capped at 4 MiB of geometry (pyarrow and geoarrow, since
 DuckDB writes none under 2,048 rows), so a bbox filter on one point reads a
 couple of MB even in the largest country file. A `publish` re-run replaces
-immutable bytes: read the note at the top of `dataset-gaul.yml` first. Every file has a bbox covering and a sha256 in
+bytes uploaded as immutable: read the note at the top of `dataset-gaul.yml`
+first. Every file has a bbox covering and a sha256 in
 `_manifest.json`. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
 `scripts/datasets/gaul_catalog.py`. The licence obligations (citation,
