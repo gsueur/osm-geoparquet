@@ -147,7 +147,7 @@ footer a { color: var(--muted); }
 <h1><span class="brand">FEMA flood zones</span>, as GeoParquet</h1>
 <p class="expansion">The National Flood Hazard Layer, one file per county, kept current every day</p>
 
-<p class="lead">FEMA publishes its flood maps one county at a time, as zipped shapefiles, and replaces a county whenever its map changes. Here they are as <strong>GeoParquet you query from a URL</strong>: one file per county delivery, checked against FEMA's list every morning, and replaced the day FEMA republishes it.</p>
+<p class="lead">FEMA publishes its flood maps one county at a time, as zipped shapefiles, and replaces a county whenever its map changes. Here they are as <strong>GeoParquet you query from a URL</strong>: one file per county delivery, checked against FEMA's list three times a day, and replaced the day FEMA republishes it.</p>
 <p>Flood zones are cut into pieces of at most 100 vertices, so finding the zone under a point reads one small row group, not a parish-sized polygon. Public domain, like FEMA's own data.</p>
 
 <div class="stats">
@@ -181,14 +181,14 @@ footer a { color: var(--muted); }
 </div>
 
 <h2 id="updates">Updated every day</h2>
-<p>Every morning a job reads FEMA's list of county-wide deliveries, compares it with the published index, and runs the pipeline only on the counties FEMA republished: download, read the flood layer, normalize, cut into pieces, check rows and geometries, replace the file. A quiet day changes nothing. The last replacements, from <a href="https://parquetry.geomermaids.com/nfhl/latest/changes.json"><code>changes.json</code></a>:</p>
+<p>Three times a day a job reads FEMA's list of county-wide deliveries, compares it with the published index, and runs the pipeline only on the counties FEMA republished: download, read the flood layer, normalize, cut into pieces, check rows and geometries, replace the file. A quiet day changes nothing. The last replacements, from <a href="https://parquetry.geomermaids.com/nfhl/latest/changes.json"><code>changes.json</code></a>:</p>
 <div class="table-wrap">
 <table id="changes">
   <thead><tr><th>Checked</th><th>County</th><th>Delivery</th><th>FEMA date</th><th>Was</th></tr></thead>
   <tbody><tr><td colspan="5" class="loading">Loading…</td></tr></tbody>
 </table>
 </div>
-<p>FEMA often republishes a county without changing its zones: the date moves, the pieces stay the same. Deliveries that carry no flood layer at all are listed in <a href="https://parquetry.geomermaids.com/nfhl/latest/skipped.json"><code>skipped.json</code></a> and tried again when FEMA replaces them. The first run of each month also freezes a copy of the whole dataset, and the last three are kept.</p>
+<p>FEMA often republishes a county without changing its zones: the date moves, the pieces stay the same. Deliveries that carry no flood layer at all are listed in <a href="https://parquetry.geomermaids.com/nfhl/latest/skipped.json"><code>skipped.json</code></a> and tried again when FEMA replaces them. Only the current version is kept: this list is the history.</p>
 
 <h2 id="how">How it is built</h2>
 <ol class="steps">
@@ -234,7 +234,6 @@ GROUP BY ALL ORDER BY ALL;</code></pre>
   <li><strong>Browse the files:</strong> <a href="https://parquetry.geomermaids.com/nfhl/">parquetry.geomermaids.com/nfhl/</a></li>
   <li><strong>Portolan catalog</strong> (STAC, column docs, agent guide): <a href="https://parquetry.geomermaids.com/nfhl/catalog/catalog.json">nfhl/catalog/</a></li>
   <li><strong>On a map, on your desktop:</strong> <a href="https://www.geomermaids.com/geopq-workbench">GeoPQ Workbench</a> has it built in as a repository: pick a state, its counties load as layers.</li>
-  <li><strong>Monthly copies:</strong> <a href="https://parquetry.geomermaids.com/nfhl/snapshots.json">snapshots.json</a></li>
   <li><strong>Credits and what was changed:</strong> <a href="https://parquetry.geomermaids.com/nfhl/latest/ATTRIBUTION.txt">ATTRIBUTION.txt</a></li>
 </ul>
 

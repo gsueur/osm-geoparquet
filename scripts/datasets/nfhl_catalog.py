@@ -515,9 +515,8 @@ def root_readme(root: dict, col: dict, manifest: dict) -> str:
 
 `{PUBLIC_DATA}/{LATEST}/` is checked against FEMA's list every day and a
 delivery FEMA republished replaces its file (`changes.json` lists them by
-day). The first run of each month also freezes a copy under
-`{PUBLIC_DATA}/<YYYY-MM-DD>/`; `{PUBLIC_DATA}/snapshots.json` lists the
-copies kept. This catalog describes `{LATEST}/`.
+day). It is the only version: no frozen copies are kept. This catalog
+describes `{LATEST}/`.
 
 ## Access
 

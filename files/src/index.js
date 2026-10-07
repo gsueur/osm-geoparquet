@@ -133,20 +133,38 @@ async function listAllAtPrefix(env, prefix) {
   };
 }
 
+// A folder whose files are named by code (NFHL: 48201C.parquet) can say
+// what each one is: `labels` in its _manifest.json maps a theme, the file
+// name without .parquet, to a readable name ("Harris"). The listing shows
+// it beside the file and sorts by it, so a reader can find a county by
+// name. A folder without one renders as before.
+async function readLabels(env, prefix, objects) {
+  if (!objects.some((o) => o.key === prefix + "_manifest.json")) return {};
+  try {
+    const obj = await env.BUCKET.get(prefix + "_manifest.json");
+    const labels = obj ? (await obj.json()).labels : null;
+    return labels && typeof labels === "object" ? labels : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 async function renderListing(prefix, env) {
   const list = await listAllAtPrefix(env, prefix);
+  const labels = await readLabels(env, prefix, list.objects);
+  const labelOf = (name) =>
+    name.endsWith(".parquet") ? labels[name.slice(0, -".parquet".length)] : undefined;
 
   const folders = list.delimitedPrefixes
     .map((p) => p.slice(prefix.length))
     .sort(folderCompare);
   const files = list.objects
     .filter((o) => o.key !== prefix)
-    .map((o) => ({
-      name: o.key.slice(prefix.length),
-      size: o.size,
-      modified: o.uploaded,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .map((o) => {
+      const name = o.key.slice(prefix.length);
+      return { name, label: labelOf(name), size: o.size, modified: o.uploaded };
+    })
+    .sort((a, b) => (a.label ?? a.name).localeCompare(b.label ?? b.name));
 
   const html = renderListingHtml(prefix, folders, files, list.truncated);
   return new Response(html, {
@@ -198,7 +216,6 @@ const DATASETS = {
       "one file per FEMA county delivery under latest/state=XX/, indexed by latest/counties.parquet, " +
       "updated daily. Zones are cut into pieces of at most 100 vertices.",
     attribution: "nfhl/latest/ATTRIBUTION.txt",
-    snapshots: "nfhl/snapshots.json",
   },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
@@ -267,7 +284,9 @@ function renderListingHtml(prefix, folders, files, truncated) {
       : "";
     rows.push(
       `<tr>` +
-        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a></td>` +
+        `<td><a href="${escapeHtml(href)}">${escapeHtml(f.name)}</a>` +
+        (f.label ? ` <span class="label">${escapeHtml(f.label)}</span>` : "") +
+        `</td>` +
         `<td class="num">${formatBytes(f.size)}</td>` +
         `<td class="num">${f.modified.toISOString().slice(0, 19).replace("T", " ")}Z</td>` +
         `<td class="action">${viewCell}</td>` +
@@ -339,6 +358,7 @@ const LISTING_CSS = `
   a { color: #0a7cff; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .note { opacity: .7; margin-top: 1rem; }
+  .label { margin-left: .6rem; font-family: system-ui, sans-serif; }
   a.view {
     padding: 0 .5rem;
     font-size: .78rem;
