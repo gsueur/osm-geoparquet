@@ -11,17 +11,18 @@
 #
 # The index is the memory: a run that fails leaves it unchanged, and the
 # next run picks up what this one missed. The whole country is built once,
-# locally (nfhl.py bootstrap).
-#
-# The first run of a month also freezes latest/ under nfhl/<YYYY-MM-DD>/,
-# copied server side, and prunes the oldest copy past three.
+# locally (nfhl.py bootstrap). latest/ is the only version: no frozen copies.
 
 name: dataset-nfhl
 
 on:
   schedule:
-    # FEMA's portal stamps new ZIPs overnight US time. Off the hour on purpose.
-    - cron: "37 9 * * *"
+    # Three a day, off the hour. GitHub started the single 09:37 run 5 to 9
+    # hours late in October 2026, and may drop a scheduled run outright, so
+    # one slot a day did not mean one update a day. A run that finds nothing
+    # takes a minute and changes nothing; the concurrency group below keeps
+    # two from overlapping.
+    - cron: "37 5,11,17 * * *"
   workflow_dispatch:
     inputs:
       max:
@@ -114,20 +115,8 @@ jobs:
             --header-upload "$CACHE" --transfers 8 --stats-one-line
           rclone copy "$out/latest" "$REMOTE/latest" --exclude "state=*/*.parquet" --ignore-times \
             --header-upload "$CACHE" --transfers 16 --stats-one-line
-          snap=$(cat "$out/snapshot_new.txt")
-          if [ -n "$snap" ]; then
-            echo "freezing latest/ as $snap"
-            rclone copy "$REMOTE/latest" "$REMOTE/$snap" --transfers 32 --checkers 32 --stats-one-line
-          fi
           rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --ignore-times --header-upload "$CACHE"
-          while read -r old; do
-            [ -n "$old" ] || continue
-            case "$old" in
-              20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]/) echo "pruning $old"; rclone purge "$REMOTE/$old" ;;
-              *) echo "not a snapshot path: '$old', left alone"; exit 1 ;;
-            esac
-          done < "$out/snapshot_prune.txt"
 
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: counts and the index checksum
@@ -157,7 +146,7 @@ jobs:
 
       # Last, so a delivery that failed does not hold back the others: they
       # are published, the failed one stays as it was and is tried again
-      # tomorrow, and the run goes red.
+      # by the next run, and this one goes red.
       - name: Deliveries that failed
         run: |
           jq -e '.failed | length == 0' "$WORK/out/run.json" >/dev/null && exit 0

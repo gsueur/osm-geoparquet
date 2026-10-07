@@ -17,7 +17,7 @@ few deliveries FEMA republished:
                                                parquetry repository contract
   <out>/latest/_manifest.json, changes.json, skipped.json, ATTRIBUTION.txt
   <out>/index.json, snapshots.json             the repository files: one dataset per
-                                               state; latest/ plus a frozen copy a month
+                                               state; latest/ only, no frozen copies
 
 Reading, normalizing and cutting a delivery is the pipeline of
 https://github.com/gsueur/nfhl-geoparquet-workshop (imported by `update`
@@ -70,7 +70,6 @@ BBOX = ("{xmin: ST_XMin(geometry), ymin: ST_YMin(geometry), "
 # FEMA lists about 2,500 county-wide deliveries. Far fewer means the portal
 # page came back truncated, not that counties were withdrawn.
 MIN_LISTED = 2_400
-KEEP_SNAPSHOTS = 3        # frozen monthly copies; older ones are pruned
 KEEP_RUNS = 120           # runs kept in changes.json
 NO_LAYER = "not in archive"   # the pipeline's error for a delivery without S_FLD_HAZ_AR
 # The index columns, in order. path is relative to latest/.
@@ -263,25 +262,13 @@ def get_json(url: str, default):
         raise
 
 
-def exists(url: str) -> bool:
-    if not url.startswith(("http://", "https://")):
-        return Path(url).exists()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=60):
-            return True
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return False
-        raise
-
-
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
 def write_repository(con: duckdb.DuckDBPyConnection, out: Path, rows: list[dict], crs: dict,
-                     today: str, snapshots: list[dict], changes: dict, skipped: dict) -> None:
+                     today: str, changes: dict, skipped: dict) -> None:
     """Everything but the delivery files, rebuilt from the index rows."""
     latest = out / LATEST
     rows = sorted(rows, key=lambda r: r["path"])
@@ -298,8 +285,11 @@ def write_repository(con: duckdb.DuckDBPyConnection, out: Path, rows: list[dict]
         write_json(latest / f"state={code}" / "_manifest.json", {
             "country": "US", "state": code, "state_name": name, "updated": today,
             "total_features": sum(e["features"] for e in entries),
-            # The workbench opens <theme>.parquet beside the manifest.
+            # The workbench opens <theme>.parquet beside the manifest, so a
+            # theme is the file name, the DFIRM id. `labels` names the county
+            # for the workbench list and the bucket's directory listing.
             "themes": {e["dfirm_id"]: e["features"] for e in entries},
+            "labels": {e["dfirm_id"]: e["county"] for e in entries},
             "files": [{"file": e["path"].split("/", 1)[1], "county": e["county"],
                        "dfirm_id": e["dfirm_id"], "fema_update_date": e["fema_update_date"],
                        "features": e["features"], "zones": e["zones"], "bytes": e["bytes"],
@@ -329,21 +319,10 @@ def write_repository(con: duckdb.DuckDBPyConnection, out: Path, rows: list[dict]
     (latest / "ATTRIBUTION.txt").write_text(attribution(
         today, total, zones, len(rows), len(by_state), dates[0], dates[-1], shared, shared_in))
     write_json(out / "index.json", {"datasets": datasets})
-    write_json(out / "snapshots.json", {"latest": f"{LATEST}/", "snapshots": snapshots})
-
-
-def plan_snapshots(out: Path, published: list[dict], today: str) -> list[dict]:
-    """A frozen copy of latest/ on the first run of each month, KEEP_SNAPSHOTS
-    kept. The workflow makes the copy (server side) and the prune from the
-    two files written here."""
-    snaps = [s for s in published if s["path"] != f"{LATEST}/"]
-    new = not any(s["date"][:7] == today[:7] for s in snaps)
-    if new:
-        snaps.append({"date": today, "path": f"{today}/"})
-    snaps.sort(key=lambda s: s["date"], reverse=True)
-    (out / "snapshot_new.txt").write_text(f"{today}/\n" if new else "")
-    (out / "snapshot_prune.txt").write_text("".join(s["path"] + "\n" for s in snaps[KEEP_SNAPSHOTS:]))
-    return snaps[:KEEP_SNAPSHOTS]
+    # latest/ is the only version: it follows FEMA's current maps, and
+    # changes.json plus each row's fema_update_date say what changed when.
+    # The file stays because repository readers (the workbench) look for it.
+    write_json(out / "snapshots.json", {"latest": f"{LATEST}/", "snapshots": []})
 
 
 def attribution(today: str, pieces: int, zones: int, counties: int, states: int,
@@ -425,8 +404,7 @@ This data is packaged and hosted by Geomermaids:
 # ---------- commands ----------
 
 def bootstrap(args) -> None:
-    """Package a whole local build into latest/, written from scratch. No
-    snapshot: the first daily run freezes the month's."""
+    """Package a whole local build into latest/, written from scratch."""
     out = args.out_dir
     if out.exists():
         shutil.rmtree(out)
@@ -456,7 +434,7 @@ def bootstrap(args) -> None:
             print(f"  {i:,}/{len(files):,} deliveries, {time.monotonic() - t0:,.0f} s", flush=True)
     assert len(rows) == len(zips), f"{len(rows):,} files, {len(zips):,} subdivided in the control database"
     changes = {"runs": [{"date": args.date, "bootstrap": len(rows)}]}
-    write_repository(con, out, rows, crs, args.date, [], changes, skipped)
+    write_repository(con, out, rows, crs, args.date, changes, skipped)
     print(f"  {len(rows):,} deliveries, {sum(r['features'] for r in rows):,} pieces, "
           f"{sum(r['bytes'] for r in rows) / 1e9:.1f} GB, {len(skipped)} skipped", flush=True)
 
@@ -486,10 +464,6 @@ def update(args) -> None:
     rows = {r["dfirm_id"]: r for r in read_index(con, f"{args.public}/{LATEST}/{INDEX}")}
     changes = get_json(f"{args.public}/{LATEST}/changes.json", {"runs": []})
     skipped = get_json(f"{args.public}/{LATEST}/skipped.json", {})
-    # Only snapshots of this layout (they hold the index): the 2026-09-30
-    # national-file snapshot is not one and is neither listed nor pruned here.
-    published = [s for s in get_json(f"{args.public}/snapshots.json", {}).get("snapshots", [])
-                 if exists(f"{args.public}/{s['path']}{INDEX}")]
     print(f"  published: {len(rows):,} deliveries, {len(skipped)} skipped", flush=True)
 
     listed = fema.list_datasets()
@@ -557,10 +531,9 @@ def update(args) -> None:
               f"{d['fema_update_date']}: {row['features']:,} pieces, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
 
-    snapshots = plan_snapshots(out, published, today)
     if run["replaced"] or run["added"] or run["skipped"] or run["failed"]:
         changes = {"runs": ([run] + changes.get("runs", []))[:KEEP_RUNS]}
-    write_repository(con, out, list(rows.values()), crs, today, snapshots, changes, skipped)
+    write_repository(con, out, list(rows.values()), crs, today, changes, skipped)
     write_json(out / "run.json", run)
     print(f"  replaced {len(run['replaced'])}, added {len(run['added'])}, "
           f"skipped {len(run['skipped'])}, failed {len(run['failed'])}", flush=True)

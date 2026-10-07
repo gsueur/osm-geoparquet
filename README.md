@@ -89,15 +89,15 @@ county-wide delivery (`state=<XX>/<DFIRM_ID>.parquet`), EPSG:4269 as FEMA
 delivers it, with an index of those files (`counties.parquet`: bbox, date,
 rows, sha256). FEMA replaces a delivery when it changes, about three a day
 on a day that has any, so the layout follows that unit: `dataset-nfhl.yml`
-runs daily, reads FEMA's list, runs the pipeline of
+runs three times a day, reads FEMA's list, runs the pipeline of
 [nfhl-geoparquet-workshop](https://github.com/gsueur/nfhl-geoparquet-workshop)
 (download, normalization, subdivision) on the deliveries republished since
 the index, and uploads only those files, then the index and the manifests.
 The script sorts each delivery along a Hilbert curve, writes the bbox
 covering, and checks that rows and geometries are the pipeline's.
 `changes.json` lists what each day replaced; `skipped.json` the listed
-deliveries that hold no flood layer. The first run of a month freezes a copy
-of `latest/` under `nfhl/<YYYY-MM-DD>/`, three kept. The whole country was
+deliveries that hold no flood layer. `latest/` is the only version, no
+frozen copies. The whole country was
 built once on a workstation (90 GB of FEMA ZIPs, `nfhl.py bootstrap`). Rows
 are pieces of at most 100 vertices, not FEMA zones: `ATTRIBUTION.txt` says
 how to count and reassemble zones, and that the files are not for official
