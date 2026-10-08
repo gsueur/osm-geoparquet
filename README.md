@@ -106,6 +106,21 @@ flood determinations. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/nfhl/catalog/catalog.json`, rendered by
 `scripts/datasets/nfhl_catalog.py` after each daily update.
 
+Geoconnex, the Internet of Water's US water reference system
+(`scripts/datasets/geoconnex.py`, workflow `dataset-geoconnex.yml`), sits
+under `https://parquetry.geomermaids.com/geoconnex/latest/` in two folders.
+`reference/` holds one file per reference layer with its full attributes:
+852,673 mainstem rivers (head to outlet, length, drainage area, downstream
+river) from the `ref_rivers` release, gages, dams and the aquifer layers
+from reference.geoconnex.us, and HU02 to HU12 watersheds and public water
+systems from Geoconnex's export. `providers/` holds one file per source
+Geoconnex harvests (Water Quality Portal sites, USGS monitoring locations,
+GNIS, the geologic map, state gages...), the export's columns unchanged.
+Geoconnex publishes that export as one unsorted 3.9 GB file with row groups
+of up to 416 MB; here each file is Hilbert sorted with a bbox covering and
+row groups of at most 4 MiB, so a small bbox reads a few MB. CC0. The job
+runs weekly and stops when neither the export nor the rivers release moved.
+
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to
 `https://parquetry.geomermaids.com/meta/repositories.json` by `meta.yml` when
