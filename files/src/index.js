@@ -179,6 +179,22 @@ async function renderListing(prefix, env) {
 
 const SITE_TITLE = "Great datasets, in GeoParquet";
 const SITE_SUBTITLE = "Open geospatial data, repacked cloud-native. Query straight from a URL.";
+const SKILL_URL = "https://github.com/gsueur/parquetry-skills";
+
+// On the bucket root only: the datasets are also reachable through an AI
+// agent, which turns a question into the DuckDB query over these files.
+const AGENT_BLOCK =
+  `<section class="agent">` +
+  `<h2>Ask an AI agent</h2>` +
+  `<p>The <a href="${SKILL_URL}">parquetry skill</a> lets an agent answer spatial questions ` +
+  `with these datasets: <em>how many buildings in Eastern Massachusetts are in the 100-year ` +
+  `floodplain?</em> <em>which dams are on the Colorado and its tributaries?</em> It writes and ` +
+  `runs the DuckDB query and answers with the definitions, coverage, dates and credits. ` +
+  `In Claude Code:</p>` +
+  `<pre>/plugin marketplace add gsueur/parquetry-skills\n/plugin install parquetry@geomermaids</pre>` +
+  `<p>Plain Markdown with tested queries, so any agent that can run DuckDB can use it. ` +
+  `A second skill writes optimized GeoParquet the way these files are written.</p>` +
+  `</section>`;
 
 // One entry per dataset prefix. The listing renders whichever one the path
 // falls under, so a page under clc/ describes Corine Land Cover and links
@@ -322,6 +338,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `<tbody>${rows.join("")}</tbody>` +
     `</table>` +
     truncNote +
+    (prefix ? "" : AGENT_BLOCK) +
     `<footer>` +
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
     (dataset?.attribution
@@ -331,7 +348,8 @@ function renderListingHtml(prefix, folders, files, truncated) {
       ? `<a href="/${escapeHtml(dataset.snapshots)}">snapshots.json</a> &middot; `
       : "") +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
-    `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a>` +
+    `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a> &middot; ` +
+    `<a href="${SKILL_URL}">AI agent skill</a>` +
     // The same folder on the S3 endpoint, so a page deep inside any dataset
     // shows its own s3:// path rather than sending the reader to the
     // endpoint's landing text for a generic example.
@@ -375,6 +393,10 @@ const LISTING_CSS = `
   }
   a.view:hover { color: #0a7cff; border-color: #0a7cff; text-decoration: none; }
   footer { margin-top: 2rem; font-size: .85rem; opacity: .6; }
+  .agent { margin-top: 2rem; padding: 1rem 1.2rem; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px; }
+  .agent h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  .agent p { margin: .5rem 0; font-family: system-ui, sans-serif; }
+  .agent pre { margin: .6rem 0; padding: .6rem .8rem; overflow-x: auto; border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); }
   footer a { color: inherit; }
 `;
 
