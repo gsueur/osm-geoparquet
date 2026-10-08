@@ -12,7 +12,9 @@
 # refreshed whenever the export or the rivers move, or on a manual run.
 #
 #   build    fetch, write and verify, upload nothing
-#   publish  the same, then upload (a scheduled run publishes)
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog at /geoconnex/catalog/
+#   catalog  only the catalog, rendered from the files already published
 #
 # Needs the R2 secrets the nightly uses.
 
@@ -26,7 +28,7 @@ on:
       stage:
         description: "build writes and verifies; publish also uploads"
         type: choice
-        options: [build, publish]
+        options: [build, publish, catalog]
         default: build
       force:
         description: "Rebuild even if upstream has not moved"
@@ -41,6 +43,7 @@ env:
   REMOTE: parquetry:parquetry/geoconnex
   PUBLIC: https://parquetry.geomermaids.com/geoconnex
   PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
   LC_ALL: C.UTF-8
   RCLONE_CONFIG_PARQUETRY_TYPE: s3
   RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
@@ -73,7 +76,9 @@ jobs:
           now=$(jq -c '[.export.etag, .mainstems.release]' upstream.json)
           was=$(echo "$live" | jq -c '[.export.etag, .mainstems.release]')
           echo "upstream $now, published $was"
-          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
             echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
           else
             echo "go=true" >> "$GITHUB_OUTPUT"
@@ -99,7 +104,7 @@ jobs:
           du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
 
       - name: rclone
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
         run: |
           curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
           rclone version | sed -n 1p
@@ -144,3 +149,17 @@ jobs:
           got=$(curl -sI "$PUBLIC/latest/reference/mainstems.parquet" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
           [ "$want" = "$got" ] || { echo "BAD mainstems: $got bytes online, $want built"; fail=1; }
           exit $fail
+
+      # After the data, so the catalog never links a file that is not there:
+      # counts, sizes and checksums are read back from what was just
+      # published. A catalog-only run renders it from the live files.
+      - name: Portolan catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/geoconnex_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/reference/catalog.json catalog/providers/catalog.json \
+                   catalog/reference/mainstems/collection.json catalog/providers/epa_wqp/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
