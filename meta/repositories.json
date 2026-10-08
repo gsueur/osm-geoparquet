@@ -31,6 +31,12 @@
       "attribution": "FEMA National Flood Hazard Layer"
     },
     {
+      "name": "Geomermaids Geoconnex: US rivers, gages, dams, watersheds, water monitoring sites",
+      "url": "https://parquetry.geomermaids.com/geoconnex",
+      "kind": "Parquetry",
+      "attribution": "Geoconnex, Internet of Water"
+    },
+    {
       "name": "Overture Maps (STAC)",
       "url": "https://stac.overturemaps.org",
       "kind": "Stac",
