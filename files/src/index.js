@@ -217,6 +217,12 @@ const DATASETS = {
       "updated daily. Zones are cut into pieces of at most 100 vertices.",
     attribution: "nfhl/latest/ATTRIBUTION.txt",
   },
+  "geoconnex/": {
+    subtitle: "Geoconnex (Internet of Water), US water reference features and the features data " +
+      "providers publish: latest/reference/ (rivers, gages, dams, watersheds, aquifers) and " +
+      "latest/providers/ (one file per source). Hilbert sorted, bbox covering. Checked weekly.",
+    attribution: "geoconnex/latest/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },

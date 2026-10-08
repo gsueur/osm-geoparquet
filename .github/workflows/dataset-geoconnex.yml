@@ -1,0 +1,146 @@
+# Geoconnex (Internet of Water): parquetry:parquetry/geoconnex/.
+#
+# Reference features (rivers, gages, dams, watersheds, aquifers, water
+# systems) and the features data providers publish (Water Quality Portal,
+# USGS monitoring locations, state gages...), republished as GeoParquet that
+# reads fast over HTTP. scripts/datasets/geoconnex.py documents the sources
+# and the layout.
+#
+# Weekly: a run first compares upstream (the export's ETag, the ref_rivers
+# release) with the published latest/_source.json and stops when nothing
+# moved. Gages and dams come from the API, which has no version: they are
+# refreshed whenever the export or the rivers move, or on a manual run.
+#
+#   build    fetch, write and verify, upload nothing
+#   publish  the same, then upload (a scheduled run publishes)
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-geoconnex
+
+on:
+  schedule:
+    - cron: "41 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads"
+        type: choice
+        options: [build, publish]
+        default: build
+      force:
+        description: "Rebuild even if upstream has not moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-geoconnex
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/geoconnex
+  PUBLIC: https://parquetry.geomermaids.com/geoconnex
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # latest/ is replaced in place: a short cache, so a reader never mixes a
+  # cached footer with new bytes for long.
+  CACHE: "Cache-Control: public, max-age=300"
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  geoconnex:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          uv run --project scripts python scripts/datasets/geoconnex.py upstream > upstream.json
+          cat upstream.json
+          live=$(curl -fsS "$PUBLIC/latest/_source.json" || echo '{}')
+          now=$(jq -c '[.export.etag, .mainstems.release]' upstream.json)
+          was=$(echo "$live" | jq -c '[.export.etag, .mainstems.release]')
+          echo "upstream $now, published $was"
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch
+        if: steps.check.outputs.go == 'true'
+        run: uv run --project scripts python scripts/datasets/geoconnex.py fetch --work-dir "$WORK/src"
+
+      - name: Build and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/geoconnex.py build \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+
+      - name: rclone
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet. A file
+      # no longer built (a source Geoconnex dropped) is removed last.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out/latest" "$REMOTE/latest" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copy "$out/latest" "$REMOTE/latest" --exclude "*.parquet" --ignore-times \
+            --header-upload "$CACHE"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --ignore-times --header-upload "$CACHE"
+          for dir in reference providers; do
+            comm -13 <(cd "$out/latest/$dir" && ls *.parquet | sort) \
+                     <(rclone lsf "$REMOTE/latest/$dir" --include "*.parquet" | sort) |
+            while read -r gone; do
+              echo "removing $dir/$gone, no longer built"
+              rclone deletefile "$REMOTE/latest/$dir/$gone"
+            done
+          done
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json snapshots.json latest/_source.json latest/ATTRIBUTION.txt \
+                   latest/reference/_manifest.json latest/providers/_manifest.json \
+                   latest/reference/mainstems.parquet latest/reference/gages.parquet \
+                   latest/providers/epa_wqp.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          want=$(stat -c %s "$WORK/out/latest/reference/mainstems.parquet")
+          got=$(curl -sI "$PUBLIC/latest/reference/mainstems.parquet" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
+          [ "$want" = "$got" ] || { echo "BAD mainstems: $got bytes online, $want built"; fail=1; }
+          exit $fail
