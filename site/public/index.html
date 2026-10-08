@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>geomermaids · GeoParquet</title>
 
-<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover and FEMA flood zones. No account, no download.">
+<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover, FEMA flood zones and Geoconnex US water features. No account, no download.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://geoparquet.geomermaids.com/">
 <meta property="og:title" content="geomermaids · GeoParquet: open datasets you query from a URL">
-<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover and FEMA flood zones in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
+<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover, FEMA flood zones and Geoconnex US water features in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
 <meta property="og:image" content="https://geoparquet.geomermaids.com/logo-384.png">
 <meta property="og:image:width" content="384">
 <meta property="og:image:height" content="384">
@@ -58,7 +58,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 main { max-width: 820px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
-.topnav { display: flex; justify-content: flex-end; margin-bottom: 1rem; font-size: .9rem; }
+.topnav { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .4rem 1.2rem; margin-bottom: 1rem; font-size: .9rem; }
+.hero-agent { margin: -.5rem 0 1.5rem; padding: .7rem 1rem; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; }
+.hero-agent a { font-weight: 600; }
 .topnav a { color: var(--muted); text-decoration: none; }
 .topnav a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .hero-logo { width: 96px; height: 96px; display: block; margin: 0 0 1rem; border-radius: 8px; }
@@ -209,6 +211,8 @@ footer a { color: var(--muted); }
 <main>
 
 <nav class="topnav">
+  <a href="#datasets">Datasets</a>
+  <a href="#agents">Ask an AI agent</a>
   <a href="https://www.geomermaids.com" rel="noopener">geomermaids.com&nbsp;↗</a>
 </nav>
 
@@ -222,6 +226,9 @@ footer a { color: var(--muted); }
 <h1><span class="brand">geomermaids</span> · GeoParquet</h1>
 <p class="sub">
 Open geospatial datasets in <strong>GeoParquet 2.0</strong>, free to use and <strong>queryable straight from a URL</strong>. No account, no key, no download step: your query engine reads only the columns and row groups it needs, over plain HTTPS.
+</p>
+<p class="hero-agent">
+Or ask an AI agent: the parquetry skill turns a spatial question into the query over these files and answers with the numbers, definitions and credits. <a href="#agents">Install it in Claude Code&nbsp;↓</a>
 </p>
 
 <h2 id="datasets">The datasets</h2>
@@ -252,6 +259,11 @@ Open geospatial datasets in <strong>GeoParquet 2.0</strong>, free to use and <st
     <h4><a href="https://parquetry.geomermaids.com/nfhl/">FEMA National Flood Hazard Layer</a></h4>
     <p>US flood zones from 2,502 county deliveries in the 50 states and Puerto Rico: 5.8 million zones with their FEMA zone, subtype and base flood elevation, cut into 95.6 million pieces of at most 100 vertices for fast point lookups. One file per FEMA county delivery (<code>state=LA/22071C.parquet</code>) and an index of them (<code>counties.parquet</code>), updated daily as FEMA republishes. Not for official flood determinations.</p>
     <p class="meta"><code>nfhl/latest/</code> · 2,502 county files · updated daily · public domain · <a href="https://nfhl.geomermaids.com">nfhl.geomermaids.com</a></p>
+  </div>
+  <div class="dataset">
+    <h4><a href="https://parquetry.geomermaids.com/geoconnex/">Geoconnex, US water features</a></h4>
+    <p>The <a href="https://geoconnex.us">Internet of Water</a>'s reference features for US water data: 852,673 rivers from head to outlet, linked into a network, 98,534 dams, 203,525 stream gages, watersheds HU02 to HU12 and aquifers. Plus 4.6 million water monitoring sites (Water Quality Portal, USGS), each with a URI that leads to its data. One file per layer or source, checked weekly.</p>
+    <p class="meta"><code>geoconnex/latest/</code> · 30 files, 3.4 GB · weekly · CC0</p>
   </div>
 </div>
 
@@ -311,7 +323,7 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 <p>More in the <a href="https://www.geomermaids.com/cookbook/parquetry"><strong>Querying Parquetry cookbook</strong></a>: spatial joins, nearest features, whole-continent queries through our anonymous S3 endpoint, GeoPandas and QGIS. New to DuckDB? Start with the <a href="https://www.geomermaids.com/cookbook/reading">Reading cookbook</a>.</p>
 
 <h3 id="agents">Ask an AI agent</h3>
-<p>The <a href="https://github.com/gsueur/parquetry-skills"><strong>parquetry skill</strong></a> lets an AI agent answer spatial questions by combining these datasets: <em>What is the predominant land use in Hérault?</em> <em>How many buildings in Eastern Massachusetts are in the 100-year floodplain?</em> <em>Which substations are within 5 km of this site?</em> The agent writes and runs the DuckDB query, then answers with the definitions it chose, the coverage gaps, the data dates and the credits. In Claude Code:</p>
+<p>The <a href="https://github.com/gsueur/parquetry-skills"><strong>parquetry skill</strong></a> lets an AI agent answer spatial questions by combining these datasets: <em>What is the predominant land use in Hérault?</em> <em>How many buildings in Eastern Massachusetts are in the 100-year floodplain?</em> <em>Which substations are within 5 km of this site?</em> <em>Which dams are on the Colorado and its tributaries?</em> The agent writes and runs the DuckDB query, then answers with the definitions it chose, the coverage gaps, the data dates and the credits. In Claude Code:</p>
 <div class="code-block">
 <pre><code>/plugin marketplace add gsueur/parquetry-skills
 /plugin install parquetry@geomermaids</code></pre>
