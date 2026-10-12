@@ -239,6 +239,12 @@ const DATASETS = {
       "latest/providers/ (one file per source). Hilbert sorted, bbox covering. Checked weekly.",
     attribution: "geoconnex/latest/ATTRIBUTION.txt",
   },
+  "census/": {
+    subtitle: "US Census Bureau TIGER/Line, the national GeoPackages as GeoParquet and PMTiles: " +
+      "one file per layer under tiger/<year>/<product>/, columns unchanged, NAD83. " +
+      "Starting with the legislative areas. census.geomermaids.com",
+    attribution: "census/tiger/2026/legislative/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },

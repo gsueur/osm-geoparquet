@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Rounded square background in the brand accent green -->
+  <rect width="32" height="32" rx="6" fill="#0b6e4f"/>
+  <!-- Isometric cube / parquet tile: three rhombi, top face lightest -->
+  <!-- Top face -->
+  <polygon points="16,6 25,11 16,16 7,11" fill="#7fe5bd"/>
+  <!-- Left face -->
+  <polygon points="7,11 16,16 16,26 7,21" fill="#4fd1a3"/>
+  <!-- Right face -->
+  <polygon points="25,11 16,16 16,26 25,21" fill="#2aa47a"/>
+</svg>

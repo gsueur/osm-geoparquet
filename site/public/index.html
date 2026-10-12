@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>geomermaids · GeoParquet</title>
 
-<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover, FEMA flood zones and Geoconnex US water features. No account, no download.">
+<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover, FEMA flood zones, Geoconnex US water features and US Census boundaries. No account, no download.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://geoparquet.geomermaids.com/">
 <meta property="og:title" content="geomermaids · GeoParquet: open datasets you query from a URL">
-<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover, FEMA flood zones and Geoconnex US water features in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
+<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover, FEMA flood zones, Geoconnex US water features and US Census boundaries in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
 <meta property="og:image" content="https://geoparquet.geomermaids.com/logo-384.png">
 <meta property="og:image:width" content="384">
 <meta property="og:image:height" content="384">
@@ -264,6 +264,11 @@ Or ask an AI agent: the parquetry skill turns a spatial question into the query 
     <h4><a href="https://parquetry.geomermaids.com/geoconnex/">Geoconnex, US water features</a></h4>
     <p>The <a href="https://geoconnex.us">Internet of Water</a>'s reference features for US water data: 852,673 rivers from head to outlet, linked into a network, 98,534 dams, 203,525 stream gages, watersheds HU02 to HU12 and aquifers. Plus 4.6 million water monitoring sites (Water Quality Portal, USGS), each with a URI that leads to its data. One file per layer or source, checked weekly.</p>
     <p class="meta"><code>geoconnex/latest/</code> · 30 files, 3.4 GB · weekly · CC0</p>
+  </div>
+  <div class="dataset">
+    <h4><a href="https://parquetry.geomermaids.com/census/">US Census TIGER/Line</a></h4>
+    <p>The Census Bureau's boundaries, one GeoParquet file per layer with its TIGER columns unchanged, starting with the districts of the November 2026 elections: the 435 congressional districts of the 120th Congress and every state legislative district, upper and lower. PMTiles beside each file.</p>
+    <p class="meta"><code>census/tiger/2026/</code> · 3 layers, 240 MB · checked weekly · public domain · <a href="https://census.geomermaids.com">census.geomermaids.com</a></p>
   </div>
 </div>
 

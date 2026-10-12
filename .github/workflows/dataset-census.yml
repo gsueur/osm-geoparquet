@@ -1,0 +1,151 @@
+# US Census Bureau TIGER/Line: parquetry:parquetry/census/.
+#
+# The national TIGER/Line GeoPackages, one GeoParquet file and one PMTiles
+# archive per layer, under census/tiger/<year>/<product>/.
+# scripts/datasets/census.py documents the layout; its PRODUCTS table says
+# which products are built.
+#
+# TIGER/Line is a yearly release that the Census Bureau sometimes corrects:
+# a weekly run compares each source's Last-Modified with the published
+# census/_source.json and stops when nothing moved.
+#
+#   build    fetch, convert, tile and verify, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog at /census/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-census
+
+on:
+  schedule:
+    - cron: "17 8 * * 2"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if no source has moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-census
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/census
+  PUBLIC: https://parquetry.geomermaids.com/census
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place on a Census correction: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          uv run --project scripts python scripts/datasets/census.py upstream > upstream.json
+          cat upstream.json
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          now=$(jq -c 'map_values(.last_modified)' upstream.json)
+          was=$(echo "$live" | jq -c 'map_values(.last_modified)')
+          echo "upstream $now, published $was"
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, convert, tile and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/census.py build \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json tiger/2026/legislative/_manifest.json \
+                   tiger/2026/legislative/ATTRIBUTION.txt \
+                   tiger/2026/legislative/cd120.parquet tiger/2026/legislative/sldl.pmtiles; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/tiger/2026/legislative/cd120.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: Portolan catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/census_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/tiger-2026-legislative/catalog.json \
+                   catalog/tiger-2026-legislative/cd120/collection.json \
+                   catalog/tiger-2026-legislative/sldl/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done

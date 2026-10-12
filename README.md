@@ -21,7 +21,7 @@ Column projection, bbox filtering, and row-group pruning all work via HTTP range
 
 Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See `https://parquetry.geomermaids.com/osm/ATTRIBUTION.txt` for redistribution terms.
 
-The bucket holds several datasets, each self-contained under its own prefix (`osm/`, `gmwid/`, `gaul/`, `clc/`, `nfhl/`), so each can be registered with Portolan on its own. URLs published before that move still resolve: the Workers serve the old bucket-root layout indefinitely.
+The bucket holds several datasets, each self-contained under its own prefix (`osm/`, `gmwid/`, `gaul/`, `clc/`, `nfhl/`, `geoconnex/`, `census/`), so each can be registered with Portolan on its own. URLs published before that move still resolve: the Workers serve the old bucket-root layout indefinitely.
 
 ### Portolan catalog
 
@@ -78,6 +78,18 @@ adds them to the published release without rebuilding it. Its Portolan catalog i
 `scripts/datasets/gaul_catalog.py`. The licence obligations (citation,
 disclaimers) are encoded in its `ATTRIBUTION.txt`, quoted from the Terms of
 Use shipped inside the FAO archives.
+
+US Census Bureau TIGER/Line (`scripts/datasets/census.py`, workflow
+`dataset-census.yml`, checked weekly against the source's Last-Modified)
+sits under `https://parquetry.geomermaids.com/census/tiger/<year>/<product>/`:
+one GeoParquet file per GeoPackage layer, named by its TIGER code
+(`legislative/cd120.parquet`, `sldu`, `sldl`), columns and NAD83 unchanged,
+plus a PMTiles archive each with a `color_index` that keeps neighbouring
+districts apart. `census.py`'s PRODUCTS table lists the products built; the
+legislative areas come first. Portolan catalog at
+`https://parquetry.geomermaids.com/census/catalog/catalog.json`
+(`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
+(`census/`, deployed with wrangler like `nfhl/`).
 
 Corine Land Cover 2018 (`scripts/datasets/clc.py`, workflow
 `dataset-clc.yml`) sits under `https://parquetry.geomermaids.com/clc/2018/`
