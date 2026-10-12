@@ -487,8 +487,8 @@ def build_root(collections: list[dict], date: str, updated: str, countries: list
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": CATALOG_ID if live else f"{CATALOG_ID}-{date}",
-        "title": ("OpenStreetMap GeoParquet for North America" if live else
-                  f"OpenStreetMap GeoParquet for North America, {date}"),
+        "title": ("OpenStreetMap for North America" if live else
+                  f"OpenStreetMap for North America, {date}"),
         "description": (
             f"OpenStreetMap for {names}, split into {len(collections)} thematic "
             f"collections and partitioned by country and admin region, as "
