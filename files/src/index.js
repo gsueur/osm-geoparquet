@@ -255,9 +255,9 @@ function datasetFor(prefix) {
   const key = Object.keys(DATASETS).find((d) => prefix.startsWith(d));
   return key ? DATASETS[key] : null;
 }
-// Public host of the deck.gl-based parquet viewer. Lives on the website
-// (Cloudflare Pages), not this Worker — kept as a constant so the listing
-// can link "view" next to each .parquet entry.
+// Public host of the map viewer (GeoParquet with deck.gl, PMTiles with
+// MapLibre). Lives on the website, not this Worker — kept as a constant so
+// the listing can link "view" next to each .parquet and .pmtiles entry.
 const VIEWER_BASE = "https://geoparquet.geomermaids.com/viewer.html";
 
 // Sort folders so the most-useful entries surface first:
@@ -307,7 +307,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
     // Absolute https URL — the viewer takes ?url=<absolute>, and we're
     // hostname-agnostic so reconstruct from the request origin via window.
     const absUrl = "https://parquetry.geomermaids.com" + href;
-    const viewCell = f.name.endsWith(".parquet")
+    const viewCell = f.name.endsWith(".parquet") || f.name.endsWith(".pmtiles")
       ? `<a class="view" href="${escapeHtml(VIEWER_BASE + "?url=" + encodeURIComponent(absUrl))}" title="Preview on a map" target="_blank" rel="noopener">view</a>`
       : "";
     rows.push(

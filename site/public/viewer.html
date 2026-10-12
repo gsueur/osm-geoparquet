@@ -6,7 +6,7 @@
 <title>parquet viewer · geomermaids</title>
 <link rel="canonical" href="https://geoparquet.geomermaids.com/viewer.html">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Quick map preview of any GeoParquet file from parquetry.geomermaids.com — paste a URL, see what's inside.">
+<meta name="description" content="Quick map preview of any GeoParquet or PMTiles file from parquetry.geomermaids.com — paste a URL, see what's inside.">
 <style>
   :root {
     --bg: #ffffff;
@@ -126,8 +126,12 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     max-width: 380px;
     pointer-events: none;
+    z-index: 10;
   }
   .status.err { color: var(--accent); }
+  /* PMTiles mode: MapLibre over the deck canvas. */
+  #ml { position: absolute; inset: 0; z-index: 1; }
+  #ml[hidden] { display: none; }
 
   .tooltip {
     position: absolute;
@@ -179,13 +183,14 @@
 
 <div class="toolbar">
   <h1><a href="/">geomermaids</a> &middot; viewer</h1>
-  <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/osm/latest/...">
+  <input type="url" id="url" placeholder="https://parquetry.geomermaids.com/... .parquet or .pmtiles">
   <button id="load" disabled>Load</button>
   <a id="download" class="btn-link" download hidden>Download</a>
   <span id="counter" class="counter" hidden></span>
 </div>
 
 <div id="map">
+  <div id="ml" hidden></div>
   <div class="status" id="status">Initialising DuckDB-WASM&hellip;</div>
   <div class="tooltip" id="tooltip" style="display: none"></div>
   <div class="loading" id="loading" hidden>
@@ -1025,6 +1030,8 @@
   // ---------- Load + viewport workflow -------------------------------------
 
   async function loadFile(url) {
+    if (PMTILES_RE.test(url)) return loadPmtiles(url);
+    if (ml) ml.el.hidden = true;
     queryToken++;
     const myToken = queryToken;
     currentUrl = url;
@@ -1089,6 +1096,187 @@
         : `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} — pan/zoom to load other areas.`);
     } catch (e) {
       if (myToken !== queryToken) return;
+      console.error(e);
+      setStatus('Failed: ' + (e.message || e), true);
+    } finally {
+      hideLoading();
+    }
+  }
+
+  // ---------- PMTiles mode ------------------------------------------------
+  //
+  // A .pmtiles URL needs no query: its tiles are already cut, simplified and
+  // sized for a browser. MapLibre draws them through the pmtiles protocol,
+  // in its own layer over the deck canvas; it is loaded on first use and
+  // hidden again when a GeoParquet file is loaded. Layers come from the
+  // archive's own metadata (vector_layers), so any archive draws without a
+  // style: fills, lines and points per tile layer, coloured by the data's
+  // `color` (CLC) or `color_index` (Census districts) when it has one.
+
+  const PMTILES_RE = /\.pmtiles(?:[?#]|$)/i;
+  const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'];
+  const ACCENT_HEX = '#d2553a';
+  const LABEL_KEYS = ['label', 'name', 'NAMELSAD', 'gaul2_name', 'gaul1_name', 'gaul0_name',
+                      'primary_name', 'flood_zone'];
+  let ml = null;   // { maplibregl, protocol, map, el, layers: [] }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function maplibre() {
+    if (ml) return ml;
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css';
+    document.head.appendChild(css);
+    const [maplibregl] = await Promise.all([
+      import('https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs'),
+      loadScript('https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js'),
+    ]);
+    const protocol = new window.pmtiles.Protocol();
+    maplibregl.addProtocol('pmtiles', protocol.tile);
+    const el = document.getElementById('ml');
+    el.hidden = false;
+    const map = new maplibregl.Map({
+      container: el,
+      style: {
+        version: 8,
+        sources: {
+          basemap: {
+            type: 'raster', tileSize: 256, maxzoom: 19,
+            // Same CARTO basemap and key as the deck view.
+            tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_2j7y_2_6a0b693a3f468762164de769'],
+            attribution: '© OpenStreetMap contributors © CARTO',
+          },
+        },
+        layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+      },
+      center: [viewState.longitude, viewState.latitude], zoom: viewState.zoom,
+      attributionControl: { compact: true },
+    });
+    await new Promise((resolve) => map.once('load', resolve));
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    ml = { maplibregl, protocol, map, el, layers: [] };
+    map.on('mousemove', (e) => {
+      const f = ml.layers.length && map.queryRenderedFeatures(e.point, { layers: ml.layers })[0];
+      map.getCanvas().style.cursor = f ? 'pointer' : '';
+      const label = f && featureLabel(f.properties);
+      if (!label) { tooltipEl.style.display = 'none'; return; }
+      tooltipEl.style.left = (e.point.x + 12) + 'px';
+      tooltipEl.style.top = (e.point.y + 12) + 'px';
+      tooltipEl.textContent = label;
+      tooltipEl.style.display = 'block';
+    });
+    map.on('mouseout', () => { tooltipEl.style.display = 'none'; });
+    return ml;
+  }
+
+  function featureLabel(props) {
+    for (const k of LABEL_KEYS) if (props[k] != null && props[k] !== '') return String(props[k]);
+    const kv = Object.entries(props).filter(([k]) => k !== 'color' && k !== 'color_index').slice(0, 3);
+    return kv.map(([k, v]) => `${k}: ${v}`).join(' · ');
+  }
+
+  // The fill colour a tile layer's own fields allow.
+  function colourFor(fields) {
+    if (fields.color) return ['coalesce', ['to-color', ['get', 'color']], ACCENT_HEX];
+    if (fields.color_index) {
+      const m = ['match', ['get', 'color_index']];
+      PALETTE.forEach((c, i) => m.push(i, c));
+      return [...m, ACCENT_HEX];
+    }
+    return ACCENT_HEX;
+  }
+
+  async function loadPmtiles(url) {
+    queryToken++;               // drops any GeoParquet query still in flight
+    currentUrl = null;          // and stops the viewport refreshes
+    lastFeatures = [];
+    rerender();
+    setCounter(null, null);
+    downloadEl.href = url;
+    downloadEl.setAttribute('download', url.split('/').pop() || 'tiles.pmtiles');
+    downloadEl.hidden = false;
+    setStatus('Reading PMTiles header…');
+    showLoading('Reading PMTiles header…');
+    try {
+      const { map, maplibregl } = await maplibre();
+      ml.el.hidden = false;
+      map.resize();
+      for (const id of ml.layers) map.removeLayer(id);
+      ml.layers = [];
+      if (map.getSource('data')) map.removeSource('data');
+
+      const archive = new window.pmtiles.PMTiles(url);
+      ml.protocol.add(archive);
+      const header = await archive.getHeader();
+      const meta = await archive.getMetadata().catch(() => ({}));
+      const zooms = `zoom ${header.minZoom}–${header.maxZoom}`;
+
+      if (header.tileType !== 1) {
+        // Raster tiles (PNG, JPEG, WebP, AVIF): one raster layer.
+        map.addSource('data', { type: 'raster', url: `pmtiles://${url}`, tileSize: 256 });
+        map.addLayer({ id: 'data-raster', type: 'raster', source: 'data' });
+        ml.layers = ['data-raster'];
+        setStatus(`Raster PMTiles, ${zooms}.`);
+      } else {
+        const vectorLayers = meta.vector_layers || [];
+        if (!vectorLayers.length) throw new Error('no vector_layers in the archive metadata');
+        map.addSource('data', { type: 'vector', url: `pmtiles://${url}` });
+        const polygons = ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]];
+        const lines = ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]];
+        const points = ['in', ['geometry-type'], ['literal', ['Point', 'MultiPoint']]];
+        for (const vl of vectorLayers) {
+          const fill = colourFor(vl.fields || {});
+          const base = { source: 'data', 'source-layer': vl.id };
+          const add = (id, spec) => { map.addLayer({ id, ...base, ...spec }); ml.layers.push(id); };
+          add(`${vl.id}-fill`, { type: 'fill', filter: polygons,
+                                 paint: { 'fill-color': fill, 'fill-opacity': 0.55 } });
+          add(`${vl.id}-outline`, { type: 'line', filter: polygons,
+                                    paint: { 'line-color': '#ffffff', 'line-width': 0.6, 'line-opacity': 0.8 } });
+          add(`${vl.id}-line`, { type: 'line', filter: lines,
+                                 paint: { 'line-color': fill, 'line-width': 1.6 } });
+          add(`${vl.id}-point`, { type: 'circle', filter: points,
+                                  paint: { 'circle-color': fill, 'circle-radius': 3.5,
+                                           'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1 } });
+        }
+        const names = vectorLayers.map((v) => v.id).join(', ');
+        counterEl.hidden = false;
+        counterEl.classList.remove('partial');
+        counterEl.textContent = `PMTiles · ${vectorLayers.length} layer${vectorLayers.length > 1 ? 's' : ''} · ${zooms}`;
+        counterEl.title = `Tile layers: ${names}`;
+        setStatus(`PMTiles, ${zooms}, layer${vectorLayers.length > 1 ? 's' : ''} ${names}. Hover for a feature.`);
+      }
+      const w = header.minLon, e = header.maxLon;
+      if (Number.isFinite(w) && e > w)
+        map.fitBounds([[w, header.minLat], [e, header.maxLat]], { padding: 30, duration: 0, maxZoom: header.maxZoom });
+      // Bounds that span most of the globe (US districts with Guam and the
+      // Aleutians) say little about where the data is: once the first tiles
+      // are in, fit to where most features sit instead.
+      if (e - w > 180 && header.tileType === 1) {
+        map.once('idle', () => {
+          const pts = [];
+          for (const vl of (meta.vector_layers || [])) {
+            for (const f of map.querySourceFeatures('data', { sourceLayer: vl.id })) {
+              let c = f.geometry.coordinates;
+              while (Array.isArray(c[0])) c = c[0];
+              if (Number.isFinite(c[0])) pts.push(c);
+            }
+          }
+          if (pts.length < 20) return;
+          const q = (arr, t) => arr[Math.min(arr.length - 1, Math.floor(t * arr.length))];
+          const xs = pts.map((c) => c[0]).sort((a, b) => a - b);
+          const ys = pts.map((c) => c[1]).sort((a, b) => a - b);
+          map.fitBounds([[q(xs, .05), q(ys, .05)], [q(xs, .95), q(ys, .95)]],
+                        { padding: 40, duration: 800, maxZoom: header.maxZoom });
+        });
+      }
+    } catch (e) {
       console.error(e);
       setStatus('Failed: ' + (e.message || e), true);
     } finally {
