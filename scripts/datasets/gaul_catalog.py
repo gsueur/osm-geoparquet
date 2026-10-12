@@ -13,6 +13,14 @@ prose lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
 pyproject.toml, shared with the OSM catalog (scripts/catalog.py), as are the
 STAC constants, the rashid wrapper and the uploader.
 
+Each layer's PMTiles archive (gaul.py tiles it, the manifest's `pmtiles`
+entries measure it) sits beside the parquet in the release directory and is
+registered the way formats.md asks: a collection-level `rel: pmtiles` link
+with `pmtiles:layers` (web-map-links v1.3.0), the same file as a `visual`
+asset for download, and MapLibre styles under styles/ as `style` assets, one
+of them also `default`. The styles point at the archive by absolute URL, as
+the data assets do: the archive is not inside the catalog tree.
+
 The catalog is published beside the data, at /gaul/catalog/catalog.json, so
 the dataset stays one self-contained prefix.
 
@@ -41,6 +49,7 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets.gaul import ACCESS_URL, PARTITION_KEY, SOURCE_ZIPS, VERSION
+from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -72,6 +81,8 @@ CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "gaul-geoparquet"
 THUMBS = REPO / "catalog" / "thumbnails" / "gaul"
+WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
+STYLE_TYPE = "application/vnd.mapbox.style+json"
 
 LICENSE = "CC-BY-4.0"
 LICENSE_LINK = {
@@ -224,6 +235,98 @@ def connect(remote: bool):
     return con
 
 
+# ---------- styles ----------
+
+# Fill by continent, the one attribute every layer carries with few values,
+# so a legend can be read off the style's `match`. FAO leaves Antarctica and
+# Greenland without a continent ("--"). One palette per layer, so the three
+# cards do not read as one dataset (portolan-bootstrap, styling).
+CONTINENTS = ["Africa", "America", "Asia", "Europe", "Oceania"]
+PALETTES = {
+    "L0_derived": (["#d8a24a", "#c95f4b", "#6f9a5b", "#4f78a8", "#9a6aa8"], "#2f3b4c"),
+    "L1": (["#e7c27d", "#d98c73", "#97bf7f", "#86a8d0", "#c09bcb"], "#4c5a3c"),
+    "L2": (["#f0d9a8", "#ebb7a6", "#c2dcb0", "#b8cde6", "#dcc6e3"], "#7a5a48"),
+}
+UNASSIGNED = "#bdbdbd"
+
+
+def styles(name: str, tiles: dict, title: str) -> dict[str, dict]:
+    """The MapLibre styles of one layer, by file name under styles/."""
+    fills, line = PALETTES[name]
+    source = {"data": {
+        "type": "vector",
+        "url": f"pmtiles://{DATA_URL}/{tiles['file']}",
+        "attribution": f"GAUL {VERSION} (c) FAO, CC BY 4.0",
+    }}
+    layer = tiles["layer"]
+    outline = {"id": f"{layer}-outline", "type": "line", "source": "data",
+               "source-layer": layer,
+               "paint": {"line-color": line,
+                         "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.3, 8, 1.2]}}
+    match = ["match", ["get", "continent"]]
+    for continent, color in zip(CONTINENTS, fills):
+        match += [continent, color]
+    match.append(UNASSIGNED)
+    return {
+        "default.json": {
+            "version": 8,
+            "name": f"{title}, by continent",
+            "sources": source,
+            "layers": [
+                {"id": f"{layer}-fill", "type": "fill", "source": "data",
+                 "source-layer": layer,
+                 "paint": {"fill-color": match, "fill-opacity": 0.8}},
+                outline,
+            ],
+        },
+        "outlines.json": {
+            "version": 8,
+            "name": f"{title}, outlines only",
+            "sources": source,
+            "layers": [outline],
+        },
+    }
+
+
+def tile_assets(name: str, tiles: dict, title: str) -> dict:
+    """The archive as a `visual` asset, and the styles as `style` assets."""
+    path = f"{DATASET_PREFIX}/{VERSION}/{tiles['file']}"
+    kept = ("every attribute column" if tiles["properties"] is None
+            else ", ".join(tiles["properties"]))
+    return {
+        "pmtiles": {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PMTILES_TYPE,
+            "title": f"{title}, vector tiles",
+            "description": f"PMTiles, layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to "
+                           f"{tiles['max_zoom']}, {tiles['tiles']:,} tiles; properties: {kept}. "
+                           f"Built with tylertoo {tiles['tylertoo']}.",
+            "roles": ["visual"],
+            "file:size": tiles["bytes"],
+            "file:checksum": "1220" + tiles["sha256"],
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        },
+        "style": {
+            "href": "./styles/default.json",
+            "type": STYLE_TYPE,
+            "title": "Units filled by continent, with outlines",
+            "roles": ["style", "default"],
+        },
+        "style-outlines": {
+            "href": "./styles/outlines.json",
+            "type": STYLE_TYPE,
+            "title": "Outlines only, to lay over other data",
+            "roles": ["style"],
+        },
+    }
+
+
+def pmtiles_link(tiles: dict, title: str) -> dict:
+    return {"rel": "pmtiles", "href": f"{DATA_URL}/{tiles['file']}", "type": PMTILES_TYPE,
+            "title": f"{title}, vector tiles", "pmtiles:layers": [tiles["layer"]]}
+
+
 # ---------- STAC ----------
 
 def country_assets(name: str, part: dict) -> dict:
@@ -245,8 +348,8 @@ def country_assets(name: str, part: dict) -> dict:
     return assets
 
 
-def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str, str]],
-                     geo: dict, updated: str) -> dict:
+def build_collection(name: str, entry: dict, part: dict, tiles: dict,
+                     columns: list[tuple[str, str]], geo: dict, updated: str) -> dict:
     title, description = LAYERS[name]
     glob = f"s3://{BUCKET}/{DATASET_PREFIX}/{VERSION}/{PARTITION_KEY}=*/{name}.parquet"
     # The footer extent is the outward-rounded data extent, which overshoots
@@ -263,7 +366,7 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
         "type": "Collection",
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, PARTITION_EXT, TABLE_EXT, FILE_EXT,
-                            VERSION_EXT, ALTERNATE_EXT],
+                            VERSION_EXT, ALTERNATE_EXT, WEB_MAP_LINKS_EXT],
         "id": name.lower(),
         "title": title,
         "description": (
@@ -273,7 +376,9 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
             f"country under {PARTITION_KEY}=<iso3>/ ({part['files']} files, the data-<iso3> "
             f"assets and the partition glob {glob}) for small reads. Both carry a "
             f"bbox covering and read in place over HTTPS or "
-            f"through the anonymous S3 endpoint {S3_ENDPOINT}. Data (c) FAO {VERSION}, "
+            f"through the anonymous S3 endpoint {S3_ENDPOINT}. A PMTiles archive "
+            f"(zoom {tiles['min_zoom']} to {tiles['max_zoom']}) draws the layer on a web "
+            f"map. Data (c) FAO {VERSION}, "
             f"CC BY 4.0, attribution required. {NOT_ENDORSED} {UN_DISCLAIMER}"
         ),
         "keywords": ["GAUL", "FAO", "administrative boundaries", "administrative units",
@@ -317,6 +422,7 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
             **country_assets(name, part),
+            **tile_assets(name, tiles, title),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -335,6 +441,7 @@ def build_collection(name: str, entry: dict, part: dict, columns: list[tuple[str
             VIA_LINK,
             {"rel": "alternate", "href": f"{DATA_URL}/", "type": "text/html",
              "title": f"Browse the {VERSION} files"},
+            pmtiles_link(tiles, title),
         ],
     }
 
@@ -417,6 +524,19 @@ GROUP BY 1;
 ```"""
 
 
+def tiles_section(name: str, tiles: dict) -> str:
+    kept = ("every attribute column" if tiles["properties"] is None
+            else "only " + ", ".join(f"`{p}`" for p in tiles["properties"]))
+    return f"""\
+`{DATA_URL}/{tiles['file']}` ({tiles['bytes'] / 1e6:,.0f} MB) holds the layer
+as vector tiles for a web map, read by range request with the PMTiles
+protocol: tile layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to {tiles['max_zoom']},
+{kept} as tile properties. Above zoom {tiles['max_zoom']} a map overzooms the last
+level; for exact geometry, query the GeoParquet. Two MapLibre styles come
+with it: `styles/default.json` fills units by continent, `styles/outlines.json`
+draws the boundaries only, to lay over other data."""
+
+
 def license_md(accessed: str) -> str:
     return f"""\
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), under the
@@ -444,7 +564,7 @@ size and sha256, which this catalog publishes as `file:size` and
 `file:checksum`."""
 
 
-def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
+def collection_readme(col: dict, entry: dict, part: dict, tiles: dict, accessed: str) -> str:
     name = stem(col)
     schema = "\n".join(
         f"| `{c['name']}` | `{c['type']}` | {c['description']} |" for c in col["table:columns"])
@@ -458,6 +578,7 @@ def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
 | Rows | {entry['features']:,} |
 | Whole-world file | `{whole_file(entry)}`, {entry['bytes'] / 1e6:,.0f} MB, {entry['row_groups']} row group(s), sha256 `{entry['sha256'][:12]}...` |
 | Per-country files | {part['files']} under `{PARTITION_KEY}=<iso3>/`, {part['bytes'] / 1e6:,.0f} MB in all |
+| Map tiles | `{tiles['file']}`, {tiles['bytes'] / 1e6:,.0f} MB, zoom {tiles['min_zoom']} to {tiles['max_zoom']} |
 | Extent | {shared.fmt_bbox(col['extent']['spatial']['bbox'][0])} (lon/lat) |
 | Vintage | GAUL {VERSION}, accessed {accessed} |
 | Source | {entry['source']} |
@@ -466,6 +587,10 @@ def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
 ## Access
 
 {access_section(name, entry)}
+
+## Map tiles
+
+{tiles_section(name, tiles)}
 
 ## Schema
 
@@ -483,7 +608,7 @@ def collection_readme(col: dict, entry: dict, part: dict, accessed: str) -> str:
 """
 
 
-def collection_agents(col: dict, entry: dict, part: dict) -> str:
+def collection_agents(col: dict, entry: dict, part: dict, tiles: dict) -> str:
     name = stem(col)
     pruning = ("one row group, so the bbox covering cannot skip anything"
                if entry["row_groups"] == 1 else
@@ -512,6 +637,9 @@ GAUL {VERSION}, MultiPolygon, OGC:CRS84.
   {entry['bytes'] / 1e6:,.0f} MB, so project the columns you need and let the
   `bbox` filter run before any geometry function.
 - {'This layer is a Geomermaids dissolve of L1, not an FAO product; say so when you cite it, and prefer L1 for anything where the boundary itself matters.' if name == 'L0_derived' else 'Geometry and attributes are exactly the FAO release.'}
+- For a map, use the `rel: pmtiles` link (`{tiles['file']}`, source-layer
+  `{tiles['layer']}`, zoom {tiles['min_zoom']} to {tiles['max_zoom']}) with the `default` style
+  asset; do not export GeoJSON from the parquet to draw it.
 - Attribution is required: cite FAO GAUL {VERSION}, CC BY 4.0, and carry the
   UN disclaimer on frontiers. Do not present FAO as endorsing your use.
 """
@@ -588,6 +716,9 @@ under `{PARTITION_KEY}=<iso3>/`. Static release, immutable files.
   `{S3_ENDPOINT}`, path-style, empty credentials.
 - Each collection documents its columns in `table:columns` and carries
   `file:size` and `file:checksum` on its data asset.
+- For a map: each collection's `rel: pmtiles` link names the archive
+  (`{DATA_URL}/GAUL_{VERSION}_<layer>.pmtiles`) and its `pmtiles:layers`;
+  the `style` asset with the `default` role draws it.
 
 ## Conventions
 
@@ -610,9 +741,13 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     manifest = read_manifest(out_dir)
     entries = {e["name"]: e for e in manifest["files"]}
     parts = {p["name"]: p for p in manifest.get("partitions", [])}
+    tiles = {t["name"]: t for t in manifest.get("pmtiles", [])}
     missing = (set(LAYERS) ^ set(entries)) | (set(LAYERS) ^ set(parts))
     if missing:
         sys.exit(f"LAYERS and the manifest disagree on: {sorted(missing)}")
+    if set(LAYERS) ^ set(tiles):
+        sys.exit(f"manifest has PMTiles for {sorted(tiles)}, not {sorted(LAYERS)}: "
+                 f"run gaul.py --tiles-only (the workflow's tiles stage)")
     if any(p["key"] != PARTITION_KEY for p in parts.values()):
         sys.exit("manifest partition key differs from gaul.py's PARTITION_KEY")
     for name in LAYERS:
@@ -628,13 +763,23 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     collections = []
     for name in LAYERS:
         columns, geo = footer(con, data_source(out_dir, entries[name]))
-        col = build_collection(name, entries[name], parts[name], columns, geo, updated)
+        col = build_collection(name, entries[name], parts[name], tiles[name], columns, geo,
+                               updated)
         cdir = dest / col["id"]
+        for fname, style in styles(name, tiles[name], col["title"]).items():
+            write_json(cdir / "styles" / fname, style)
+        for asset in col["assets"].values():
+            if "style" in asset["roles"]:
+                path = cdir / asset["href"]
+                asset["file:size"] = path.stat().st_size
+                asset["file:checksum"] = multihash(path)
         write_json(cdir / "collection.json", col)
         shutil.copyfile(THUMBS / f"{name}.png", cdir / "thumbnail.png")
         (cdir / "README.md").write_text(
-            collection_readme(col, entries[name], parts[name], manifest["accessed"]))
-        (cdir / "AGENTS.md").write_text(collection_agents(col, entries[name], parts[name]))
+            collection_readme(col, entries[name], parts[name], tiles[name],
+                              manifest["accessed"]))
+        (cdir / "AGENTS.md").write_text(
+            collection_agents(col, entries[name], parts[name], tiles[name]))
         collections.append(col)
 
     root = build_root(collections, updated)

@@ -15,7 +15,9 @@ covering, so a reader can prune row groups instead of downloading 775 MB.
 Each layer is written twice: once as a single whole-world file
 (GAUL_2024_<layer>.parquet), for anyone who wants one download, and once
 split per country under country=<iso3_code>/, for readers that want a small
-file (the map viewer, a bbox query on one country).
+file (the map viewer, a bbox query on one country). Each whole-world file is
+then tiled into GAUL_2024_<layer>.pmtiles (TILES), the archive a web map
+draws, which the Portolan catalog registers.
 
 Row groups are capped by bytes, not rows (GROUP_BYTES): a bbox filter skips
 whole row groups, and administrative units are few and heavy, so a cap in
@@ -44,6 +46,8 @@ shipped inside each source ZIP:
 Usage:
   python3 scripts/datasets/gaul.py --work-dir <dir with the unpacked .shp>
   python3 scripts/datasets/gaul.py --work-dir <dir> --out-dir out/gaul
+  # only the PMTiles, from whole-world files and a manifest already in --out-dir
+  python3 scripts/datasets/gaul.py --tiles-only --out-dir out/gaul/2024
 """
 
 from __future__ import annotations
@@ -56,6 +60,9 @@ import sys
 from pathlib import Path
 
 import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets import pmtiles
 
 VERSION = "2024"
 ACCESS_URL = "https://data.apps.fao.org/?lang=en"
@@ -228,6 +235,33 @@ def rewrite(src: Path, dest: Path) -> None:
                           write_statistics=True, data_page_size=1 << 20) as w:
         for a, b in zip(cuts, cuts[1:]):
             w.write_table(table.slice(a, b - a), row_group_size=b - a)
+
+
+# PMTiles per layer: (min zoom, max zoom, properties kept in the tiles, None
+# for all). Zoom 10 is about 150 m per pixel, finer than GAUL's own
+# generalization. L2 starts at zoom 3 and keeps only what a map labels or
+# styles by: at zoom 0 to 2, 45,000 districts in 500 KB tiles lose up to 63%
+# of their features to the size cap, which pmtiles.tile() refuses, and with
+# gaul0_name too one zoom 3 tile still goes over (iso3_code names the country).
+TILES = {
+    "L0_derived": (0, 10, None),
+    "L1": (0, 10, None),
+    "L2": (3, 10, ["iso3_code", "gaul1_name", "gaul2_code", "gaul2_name", "continent"]),
+}
+
+
+def tile_layers(out_dir: Path, names: list[str]) -> list[dict]:
+    """GAUL_2024_<layer>.pmtiles beside each whole-world file."""
+    entries = []
+    for name in names:
+        lo, hi, props = TILES[name]
+        src = out_dir / whole_world_file(name)
+        entry = pmtiles.tile(src, src.with_suffix(".pmtiles"), layer=name.lower(),
+                             min_zoom=lo, max_zoom=hi, properties=props)
+        entries.append({"name": name, **entry})
+        print(f"  {entry['file']}: z{lo}-{hi}, {entry['tiles']:,} tiles, "
+              f"{entry['bytes'] / 1e6:.1f} MB")
+    return entries
 
 
 def whole_world_file(name: str) -> str:
@@ -412,13 +446,26 @@ def verify(con, out_dir: Path, names: list[str]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--work-dir", type=Path, required=True,
+    p.add_argument("--work-dir", type=Path,
                    help="Directory holding the unpacked GAUL_2024_L*.shp")
     p.add_argument("--out-dir", type=Path, default=Path("out/gaul") / VERSION)
     p.add_argument("--accessed", default=None,
                    help="Access date for the required citation (YYYY-MM-DD, "
                         "default: today UTC)")
+    p.add_argument("--tiles-only", action="store_true",
+                   help="Only tile the whole-world files already in --out-dir and add "
+                        "them to its _manifest.json (the release is static: its "
+                        "parquet files and access date stay as published)")
     args = p.parse_args()
+
+    if args.tiles_only:
+        path = args.out_dir / "_manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["pmtiles"] = tile_layers(args.out_dir, [f["name"] for f in manifest["files"]])
+        path.write_text(json.dumps(manifest, indent=2) + "\n")
+        return
+    if args.work_dir is None:
+        p.error("--work-dir is required unless --tiles-only")
 
     accessed = (dt.date.fromisoformat(args.accessed) if args.accessed
                 else dt.datetime.now(dt.timezone.utc).date())
@@ -464,6 +511,8 @@ def main() -> None:
            + [f"{p['key']}={e['country']}/{p['name']}"
               for p in partitions for e in p["entries"]])
 
+    tiles = tile_layers(args.out_dir, [l["name"] for l in layers])
+
     (args.out_dir / "ATTRIBUTION.txt").write_text(attribution(accessed))
     (args.out_dir / "_manifest.json").write_text(json.dumps({
         "state_name": f"FAO Global Administrative Unit Layers (GAUL) {VERSION}",
@@ -475,6 +524,7 @@ def main() -> None:
         "licence": "CC-BY-4.0",
         "files": layers,
         "partitions": partitions,
+        "pmtiles": tiles,
     }, indent=2) + "\n")
     print(f"  ATTRIBUTION.txt, _manifest.json  (accessed {accessed.isoformat()})")
 
