@@ -55,6 +55,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from extent import wrapped_bbox  # noqa: E402
 from themes import THEMES, Theme  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -260,6 +261,7 @@ def aggregate(manifests: list[dict]) -> dict[str, dict]:
     for t in THEMES:
         rows = files = 0
         bbox = [180.0, 90.0, -180.0, -90.0]
+        intervals: list = []
         columns: list | None = None
         columns_from = None
         regions: list[dict] = []
@@ -273,6 +275,10 @@ def aggregate(manifests: list[dict]) -> dict[str, dict]:
             b = st["bbox"]
             bbox = [min(bbox[0], b[0]), min(bbox[1], b[1]),
                     max(bbox[2], b[2]), max(bbox[3], b[3])]
+            # A manifest from before lon_intervals: its box, unless it spans
+            # more than half the globe, which only a file across 180 does.
+            intervals += st.get("lon_intervals") or (
+                [[b[0], b[2]]] if b[2] - b[0] <= 180 else [[-180.0, 180.0]])
             regions.append({"iso": m["state_iso"], "country": m["country"],
                             "name": m["state_name"], "rows": n,
                             "size": st.get("size_bytes"), "sha256": st.get("sha256")})
@@ -282,6 +288,9 @@ def aggregate(manifests: list[dict]) -> dict[str, dict]:
                 sys.exit(f"{t.name}: schema of {m['state_iso']} differs from "
                          f"{columns_from}; partitions must share one schema")
         if files:
+            # The extent crosses the antimeridian (west > east) when the data
+            # does: Alaska's Aleutians, west of 180. scripts/extent.py.
+            bbox = wrapped_bbox(intervals, bbox[1], bbox[3])
             out[t.name] = {"rows": rows, "files": files, "bbox": bbox, "columns": columns,
                            "regions": sorted(regions, key=lambda r: r["iso"])}
     return out
