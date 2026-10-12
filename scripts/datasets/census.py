@@ -129,13 +129,26 @@ def upstream() -> dict:
     return out
 
 
+def download_zip(url: str, dest: Path, attempts: int = 3) -> None:
+    """Download a zip and make sure it is one. census.gov's firewall can
+    answer a rejected request with a small HTML page and HTTP 200 (seen on
+    tl_2025_19_cd119.zip), which curl -f lets through."""
+    for attempt in range(1, attempts + 1):
+        subprocess.run(["curl", "-fsSL", "--retry", "3", "-o", str(dest), url], check=True)
+        if zipfile.is_zipfile(dest):
+            return
+        head = dest.read_bytes()[:200].decode("utf-8", "replace")
+        print(f"  {url}: not a zip (attempt {attempt}): {head!r}", flush=True)
+        time.sleep(20 * attempt)
+    sys.exit(f"{url}: census.gov did not serve the zip after {attempts} attempts")
+
+
 def fetch(product: str, work: Path) -> Path:
     gpkg = work / PRODUCTS[product]["gpkg"]
     if gpkg.is_file():
         return gpkg
     archive = work / f"{gpkg.name}.zip"
-    subprocess.run(["curl", "-fsSL", "--retry", "3", "-o", str(archive), zip_url(product)],
-                   check=True)
+    download_zip(zip_url(product), archive)
     with zipfile.ZipFile(archive) as z:
         z.extract(gpkg.name, work)
     archive.unlink()

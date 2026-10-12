@@ -1,0 +1,152 @@
+{
+  "about": "States whose congressional map for the 2026 elections (120th Congress, TIGER/Line 2026) differs from the 2024 one (119th, TIGER/Line 2025). similarity: area-weighted mean IoU of each new district with its best match; changed_districts: new districts under 0.95. Made by scripts/datasets/census_redistricting.py.",
+  "compared_states": 49,
+  "not_compared": [
+    {
+      "fips": "19",
+      "name": "Iowa"
+    }
+  ],
+  "redrawn": [
+    {
+      "fips": "47",
+      "code": "TN",
+      "name": "Tennessee",
+      "seats": 9,
+      "changed_districts": 7,
+      "similarity": 0.507,
+      "bounds": [
+        -90.31,
+        34.983,
+        -81.647,
+        36.678
+      ]
+    },
+    {
+      "fips": "49",
+      "code": "UT",
+      "name": "Utah",
+      "seats": 4,
+      "changed_districts": 4,
+      "similarity": 0.553,
+      "bounds": [
+        -114.053,
+        36.998,
+        -109.042,
+        42.002
+      ]
+    },
+    {
+      "fips": "06",
+      "code": "CA",
+      "name": "California",
+      "seats": 52,
+      "changed_districts": 41,
+      "similarity": 0.558,
+      "bounds": [
+        -124.482,
+        32.53,
+        -114.131,
+        42.01
+      ]
+    },
+    {
+      "fips": "39",
+      "code": "OH",
+      "name": "Ohio",
+      "seats": 15,
+      "changed_districts": 12,
+      "similarity": 0.656,
+      "bounds": [
+        -84.82,
+        38.403,
+        -80.519,
+        42.327
+      ]
+    },
+    {
+      "fips": "22",
+      "code": "LA",
+      "name": "Louisiana",
+      "seats": 6,
+      "changed_districts": 6,
+      "similarity": 0.666,
+      "bounds": [
+        -94.043,
+        28.855,
+        -88.758,
+        33.02
+      ]
+    },
+    {
+      "fips": "29",
+      "code": "MO",
+      "name": "Missouri",
+      "seats": 8,
+      "changed_districts": 6,
+      "similarity": 0.709,
+      "bounds": [
+        -95.775,
+        35.996,
+        -89.099,
+        40.614
+      ]
+    },
+    {
+      "fips": "48",
+      "code": "TX",
+      "name": "Texas",
+      "seats": 38,
+      "changed_districts": 35,
+      "similarity": 0.767,
+      "bounds": [
+        -106.646,
+        25.837,
+        -93.508,
+        36.501
+      ]
+    },
+    {
+      "fips": "01",
+      "code": "AL",
+      "name": "Alabama",
+      "seats": 7,
+      "changed_districts": 4,
+      "similarity": 0.77,
+      "bounds": [
+        -88.473,
+        30.144,
+        -84.888,
+        35.008
+      ]
+    },
+    {
+      "fips": "12",
+      "code": "FL",
+      "name": "Florida",
+      "seats": 28,
+      "changed_districts": 18,
+      "similarity": 0.772,
+      "bounds": [
+        -87.635,
+        24.396,
+        -79.974,
+        31.001
+      ]
+    },
+    {
+      "fips": "37",
+      "code": "NC",
+      "name": "North Carolina",
+      "seats": 14,
+      "changed_districts": 2,
+      "similarity": 0.795,
+      "bounds": [
+        -84.322,
+        33.753,
+        -75.4,
+        36.588
+      ]
+    }
+  ]
+}

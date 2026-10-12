@@ -123,6 +123,14 @@ footer a { color: var(--muted); }
 .places span { color: var(--muted); margin-right: .2rem; }
 .places button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 999px; padding: .2rem .75rem; font: inherit; cursor: pointer; }
 .places button:hover { border-color: var(--accent); color: var(--accent); }
+.redrawn { margin: .9rem 0 0; }
+.redrawn .head { font-size: .9rem; margin: 0 0 .35rem; }
+.redrawn .head strong { color: var(--accent); }
+.redrawn .list { display: flex; flex-wrap: wrap; gap: .4rem; font-size: .85rem; }
+.redrawn button { background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: 999px; padding: .2rem .75rem; font: inherit; cursor: pointer; }
+.redrawn button .n { font-family: var(--mono); color: var(--muted); font-size: .78rem; margin-left: .3rem; font-variant-numeric: tabular-nums; }
+.redrawn button:hover { background: var(--accent-soft); }
+.redrawn .note { color: var(--muted); font-size: .8rem; margin: .4rem 0 0; }
 .overlay { position: absolute; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; line-height: 1.45; backdrop-filter: blur(4px); }
 #status { right: .6rem; bottom: .6rem; padding: .3rem .6rem; color: var(--muted); max-width: 60%; }
 #status:empty { display: none; }
@@ -145,6 +153,7 @@ footer a { color: var(--muted); }
 .tiles .t .ab { font-weight: 700; }
 .tiles .t .v { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .7rem; opacity: .85; }
 .tiles .t:hover, .tiles .t:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tiles .t.redrawn-state { box-shadow: inset 0 0 0 3px var(--accent); }
 .tiles .t.dark-ink { color: #ffffff; }
 .scale { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .8rem; color: var(--muted); margin: .6rem 0 0; align-items: center; }
 .scale .sw { display: inline-block; width: .8rem; height: .8rem; border-radius: 2px; vertical-align: -.1rem; margin-right: .3rem; }
@@ -215,6 +224,12 @@ details.table-view summary { cursor: pointer; color: var(--muted); }
   <button type="button" data-place="-71.06,42.36,10">Boston</button>
 </div>
 
+<div class="redrawn" id="redrawn" hidden>
+  <p class="head"><strong>Redrawn since 2024.</strong> <span id="redrawn-count"></span></p>
+  <div class="list" id="redrawn-list"></div>
+  <p class="note" id="redrawn-note"></p>
+</div>
+
 <div class="callout">
 <p><strong>Check your ballot with your state.</strong> These are the boundaries the Census Bureau recorded for the 120th Congress and the 2026 state legislative session year, in TIGER/Line 2026. A plan redrawn by a legislature or a court after that is not in them, and the Census Bureau's boundaries serve statistics, not legal descriptions. Your state election office has the districts on your ballot.</p>
 </div>
@@ -225,7 +240,7 @@ details.table-view summary { cursor: pointer; color: var(--muted); }
   <div class="scale" id="scale"></div>
   <details class="table-view"><summary>As a table</summary><div class="table-wrap"><table id="state-table"><thead><tr><th>State</th><th class="num">Districts</th></tr></thead><tbody></tbody></table></div></details>
 </div>
-<p>Click a state to zoom the map to it. Nebraska elects a single, unicameral legislature, so it has no State House districts; the District of Columbia and Puerto Rico appear where the Census Bureau maps them.</p>
+<p>Click a state to zoom the map to it. On the U.S. House view, an outlined state votes on a different congressional map than in 2024. Nebraska elects a single, unicameral legislature, so it has no State House districts; the District of Columbia and Puerto Rico appear where the Census Bureau maps them.</p>
 
 <h2 id="data">Get the data</h2>
 <pre><code>https://parquetry.geomermaids.com/census/tiger/2026/legislative/cd120.parquet   Congressional districts
@@ -492,6 +507,38 @@ document.getElementById("locate").addEventListener("click", () => {
     { timeout: 10000 });
 });
 
+// ---------- redrawn since 2024 ----------
+// redistricting.json: the states whose 2026 congressional map differs from
+// the 2024 one, measured by scripts/datasets/census_redistricting.py.
+let redrawn = new Set();
+async function loadRedrawn() {
+  const r = await fetch("/redistricting.json");
+  if (!r.ok) return;
+  const data = await r.json();
+  const list = document.getElementById("redrawn-list");
+  for (const s of data.redrawn) {
+    redrawn.add(s.fips);
+    const b = el("button", { type: "button",
+      title: `${s.changed_districts} of ${s.seats} districts redrawn; ${Math.round(s.similarity * 100)}% of the 2024 map kept, by area` });
+    b.append(document.createTextNode(s.name), el("span", { class: "n" }, `${s.changed_districts}/${s.seats}`));
+    b.addEventListener("click", () => {
+      setLayer("cd120");
+      zoomToState(s.fips);
+      document.getElementById("map-section").scrollIntoView({ behavior: "smooth" });
+    });
+    list.append(b);
+  }
+  document.getElementById("redrawn-count").textContent =
+    `${data.redrawn.length} states vote on a different congressional map than in 2024. Districts redrawn, out of the state's seats:`;
+  const missing = (data.not_compared || []).map((s) => s.name);
+  document.getElementById("redrawn-note").textContent =
+    "Compared with the Census Bureau's 119th Congress districts (TIGER/Line 2025), the map of the 2024 election. " +
+    "The data shows that a map changed, not why: legislatures, courts and ballot measures all redrew maps." +
+    (missing.length ? ` Not compared: ${missing.join(", ")}.` : "");
+  document.getElementById("redrawn").hidden = false;
+  renderTiles();
+}
+
 // ---------- districts per state ----------
 function renderTiles() {
   if (!manifest) return;
@@ -514,6 +561,7 @@ function renderTiles() {
       const s = step(n);
       t.style.background = css(`--s${s}`);
       if (dark ? s <= 1 : s >= 2) t.classList.add("dark-ink");
+      if (layer === "cd120" && redrawn.has(fips)) t.classList.add("redrawn-state");
     }
     t.append(el("span", { class: "ab" }, code), el("span", { class: "v" }, n ? fmt.format(n) : "–"));
     t.addEventListener("click", () => { zoomToState(fips); document.getElementById("map-section").scrollIntoView({ behavior: "smooth" }); });
@@ -550,7 +598,7 @@ document.querySelectorAll(".copy-btn").forEach((b) => b.addEventListener("click"
 }));
 
 // ---------- start ----------
-const ready = loadManifest().then(renderTiles).catch((e) => {
+const ready = loadManifest().then(renderTiles).then(loadRedrawn).catch((e) => {
   setStatus("The district list could not be read right now.");
   console.warn(e);
 });
