@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>US Census boundaries as GeoParquet · geomermaids</title>
+<meta name="description" content="The US Census Bureau's TIGER/Line boundaries as GeoParquet and map tiles, starting with the districts of the November 2026 elections: 435 congressional districts and every state legislative district. Public domain, read in place from a URL.">
+<link rel="canonical" href="https://census.geomermaids.com/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#d2553a">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://census.geomermaids.com/">
+<meta property="og:title" content="US Census boundaries as GeoParquet">
+<meta property="og:description" content="TIGER/Line 2026: the congressional and state legislative districts of the November 2026 elections, as GeoParquet and map tiles. Query them from a URL.">
+<meta property="og:image" content="https://census.geomermaids.com/logo-384.png">
+<meta property="og:site_name" content="geomermaids">
+<meta name="twitter:card" content="summary">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --accent: #d2553a;
+  --accent-soft: #fae0d8;
+  --border: #e5e5e5;
+  --code-bg: #f6f6f4;
+  --code-fg: #1a1a1a;
+  --panel: rgba(255, 255, 255, .94);
+  --tile-empty: #ecebe7;
+  /* Districts: six categorical hues, neighbours never share one
+     (validated: CVD and normal-vision separation pass; outlines carry the
+     relief the lighter three need). */
+  --d0: #2a78d6; --d1: #eb6834; --d2: #1baf7a; --d3: #eda100; --d4: #e87ba4; --d5: #008300;
+  --undefined: #c9c8c2;
+  /* Districts per state: one blue, light to dark. */
+  --s0: #cde2fb; --s1: #86b6ef; --s2: #3987e5; --s3: #1c5cab; --s4: #0d366b;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --accent: #f08a6e;
+    --accent-soft: #2e1f1a;
+    --border: #2e2e2e;
+    --code-bg: #0f0f0f;
+    --code-fg: #e8e8e8;
+    --panel: rgba(26, 26, 25, .94);
+    --tile-empty: #262624;
+    --d0: #3987e5; --d1: #d95926; --d2: #199e70; --d3: #c98500; --d4: #d55181; --d5: #008300;
+    --undefined: #4a4945;
+    --s0: #184f95; --s1: #2a78d6; --s2: #5598e7; --s3: #9ec5f4; --s4: #e4effc;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+body { font-family: var(--sans); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+main { max-width: 860px; margin: 0 auto; padding: 3rem 1rem 6rem; }
+@media (min-width: 600px) { main { padding-left: 1.5rem; padding-right: 1.5rem; } }
+.topnav { display: flex; justify-content: flex-end; gap: 1.2rem; margin-bottom: 1rem; font-size: .9rem; flex-wrap: wrap; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.hero-logo { width: 96px; height: 96px; display: block; margin: 0 0 1rem; border-radius: 8px; }
+h1 { font-size: 2.4rem; margin: 0; letter-spacing: -0.03em; line-height: 1.1; }
+h1 .brand { color: var(--accent); }
+.expansion { font-size: 1.1rem; color: var(--muted); margin: .3rem 0 1.2rem; }
+h2 { font-size: 1.35rem; margin: 3rem 0 .75rem; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 1.8rem 0 .4rem; color: var(--muted); font-weight: 600; }
+p { margin: .8rem 0; }
+.lead { font-size: 1.08rem; }
+a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+.stats { display: flex; flex-wrap: wrap; gap: 1.5rem 2.2rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 1rem 0; margin: 1.5rem 0 2rem; }
+.stat strong { display: block; font-family: var(--mono); font-size: 1.4rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: .1em .3em; border-radius: 3px; }
+pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: 6px; overflow-x: auto; font-family: var(--mono); font-size: .85rem; line-height: 1.55; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+p code, li code { overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; margin: .5rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+ul, ol { padding-left: 1.3rem; }
+li { margin: .35rem 0; }
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: .9rem 1.1rem; margin: 1rem 0 1.5rem; border-radius: 0 4px 4px 0; }
+.callout p { margin: .25rem 0; }
+.code-block { position: relative; }
+.code-block pre { padding-right: 4.5rem; }
+.copy-btn { position: absolute; top: .55rem; right: .55rem; background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: .25rem .6rem; font-size: .78rem; font-family: var(--sans); cursor: pointer; line-height: 1.3; }
+.copy-btn:hover, .copy-btn.copied { border-color: var(--accent); color: var(--accent); }
+.cta { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 2.5rem 0 1rem; }
+.cta h2 { margin-top: 0; color: var(--accent); }
+footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
+footer a { color: var(--muted); }
+@media (max-width: 600px) { h1 { font-size: 2rem; } }
+
+/* Election banner */
+.election { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem 1rem; border: 1px solid var(--border); border-radius: 8px; padding: .9rem 1.1rem; margin: 1.5rem 0 0; }
+.election .when { font-weight: 700; }
+.election .count { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+.election .what { color: var(--muted); font-size: .92rem; flex-basis: 100%; }
+
+/* Chamber switch: one row above the map and the grid. */
+.chambers { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; margin: .4rem 0 .2rem; flex-wrap: wrap; }
+.chambers button { border: 0; background: none; color: var(--fg); font: inherit; font-size: .9rem; padding: .3rem .9rem; border-radius: 999px; cursor: pointer; }
+.chambers button .n { font-family: var(--mono); color: var(--muted); font-size: .82rem; margin-left: .35rem; font-variant-numeric: tabular-nums; }
+.chambers button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.chambers button[aria-pressed="true"] .n { color: var(--bg); opacity: .75; }
+.toolbar { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: center; justify-content: space-between; }
+.toolbar select, .toolbar .locate { font: inherit; font-size: .88rem; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: .3rem .6rem; }
+.toolbar .locate { cursor: pointer; }
+.toolbar .locate:hover, .toolbar select:hover { border-color: var(--accent); }
+
+/* The map: wider than the text column. */
+.map-wrap { position: relative; width: min(1200px, calc(100vw - 2rem)); left: 50%; transform: translateX(-50%); margin: .8rem 0 .6rem; }
+#map { width: 100%; height: min(72vh, 680px); min-height: 420px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.places { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 0; font-size: .85rem; align-items: center; }
+.places span { color: var(--muted); margin-right: .2rem; }
+.places button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 999px; padding: .2rem .75rem; font: inherit; cursor: pointer; }
+.places button:hover { border-color: var(--accent); color: var(--accent); }
+.overlay { position: absolute; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; line-height: 1.45; backdrop-filter: blur(4px); }
+#status { right: .6rem; bottom: .6rem; padding: .3rem .6rem; color: var(--muted); max-width: 60%; }
+#status:empty { display: none; }
+#panel { top: .6rem; left: .6rem; width: min(320px, calc(100% - 1.2rem)); padding: .75rem .9rem .8rem; display: none; }
+#panel.open { display: block; }
+#panel .close { position: absolute; top: .3rem; right: .45rem; border: 0; background: none; color: var(--muted); font-size: 1.15rem; cursor: pointer; line-height: 1; padding: .2rem; }
+#panel .kicker { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; margin: 0; }
+#panel h4 { margin: .1rem 1.2rem .4rem 0; font-size: 1.05rem; line-height: 1.3; }
+#panel dl { display: grid; grid-template-columns: auto 1fr; gap: .1rem .8rem; margin: .4rem 0; }
+#panel dt { color: var(--muted); }
+#panel dd { margin: 0; font-family: var(--mono); font-size: .8rem; font-variant-numeric: tabular-nums; }
+#panel .note { color: var(--muted); font-size: .76rem; border-top: 1px solid var(--border); padding-top: .45rem; margin: .5rem 0 0; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: .8rem; padding: .35rem .55rem; border-radius: 4px; opacity: 0; transition: opacity .1s; z-index: 5; max-width: 280px; }
+.maplibregl-ctrl-attrib { font-size: 11px; }
+
+/* Districts per state: a tile grid, one square per state. */
+.grid-wrap { margin: 1rem 0 .5rem; }
+.tiles { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; max-width: 640px; }
+.tiles .t { aspect-ratio: 1; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: .72rem; line-height: 1.1; cursor: pointer; border: 0; padding: 0; font-family: var(--sans); background: var(--tile-empty); color: var(--fg); }
+.tiles .t .ab { font-weight: 700; }
+.tiles .t .v { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .7rem; opacity: .85; }
+.tiles .t:hover, .tiles .t:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tiles .t.dark-ink { color: #ffffff; }
+.scale { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .8rem; color: var(--muted); margin: .6rem 0 0; align-items: center; }
+.scale .sw { display: inline-block; width: .8rem; height: .8rem; border-radius: 2px; vertical-align: -.1rem; margin-right: .3rem; }
+@media (max-width: 520px) { .tiles .t .v { display: none; } .tiles .t { font-size: .6rem; } }
+details.table-view { margin: .6rem 0; font-size: .9rem; }
+details.table-view summary { cursor: pointer; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<nav class="topnav">
+  <a href="#map-section">Election maps</a>
+  <a href="#data">Get the data</a>
+  <a href="https://parquetry.geomermaids.com/census/catalog/catalog.json">Catalog</a>
+  <a href="https://www.geomermaids.com" rel="noopener">geomermaids.com&nbsp;↗</a>
+</nav>
+
+<picture>
+  <source type="image/webp" srcset="/logo-96.webp 1x, /logo-192.webp 2x, /logo-384.webp 4x">
+  <img class="hero-logo" src="/logo-384.png" alt="geomermaids" width="96" height="96">
+</picture>
+<h1><span class="brand">US Census boundaries</span>, as GeoParquet</h1>
+<p class="expansion">TIGER/Line 2026, starting with the districts of the November elections</p>
+
+<p class="lead">The Census Bureau publishes its TIGER/Line boundaries as national GeoPackages, several hundred megabytes each, to download before you can ask anything. Here they are as <strong>GeoParquet you query from a URL</strong>, one file per layer, with map tiles beside them. The first release is the legislative areas: every congressional district of the 120th Congress and every state legislative district.</p>
+<p>Columns and codes are the Census Bureau's, unchanged, so they join with every other Census table. Public domain, like the source.</p>
+
+<div class="election" id="election">
+  <span class="when">Election Day: Tuesday, November 3, 2026</span>
+  <span class="count" id="countdown"></span>
+  <span class="what">All 435 seats of the U.S. House are elected in these congressional districts; the representatives form the 120th Congress in January 2027. Most states also elect legislators in the districts below.</span>
+</div>
+
+<div class="stats">
+  <div class="stat"><strong data-stat="cd120">…</strong><span>congressional districts</span></div>
+  <div class="stat"><strong data-stat="sldu">…</strong><span>state senate districts</span></div>
+  <div class="stat"><strong data-stat="sldl">…</strong><span>state house districts</span></div>
+  <div class="stat"><strong data-stat="modified">…</strong><span>Census release</span></div>
+</div>
+
+<h2 id="map-section">The districts on the ballot</h2>
+<p>Pick a chamber, then click a district. Colours only tell neighbours apart. The map draws the PMTiles published beside the GeoParquet: nothing here runs on a server.</p>
+<div class="toolbar">
+  <div class="chambers" role="group" aria-label="Chamber">
+    <button type="button" data-layer="cd120" aria-pressed="true">U.S. House<span class="n" data-n="cd120"></span></button>
+    <button type="button" data-layer="sldu" aria-pressed="false">State Senate<span class="n" data-n="sldu"></span></button>
+    <button type="button" data-layer="sldl" aria-pressed="false">State House<span class="n" data-n="sldl"></span></button>
+  </div>
+  <div>
+    <select id="state" aria-label="Zoom to a state"><option value="">Zoom to a state…</option></select>
+    <button type="button" class="locate" id="locate">Use my location</button>
+  </div>
+</div>
+<div class="map-wrap">
+  <div id="map" role="region" aria-label="Map of the 2026 congressional and state legislative districts"></div>
+  <div class="overlay" id="panel" aria-live="polite"></div>
+  <div class="overlay" id="status" aria-live="polite"></div>
+  <div class="tip" id="tip" role="tooltip"></div>
+</div>
+<div class="places">
+  <span>Try:</span>
+  <button type="button" data-place="-97.74,30.27,9">Austin</button>
+  <button type="button" data-place="-84.39,33.75,9">Atlanta</button>
+  <button type="button" data-place="-112.07,33.45,9">Phoenix</button>
+  <button type="button" data-place="-75.16,39.95,9.5">Philadelphia</button>
+  <button type="button" data-place="-87.91,43.04,9">Milwaukee</button>
+  <button type="button" data-place="-118.24,34.05,9">Los Angeles</button>
+  <button type="button" data-place="-73.97,40.73,10">New York</button>
+</div>
+
+<div class="callout">
+<p><strong>Check your ballot with your state.</strong> These are the boundaries the Census Bureau recorded for the 120th Congress and the 2026 state legislative session year, in TIGER/Line 2026. A plan redrawn by a legislature or a court after that is not in them, and the Census Bureau's boundaries serve statistics, not legal descriptions. Your state election office has the districts on your ballot.</p>
+</div>
+
+<h3 id="by-state">Districts per state</h3>
+<div class="grid-wrap">
+  <div class="tiles" id="tiles" role="list" aria-label="Districts per state for the selected chamber"></div>
+  <div class="scale" id="scale"></div>
+  <details class="table-view"><summary>As a table</summary><div class="table-wrap"><table id="state-table"><thead><tr><th>State</th><th class="num">Districts</th></tr></thead><tbody></tbody></table></div></details>
+</div>
+<p>Click a state to zoom the map to it. Nebraska elects a single, unicameral legislature, so it has no State House districts; the District of Columbia and Puerto Rico appear where the Census Bureau maps them.</p>
+
+<h2 id="data">Get the data</h2>
+<pre><code>https://parquetry.geomermaids.com/census/tiger/2026/legislative/cd120.parquet   Congressional districts
+https://parquetry.geomermaids.com/census/tiger/2026/legislative/sldu.parquet    State legislative, upper
+https://parquetry.geomermaids.com/census/tiger/2026/legislative/sldl.parquet    State legislative, lower
+s3://parquetry/census/tiger/2026/legislative/*.parquet   (endpoint s3.geomermaids.com, anonymous)</code></pre>
+<p>Each file carries TIGER's columns (<code>STATEFP</code>, <code>GEOID</code>, <code>NAMELSAD</code>, <code>ALAND</code>, <code>AWATER</code> and the rest), the geometry in NAD83 (EPSG:4269, geographic: longitude and latitude) and a <code>bbox</code> column declared as the GeoParquet covering. Rows are sorted on a Hilbert curve, so a point lookup reads one small row group, not the whole country.</p>
+
+<h3>The congressional district at a point</h3>
+<div class="code-block">
+<pre><code>INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
+SELECT GEOID, NAMELSAD
+FROM read_parquet('https://parquetry.geomermaids.com/census/tiger/2026/legislative/cd120.parquet')
+WHERE bbox.xmin &lt;= -97.74 AND bbox.xmax &gt;= -97.74
+  AND bbox.ymin &lt;= 30.27 AND bbox.ymax &gt;= 30.27
+  AND ST_Contains(geometry, ST_Point(-97.74, 30.27));</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<h3>House seats per state</h3>
+<div class="code-block">
+<pre><code>SELECT STATEFP, count(*) AS seats
+FROM read_parquet('https://parquetry.geomermaids.com/census/tiger/2026/legislative/cd120.parquet')
+WHERE CD120FP NOT IN ('98', 'ZZ')   -- delegates, undefined areas
+GROUP BY 1 ORDER BY 2 DESC;</code></pre>
+<button class="copy-btn" type="button">Copy</button>
+</div>
+
+<ul>
+  <li><strong>Browse the files:</strong> <a href="https://parquetry.geomermaids.com/census/">parquetry.geomermaids.com/census/</a></li>
+  <li><strong>Portolan catalog</strong> (STAC, column docs, styles, agent guide): <a href="https://parquetry.geomermaids.com/census/catalog/catalog.json">census/catalog/</a></li>
+  <li><strong>Map tiles:</strong> <code>cd120.pmtiles</code>, <code>sldu.pmtiles</code>, <code>sldl.pmtiles</code> beside each file, zoom 0 to 12, with a <code>color_index</code> that keeps neighbours apart.</li>
+  <li><strong>Credits and what was changed:</strong> <a href="https://parquetry.geomermaids.com/census/tiger/2026/legislative/ATTRIBUTION.txt">ATTRIBUTION.txt</a></li>
+</ul>
+
+<h2 id="next">More of TIGER/Line</h2>
+<p>The Census Bureau publishes twelve national GeoPackages for 2026, from rails to census blocks. The legislative areas are the first; the others follow under the same layout, <code>census/tiger/2026/&lt;product&gt;/&lt;layer&gt;.parquet</code>, in the same catalog.</p>
+
+<h2 id="licence">Licence</h2>
+<p>TIGER/Line is a work of the US federal government, not subject to copyright in the United States (17 U.S.C. 105): no restriction on use or redistribution. Credit "U.S. Census Bureau, TIGER/Line 2026". The Census Bureau makes no warranty on the data and its boundaries are for statistical purposes, not legal land descriptions.</p>
+
+<div class="cta">
+<h2>Need it tailored?</h2>
+<p>We also deliver it joined to your voter file, customer addresses or portfolio, other TIGER layers on request, or into your bucket on your cadence.</p>
+<p><a href="mailto:contact@geomermaids.com?subject=US%20Census%20boundaries">contact@geomermaids.com</a></p>
+</div>
+
+<footer>
+Built by <a href="https://www.geomermaids.com">Geomermaids</a> from the U.S. Census Bureau's TIGER/Line GeoPackages. Not affiliated with or endorsed by the Census Bureau. Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles by <a href="https://openfreemap.org">OpenFreeMap</a>. Other datasets: <a href="https://geoparquet.geomermaids.com">geoparquet.geomermaids.com</a>.
+</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<script type="module">
+import * as maplibregl from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
+
+// ?base= points the page at another copy of the data (a local rehearsal).
+const BASE = new URLSearchParams(location.search).get("base") || "https://parquetry.geomermaids.com/census";
+const DIR = `${BASE}/tiger/2026/legislative`;
+const fmt = new Intl.NumberFormat("en-US");
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+const ELECTION = Date.UTC(2026, 10, 3);
+
+const CHAMBERS = {
+  cd120: { key: "CD120FP", label: "U.S. House", kicker: "Congressional district, 120th Congress",
+           note: "Elected on November 3, 2026, for the term starting in January 2027." },
+  sldu: { key: "SLDUST", label: "State Senate", kicker: "State legislative district, upper chamber",
+          note: "2026 legislative session year. Not every upper chamber is up for election in 2026: check your state." },
+  sldl: { key: "SLDLST", label: "State House", kicker: "State legislative district, lower chamber",
+          note: "2026 legislative session year. Check your state for which seats are on the 2026 ballot." },
+};
+// Tile grid: [column, row] per state, 12 columns.
+const GRID = {
+  AK: [0, 0], ME: [11, 0],
+  WI: [6, 1], VT: [10, 1], NH: [11, 1],
+  WA: [1, 2], ID: [2, 2], MT: [3, 2], ND: [4, 2], MN: [5, 2], IL: [6, 2], MI: [7, 2], NY: [9, 2], MA: [10, 2],
+  OR: [1, 3], NV: [2, 3], WY: [3, 3], SD: [4, 3], IA: [5, 3], IN: [6, 3], OH: [7, 3], PA: [8, 3], NJ: [9, 3], CT: [10, 3], RI: [11, 3],
+  CA: [1, 4], UT: [2, 4], CO: [3, 4], NE: [4, 4], MO: [5, 4], KY: [6, 4], WV: [7, 4], VA: [8, 4], MD: [9, 4], DE: [10, 4],
+  AZ: [2, 5], NM: [3, 5], KS: [4, 5], AR: [5, 5], TN: [6, 5], NC: [7, 5], SC: [8, 5], DC: [9, 5],
+  OK: [4, 6], LA: [5, 6], MS: [6, 6], AL: [7, 6], GA: [8, 6],
+  HI: [0, 7], TX: [4, 7], FL: [9, 7], PR: [11, 7],
+};
+
+function el(tag, attrs = {}, text) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const statusEl = document.getElementById("status");
+const setStatus = (t) => { statusEl.textContent = t || ""; };
+
+// ---------- countdown ----------
+{
+  const today = Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  const days = Math.round((ELECTION - today) / 864e5);
+  document.getElementById("countdown").textContent =
+    days > 1 ? `${days} days to go` : days === 1 ? "tomorrow" : days === 0 ? "today" : "";
+}
+
+// ---------- the manifest ----------
+let manifest = null;
+let states = {};       // fips -> {code, name, bounds}
+let byCode = {};       // USPS -> fips
+let layer = "cd120";
+
+async function loadManifest() {
+  const r = await fetch(`${DIR}/_manifest.json`);
+  if (!r.ok) throw new Error(`manifest ${r.status}`);
+  manifest = await r.json();
+  states = manifest.states;
+  for (const [fips, s] of Object.entries(states)) byCode[s.code] = fips;
+  for (const f of manifest.files) {
+    const total = Object.values(f.by_state).reduce((a, b) => a + b, 0);
+    document.querySelector(`[data-stat="${f.name}"]`).textContent = fmt.format(total);
+    document.querySelector(`[data-n="${f.name}"]`).textContent = fmt.format(total);
+  }
+  const lm = new Date(manifest.source.last_modified);
+  document.querySelector('[data-stat="modified"]').textContent =
+    isNaN(lm) ? "2026" : lm.toISOString().slice(0, 10);
+  const select = document.getElementById("state");
+  Object.entries(states)
+    .filter(([, s]) => s.bounds)
+    .sort((a, b) => a[1].name.localeCompare(b[1].name))
+    .forEach(([fips, s]) => select.append(el("option", { value: fips }, s.name)));
+}
+
+// ---------- the map ----------
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+const map = new maplibregl.Map({
+  container: "map",
+  style: `https://tiles.openfreemap.org/styles/${dark ? "dark" : "positron"}`,
+  center: [-96.5, 38.5], zoom: 3.3, minZoom: 2, maxZoom: 14,
+  attributionControl: { compact: true },
+  cooperativeGestures: matchMedia("(pointer: coarse)").matches,
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+const tip = document.getElementById("tip");
+const panel = document.getElementById("panel");
+
+function firstSymbolLayer() {
+  return map.getStyle().layers.find((l) => l.type === "symbol")?.id;
+}
+const palette = () => [0, 1, 2, 3, 4, 5].map((i) => css(`--d${i}`));
+
+function addDistricts() {
+  const below = firstSymbolLayer();
+  for (const [name, c] of Object.entries(CHAMBERS)) {
+    map.addSource(name, { type: "vector", url: `pmtiles://${DIR}/${name}.pmtiles`,
+                          attribution: "U.S. Census Bureau, TIGER/Line 2026" });
+    const undefinedArea = ["in", "ZZ", ["get", c.key]];
+    map.addLayer({
+      id: `${name}-fill`, type: "fill", source: name, "source-layer": name,
+      layout: { visibility: name === layer ? "visible" : "none" },
+      paint: {
+        "fill-color": ["case", undefinedArea, css("--undefined"),
+          ["match", ["get", "color_index"], 0, palette()[0], 1, palette()[1], 2, palette()[2],
+            3, palette()[3], 4, palette()[4], palette()[5]]],
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 3, 0.62, 10, 0.42],
+      },
+    }, below);
+    map.addLayer({
+      id: `${name}-line`, type: "line", source: name, "source-layer": name,
+      layout: { visibility: name === layer ? "visible" : "none" },
+      paint: { "line-color": dark ? "#141414" : "#ffffff",
+               "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.4, 9, 1.6] },
+    }, below);
+    map.addLayer({
+      id: `${name}-selected`, type: "line", source: name, "source-layer": name,
+      filter: ["==", ["get", "GEOID"], ""],
+      layout: { visibility: name === layer ? "visible" : "none" },
+      paint: { "line-color": css("--fg"), "line-width": 2.5 },
+    });
+  }
+}
+
+function setLayer(next) {
+  layer = next;
+  for (const name of Object.keys(CHAMBERS)) {
+    for (const part of ["fill", "line", "selected"]) {
+      if (map.getLayer(`${name}-${part}`))
+        map.setLayoutProperty(`${name}-${part}`, "visibility", name === layer ? "visible" : "none");
+    }
+  }
+  document.querySelectorAll(".chambers button").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.layer === layer)));
+  closePanel();
+  renderTiles();
+}
+
+const km2 = (m2) => `${fmt.format(Math.round(Number(m2) / 1e6))} km²`;
+function openPanel(props) {
+  const c = CHAMBERS[layer];
+  const st = states[props.STATEFP];
+  panel.textContent = "";
+  const close = el("button", { class: "close", type: "button", "aria-label": "Close" }, "×");
+  close.onclick = closePanel;
+  panel.append(close, el("p", { class: "kicker" }, c.kicker), el("h4", {}, `${props.NAMELSAD}, ${st ? st.name : props.STATEFP}`));
+  const dl = el("dl");
+  const row = (k, v) => dl.append(el("dt", {}, k), el("dd", {}, v));
+  row("GEOID", props.GEOID);
+  row("Land", km2(props.ALAND));
+  row("Water", km2(props.AWATER));
+  panel.append(dl);
+  const undefinedArea = String(props[c.key]).includes("ZZ");
+  panel.append(el("p", { class: "note" }, undefinedArea
+    ? "An area where the state defines no district for this chamber (TIGER's ZZ code)."
+    : c.note));
+  panel.classList.add("open");
+  map.setFilter(`${layer}-selected`, ["==", ["get", "GEOID"], props.GEOID]);
+}
+function closePanel() {
+  panel.classList.remove("open");
+  if (map.getLayer(`${layer}-selected`)) map.setFilter(`${layer}-selected`, ["==", ["get", "GEOID"], ""]);
+}
+
+function districtAt(point) {
+  return map.queryRenderedFeatures(point, { layers: [`${layer}-fill`] })[0];
+}
+map.on("mousemove", (e) => {
+  const f = map.getLayer(`${layer}-fill`) && districtAt(e.point);
+  map.getCanvas().style.cursor = f ? "pointer" : "";
+  if (!f) { tip.style.opacity = 0; return; }
+  const st = states[f.properties.STATEFP];
+  tip.textContent = `${f.properties.NAMELSAD}${st ? ", " + st.code : ""}`;
+  tip.style.left = `${e.point.x + 14}px`;
+  tip.style.top = `${e.point.y + 14}px`;
+  tip.style.opacity = 1;
+});
+map.on("mouseout", () => { tip.style.opacity = 0; });
+map.on("click", (e) => {
+  const f = districtAt(e.point);
+  if (f) openPanel(f.properties); else closePanel();
+});
+
+function zoomToState(fips) {
+  const b = states[fips]?.bounds;
+  if (b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 30, duration: 900 });
+}
+
+// Open the panel for the district at a lon/lat once its tiles are drawn.
+function showAt(lng, lat, zoom) {
+  map.flyTo({ center: [lng, lat], zoom, duration: 1200 });
+  map.once("idle", () => {
+    const f = districtAt(map.project([lng, lat]));
+    if (f) openPanel(f.properties);
+  });
+}
+
+document.querySelectorAll(".chambers button").forEach((b) => b.addEventListener("click", () => setLayer(b.dataset.layer)));
+document.getElementById("state").addEventListener("change", (e) => e.target.value && zoomToState(e.target.value));
+document.querySelectorAll(".places button").forEach((b) => b.addEventListener("click", () => {
+  const [x, y, z] = b.dataset.place.split(",").map(Number);
+  showAt(x, y, z);
+}));
+document.getElementById("locate").addEventListener("click", () => {
+  if (!navigator.geolocation) { setStatus("Location is not available in this browser."); return; }
+  setStatus("Finding your location…");
+  navigator.geolocation.getCurrentPosition(
+    (p) => { setStatus(""); showAt(p.coords.longitude, p.coords.latitude, 10); },
+    () => setStatus("Location not shared. Click your area on the map instead."),
+    { timeout: 10000 });
+});
+
+// ---------- districts per state ----------
+function renderTiles() {
+  if (!manifest) return;
+  const counts = manifest.files.find((f) => f.name === layer).by_state;
+  const values = Object.values(counts);
+  // Five ordinal steps over the spread of this chamber's counts.
+  const max = Math.max(...values);
+  const edges = layer === "cd120" ? [1, 3, 9, 20] : [Math.ceil(max * .1), Math.ceil(max * .25), Math.ceil(max * .5), Math.ceil(max * .75)];
+  const step = (n) => edges.findIndex((e) => n <= e) === -1 ? 4 : edges.findIndex((e) => n <= e);
+  const grid = document.getElementById("tiles");
+  grid.textContent = "";
+  for (const [code, [col, row]] of Object.entries(GRID)) {
+    const fips = byCode[code];
+    const n = counts[fips];
+    const t = el("button", { class: "t", type: "button", role: "listitem",
+                             "aria-label": `${states[fips]?.name || code}: ${n ? fmt.format(n) : "no"} districts` });
+    t.style.gridColumn = col + 1;
+    t.style.gridRow = row + 1;
+    if (n) {
+      const s = step(n);
+      t.style.background = css(`--s${s}`);
+      if (dark ? s <= 1 : s >= 2) t.classList.add("dark-ink");
+    }
+    t.append(el("span", { class: "ab" }, code), el("span", { class: "v" }, n ? fmt.format(n) : "–"));
+    t.addEventListener("click", () => { zoomToState(fips); document.getElementById("map-section").scrollIntoView({ behavior: "smooth" }); });
+    t.title = `${states[fips]?.name || code}: ${n ? fmt.format(n) : "no"} ${CHAMBERS[layer].label} districts`;
+    grid.append(t);
+  }
+  const scale = document.getElementById("scale");
+  scale.textContent = "";
+  const labels = [`1–${edges[0]}`, `${edges[0] + 1}–${edges[1]}`, `${edges[1] + 1}–${edges[2]}`, `${edges[2] + 1}–${edges[3]}`, `${edges[3] + 1}+`];
+  scale.append(el("span", {}, `${CHAMBERS[layer].label} districts:`));
+  labels.forEach((l, i) => {
+    const s = el("span");
+    const sw = el("span", { class: "sw" });
+    sw.style.background = css(`--s${i}`);
+    s.append(sw, document.createTextNode(l));
+    scale.append(s);
+  });
+  const tbody = document.querySelector("#state-table tbody");
+  tbody.textContent = "";
+  Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([fips, n]) => {
+      const tr = el("tr");
+      tr.append(el("td", {}, states[fips]?.name || fips), el("td", { class: "num" }, fmt.format(n)));
+      tbody.append(tr);
+    });
+}
+
+// ---------- copy buttons ----------
+document.querySelectorAll(".copy-btn").forEach((b) => b.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(b.previousElementSibling.textContent);
+  b.textContent = "Copied"; b.classList.add("copied");
+  setTimeout(() => { b.textContent = "Copy"; b.classList.remove("copied"); }, 1500);
+}));
+
+// ---------- start ----------
+const ready = loadManifest().then(renderTiles).catch((e) => {
+  setStatus("The district list could not be read right now.");
+  console.warn(e);
+});
+map.on("load", () => { addDistricts(); });
+</script>
+</body>
+</html>

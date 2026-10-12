@@ -1,0 +1,17 @@
+// The US Census (TIGER/Line) page. Workers + Static Assets, like nfhl/. The
+// page reads the live manifests and PMTiles from
+// parquetry.geomermaids.com/census/ in the browser, so a new build shows
+// without a redeploy.
+//
+// Deploy from census/:
+//   npx wrangler deploy
+// The custom domain is declared below, so the first deploy creates the
+// DNS record and the certificate for census.geomermaids.com.
+{
+  "name": "census",
+  "compatibility_date": "2026-04-01",
+  "routes": [{ "pattern": "census.geomermaids.com", "custom_domain": true }],
+  "assets": {
+    "directory": "./public"
+  }
+}
