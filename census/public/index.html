@@ -33,6 +33,9 @@
      relief the lighter three need). */
   --d0: #2a78d6; --d1: #eb6834; --d2: #1baf7a; --d3: #eda100; --d4: #e87ba4; --d5: #008300;
   --undefined: #c9c8c2;
+  /* Compare with 2024: one orange ramp, the more redrawn the darker. */
+  --k0: #f09a78; --k1: #e36d43; --k2: #c94a24; --k3: #8f2a0f;
+  --unchanged: #dedcd6; --old-line: #1a1a1a;
   /* Districts per state: one blue, light to dark. */
   --s0: #cde2fb; --s1: #86b6ef; --s2: #3987e5; --s3: #1c5cab; --s4: #0d366b;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
@@ -52,6 +55,8 @@
     --tile-empty: #262624;
     --d0: #3987e5; --d1: #d95926; --d2: #199e70; --d3: #c98500; --d4: #d55181; --d5: #008300;
     --undefined: #4a4945;
+    --k0: #8a3a1e; --k1: #b8481f; --k2: #e36a43; --k3: #f4a586;
+    --unchanged: #33332f; --old-line: #f2f2f2;
     --s0: #184f95; --s1: #2a78d6; --s2: #5598e7; --s3: #9ec5f4; --s4: #e4effc;
   }
 }
@@ -132,6 +137,15 @@ footer a { color: var(--muted); }
 .redrawn button:hover { background: var(--accent-soft); }
 .redrawn .note { color: var(--muted); font-size: .8rem; margin: .4rem 0 0; }
 .overlay { position: absolute; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; line-height: 1.45; backdrop-filter: blur(4px); }
+#legend { left: .6rem; bottom: .6rem; padding: .55rem .7rem; display: none; }
+#legend.open { display: block; }
+#legend .title { font-weight: 600; margin-bottom: .25rem; }
+#legend .row { display: flex; align-items: center; gap: .45rem; white-space: nowrap; }
+#legend .sw { width: .8rem; height: .8rem; border-radius: 2px; flex: none; }
+#legend .dash { width: .9rem; height: 0; border-top: 2px dashed var(--old-line); flex: none; }
+#legend .hint { color: var(--muted); margin-top: .3rem; max-width: 15rem; white-space: normal; }
+.toolbar .compare { font: inherit; font-size: .88rem; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; padding: .3rem .6rem; cursor: pointer; }
+.toolbar .compare[aria-pressed="true"] { background: var(--accent); color: #fff; }
 #status { right: .6rem; bottom: .6rem; padding: .3rem .6rem; color: var(--muted); max-width: 60%; }
 #status:empty { display: none; }
 #panel { top: .6rem; left: .6rem; width: min(320px, calc(100% - 1.2rem)); padding: .75rem .9rem .8rem; display: none; }
@@ -195,7 +209,7 @@ details.table-view summary { cursor: pointer; color: var(--muted); }
 </div>
 
 <h2 id="map-section">The districts on the ballot</h2>
-<p>Pick a chamber, then click a district. Colours only tell neighbours apart. The map draws the PMTiles published beside the GeoParquet: nothing here runs on a server.</p>
+<p>Pick a chamber, then click a district. Colours only tell neighbours apart. <strong>Compare with 2024</strong> shows what was redrawn since the last election: changed districts shaded by how much of the 2024 district they kept, the 2024 lines dashed on top. The map draws the PMTiles published beside the GeoParquet: nothing here runs on a server.</p>
 <div class="toolbar">
   <div class="chambers" role="group" aria-label="Chamber">
     <button type="button" data-layer="cd120" aria-pressed="true">U.S. House<span class="n" data-n="cd120"></span></button>
@@ -204,12 +218,14 @@ details.table-view summary { cursor: pointer; color: var(--muted); }
   </div>
   <div>
     <select id="state" aria-label="Zoom to a state"><option value="">Zoom to a state…</option></select>
+    <button type="button" class="compare" id="compare" aria-pressed="false" title="Grey out the districts that did not change since the 2024 election, and draw the 2024 lines">Compare with 2024</button>
     <button type="button" class="locate" id="locate">Use my location</button>
   </div>
 </div>
 <div class="map-wrap">
   <div id="map" role="region" aria-label="Map of the 2026 congressional and state legislative districts"></div>
   <div class="overlay" id="panel" aria-live="polite"></div>
+  <div class="overlay" id="legend" aria-live="polite"></div>
   <div class="overlay" id="status" aria-live="polite"></div>
   <div class="tip" id="tip" role="tooltip"></div>
 </div>
@@ -388,19 +404,80 @@ function firstSymbolLayer() {
 }
 const palette = () => [0, 1, 2, 3, 4, 5].map((i) => css(`--d${i}`));
 
+// ---------- compare with 2024 ----------
+// redistricting.json gives, per 2026 district of a redrawn state, the share
+// of its best-matching 2024 district kept (IoU). Compare mode shades those,
+// greys the rest, and draws the 2024 outlines of the redrawn states.
+let compare = false;
+let kept = {};            // GEOID -> 0..1
+let outlinesUrl = null;
+const KEPT_STEPS = [[0.95, "--k0"], [0.75, "--k1"], [0.5, "--k2"], [0.25, "--k3"]];
+const keptColour = (v) => css((KEPT_STEPS.slice().reverse().find(([t]) => v < t) || [0, "--unchanged"])[1]);
+
+function districtFill(name) {
+  const c = CHAMBERS[name];
+  const undefinedArea = ["in", "ZZ", ["get", c.key]];
+  if (compare && name === "cd120") {
+    const changed = Object.entries(kept).filter(([, v]) => v < 0.95);
+    const m = ["match", ["get", "GEOID"]];
+    for (const [g, v] of changed) m.push(g, keptColour(v));
+    m.push(css("--unchanged"));
+    return ["case", undefinedArea, css("--undefined"), changed.length ? m : css("--unchanged")];
+  }
+  return ["case", undefinedArea, css("--undefined"),
+    ["match", ["get", "color_index"], 0, palette()[0], 1, palette()[1], 2, palette()[2],
+      3, palette()[3], 4, palette()[4], palette()[5]]];
+}
+
+function setCompare(on) {
+  if (on && layer !== "cd120") setLayer("cd120");
+  compare = on;
+  document.getElementById("compare").setAttribute("aria-pressed", String(on));
+  if (!map.getLayer("cd120-fill")) return;
+  map.setPaintProperty("cd120-fill", "fill-color", districtFill("cd120"));
+  map.setPaintProperty("cd120-fill", "fill-opacity",
+    on ? ["interpolate", ["linear"], ["zoom"], 3, 0.85, 10, 0.6]
+       : ["interpolate", ["linear"], ["zoom"], 3, 0.62, 10, 0.42]);
+  if (on && outlinesUrl && !map.getSource("cd119")) {
+    map.addSource("cd119", { type: "vector", url: `pmtiles://${outlinesUrl}`,
+                             attribution: "U.S. Census Bureau, TIGER/Line 2025" });
+    map.addLayer({
+      id: "cd119-line", type: "line", source: "cd119", "source-layer": "cd119",
+      paint: { "line-color": css("--old-line"), "line-dasharray": [2, 1.5],
+               "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.8, 10, 1.8] },
+    }, "cd120-selected");
+  }
+  if (map.getLayer("cd119-line")) map.setLayoutProperty("cd119-line", "visibility", on ? "visible" : "none");
+  renderLegend();
+}
+
+function renderLegend() {
+  const legend = document.getElementById("legend");
+  legend.textContent = "";
+  legend.classList.toggle("open", compare);
+  if (!compare) return;
+  legend.append(el("div", { class: "title" }, "Compared with 2024"));
+  const row = (sw, label) => { const r = el("div", { class: "row" }); r.append(sw, el("span", {}, label)); legend.append(r); };
+  const swatch = (v) => { const s = el("span", { class: "sw" }); s.style.background = css(v); return s; };
+  row(swatch("--k3"), "under 25% of the 2024 district kept");
+  row(swatch("--k2"), "25 to 50% kept");
+  row(swatch("--k1"), "50 to 75% kept");
+  row(swatch("--k0"), "75 to 95% kept");
+  row(swatch("--unchanged"), "unchanged");
+  row(el("span", { class: "dash" }), "2024 district boundary");
+  legend.append(el("div", { class: "hint" }, "Kept: the overlap of each new district with the 2024 district it matches best."));
+}
+
 function addDistricts() {
   const below = firstSymbolLayer();
   for (const [name, c] of Object.entries(CHAMBERS)) {
     map.addSource(name, { type: "vector", url: `pmtiles://${DIR}/${name}.pmtiles`,
                           attribution: "U.S. Census Bureau, TIGER/Line 2026" });
-    const undefinedArea = ["in", "ZZ", ["get", c.key]];
     map.addLayer({
       id: `${name}-fill`, type: "fill", source: name, "source-layer": name,
       layout: { visibility: name === layer ? "visible" : "none" },
       paint: {
-        "fill-color": ["case", undefinedArea, css("--undefined"),
-          ["match", ["get", "color_index"], 0, palette()[0], 1, palette()[1], 2, palette()[2],
-            3, palette()[3], 4, palette()[4], palette()[5]]],
+        "fill-color": districtFill(name),
         "fill-opacity": ["interpolate", ["linear"], ["zoom"], 3, 0.62, 10, 0.42],
       },
     }, below);
@@ -417,9 +494,11 @@ function addDistricts() {
       paint: { "line-color": css("--fg"), "line-width": 2.5 },
     });
   }
+  if (compare) setCompare(true);
 }
 
 function setLayer(next) {
+  if (next !== "cd120" && compare) setCompare(false);
   layer = next;
   for (const name of Object.keys(CHAMBERS)) {
     for (const part of ["fill", "line", "selected"]) {
@@ -446,6 +525,8 @@ function openPanel(props) {
   row("GEOID", props.GEOID);
   row("Land", km2(props.ALAND));
   row("Water", km2(props.AWATER));
+  if (layer === "cd120" && props.GEOID in kept)
+    row("2024 kept", kept[props.GEOID] >= 0.95 ? "unchanged" : `${Math.round(kept[props.GEOID] * 100)}%`);
   panel.append(dl);
   const undefinedArea = String(props[c.key]).includes("ZZ");
   panel.append(el("p", { class: "note" }, undefinedArea
@@ -493,6 +574,7 @@ function showAt(lng, lat, zoom) {
 }
 
 document.querySelectorAll(".chambers button").forEach((b) => b.addEventListener("click", () => setLayer(b.dataset.layer)));
+document.getElementById("compare").addEventListener("click", () => setCompare(!compare));
 document.getElementById("state").addEventListener("change", (e) => e.target.value && zoomToState(e.target.value));
 document.querySelectorAll(".places button").forEach((b) => b.addEventListener("click", () => {
   const [x, y, z] = b.dataset.place.split(",").map(Number);
@@ -515,6 +597,11 @@ async function loadRedrawn() {
   const r = await fetch("/redistricting.json");
   if (!r.ok) return;
   const data = await r.json();
+  kept = data.districts || {};
+  // ?base= rehearsals read the outlines from the same copy of the data.
+  outlinesUrl = new URLSearchParams(location.search).get("base")
+    ? `${BASE}/compare/cd119.pmtiles` : data.outlines?.url;
+  if (compare) setCompare(true);
   const list = document.getElementById("redrawn-list");
   for (const s of data.redrawn) {
     redrawn.add(s.fips);
@@ -522,7 +609,7 @@ async function loadRedrawn() {
       title: `${s.changed_districts} of ${s.seats} districts redrawn; ${Math.round(s.similarity * 100)}% of the 2024 map kept, by area` });
     b.append(document.createTextNode(s.name), el("span", { class: "n" }, `${s.changed_districts}/${s.seats}`));
     b.addEventListener("click", () => {
-      setLayer("cd120");
+      setCompare(true);
       zoomToState(s.fips);
       document.getElementById("map-section").scrollIntoView({ behavior: "smooth" });
     });
