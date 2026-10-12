@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets.geoconnex import GROUP_BYTES, LABELS
 
 import catalog as shared  # scripts/catalog.py
+from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -277,12 +278,28 @@ def read_json(base: str, rel: str) -> dict:
     return json.loads(Path(base, rel).read_text())
 
 
+# The US and its territories, for the declared extents: the Aleutians and
+# Guam (east of 130 E), the states, Puerto Rico and the Virgin Islands (west
+# of 60 W), American Samoa (14.3 S) to the Arctic coast (71.4 N). Some
+# providers publish placeholder or sign-flipped coordinates (sites at 90 S in
+# the Water Quality Portal, a Montana gage at 112.7 E): the rows stay in the
+# files, the extent leaves them out and the description counts them.
+# A row whose box is wider than 180 degrees crosses the antimeridian (an
+# Alaskan hydrologic unit with parts on both sides): it is kept, and
+# scripts/extent.py splits it into parts.
+US_REGION = ("bbox.ymin >= -15 AND bbox.ymax <= 72 AND (bbox.xmax - bbox.xmin > 180 "
+             "OR bbox.xmax <= -60 OR bbox.xmin >= 130)")
+
+
 def measure(base: str) -> tuple[dict, dict]:
     """(source, layers): latest/_source.json, and per collection its group,
-    manifest entry, label, extent, geometry types and columns."""
+    manifest entry, label, extent, geometry types and columns. The extent is
+    measured on the data (scripts/extent.py): it crosses the antimeridian as
+    STAC writes it (west > east) when the data does, and covers the rows
+    inside US_REGION."""
     source = read_json(base, "latest/_source.json")
     con = duckdb.connect()
-    con.execute("INSTALL httpfs; LOAD httpfs")
+    con.execute("INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial")
     layers = {}
     for group in GROUPS:
         manifest = read_json(base, f"latest/{group}/_manifest.json")
@@ -297,11 +314,18 @@ def measure(base: str) -> tuple[dict, dict]:
             missing = [n for n, _ in columns if n not in COLUMN_DOCS]
             if missing:
                 sys.exit(f"{group}/{theme}: no description for columns {missing}")
-            b = col["bbox"]
+            src = f"read_parquet('{f}')"
+            outside, y0, y1 = con.execute(f"""
+                SELECT count(*) FILTER (WHERE NOT ({US_REGION})),
+                       min(bbox.ymin) FILTER (WHERE {US_REGION}),
+                       max(bbox.ymax) FILTER (WHERE {US_REGION})
+                FROM {src}""").fetchone()
+            b = wrapped_bbox(lon_intervals(con, src, US_REGION), y0, y1)
             layers[theme] = {
                 "group": group, "entry": e, "label": manifest["labels"][theme],
-                "bbox": [max(-180.0, round(b[0], 6)), max(-90.0, round(b[1], 6)),
-                         min(180.0, round(b[2], 6)), min(90.0, round(b[3], 6))],
+                "bbox": [round(b[0], 6), max(-90.0, round(b[1], 6)),
+                         round(b[2], 6), min(90.0, round(b[3], 6))],
+                "outside": outside,
                 "types": col["geometry_types"], "columns": columns,
             }
     return source, layers
@@ -362,6 +386,9 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
             f"with a bbox covering, so a bbox filter reads only the row groups it touches. "
             f"Read in place over HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}. "
             f"This collection reads latest/, replaced when Geoconnex publishes a new export."
+            + (f" {layer['outside']:,} features have coordinates outside the US and its "
+               f"territories (placeholders or sign errors in the provider's data): they are "
+               f"in the file, but left out of the extent." if layer["outside"] else "")
         ),
         "keywords": ["Geoconnex", "Internet of Water", "water", "hydrology", "United States",
                      "GeoParquet", layer["group"], theme.replace("_", " ")],

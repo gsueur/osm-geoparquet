@@ -43,6 +43,7 @@ from queue import Empty
 
 import duckdb
 
+from extent import lon_intervals
 from themes import THEMES, LINEAR_WHEN_CLOSED, POST_FILTERS, Theme, filter_predicate
 
 # 0.5.0: a closed way in power or aeroways is one feature, not a LineString
@@ -422,7 +423,10 @@ def parquet_stats(con: duckdb.DuckDBPyConnection, path: Path) -> dict:
     parquet over the network.
 
     The extent comes from the `bbox` column, an outer bound by construction,
-    rounded outward to 1e-6 degrees so it stays one. hive_partitioning is off:
+    rounded outward to 1e-6 degrees so it stays one. `lon_intervals` are the
+    longitudes the file covers (scripts/extent.py): Alaska's span both sides
+    of 180, which a plain min/max turns into the whole globe, so the catalog
+    builds its extents from these. hive_partitioning is off:
     the path contains country=/state=, and DuckDB would otherwise add those
     keys to the schema as if they were columns of the file.
     """
@@ -440,6 +444,7 @@ def parquet_stats(con: duckdb.DuckDBPyConnection, path: Path) -> dict:
     return {
         "bbox": [math.floor(xmin * 1e6) / 1e6, math.floor(ymin * 1e6) / 1e6,
                  math.ceil(xmax * 1e6) / 1e6, math.ceil(ymax * 1e6) / 1e6],
+        "lon_intervals": lon_intervals(con, src),
         "columns": [[name, col_type] for name, col_type, *_ in columns],
         "size_bytes": path.stat().st_size,
         "sha256": digest.hexdigest(),

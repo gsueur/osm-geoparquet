@@ -41,6 +41,7 @@ from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -153,6 +154,18 @@ def read_manifest(out_dir: Path | None, product: str) -> dict:
         return json.load(r)
 
 
+def layer_extent(source: str) -> list[float]:
+    """The layer's extent, measured on the data (scripts/extent.py). The
+    districts reach from Guam (144.6 E) across the antimeridian to the
+    Virgin Islands (64.6 W): STAC writes that with west > east."""
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
+    src = f"read_parquet('{source}')"
+    y0, y1 = con.execute(f"SELECT min(bbox.ymin), max(bbox.ymax) FROM {src}").fetchone()
+    b = wrapped_bbox(lon_intervals(con, src), y0, y1)
+    return [round(b[0], 6), max(-90.0, round(b[1], 6)), round(b[2], 6), min(90.0, round(b[3], 6))]
+
+
 def footer(source: str) -> list[tuple[str, str]]:
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
@@ -204,12 +217,11 @@ STYLE_ASSETS = {
 
 # ---------- STAC ----------
 
-def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, manifest: dict,
+def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, extent: list[float],
                      columns: list[tuple[str, str]], updated: str) -> dict:
     gpkg_layer, code, title, key, _, _ = layer
     path = f"{DATASET_PREFIX}/tiger/{YEAR}/{product}/{entry['file']}"
     tiles_path = f"{DATASET_PREFIX}/tiger/{YEAR}/{product}/{tiles['file']}"
-    x0, y0, x1, y1 = [round(v, 6) for v in manifest_extent(manifest, code)]
     districts = sum(entry["by_state"].values())
     undocumented = [c for c, _ in columns if c not in COLUMN_DOCS]
     if undocumented:
@@ -238,9 +250,8 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, manif
         "updated": updated,
         "providers": PROVIDERS,
         "extent": {
-            # Districts cross the antimeridian (Alaska's Aleutians): the box
-            # is the full span, as STAC wants for a crossing extent's union.
-            "spatial": {"bbox": [[max(-180.0, x0), max(-90.0, y0), min(180.0, x1), min(90.0, y1)]]},
+            # Measured on the data; west > east: it crosses the antimeridian.
+            "spatial": {"bbox": [extent]},
             "temporal": {"interval": [[f"{YEAR}-01-01T00:00:00Z", f"{YEAR}-12-31T23:59:59Z"]]},
         },
         "table:row_count": entry["features"],
@@ -303,15 +314,6 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, manif
              "title": f"{title}, vector tiles", "pmtiles:layers": [tiles["layer"]]},
         ],
     }
-
-
-def manifest_extent(manifest: dict, code: str) -> list[float]:
-    """The layer's extent: the union of the states' boxes, which the build
-    measured with the antimeridian handled; unwrapped back into -180..180."""
-    boxes = [s["bounds"] for s in manifest["states"].values() if s.get("bounds")]
-    x0 = min(b[0] for b in boxes)
-    return [-180.0 if x0 < -180 else x0, min(b[1] for b in boxes),
-            max(b[2] for b in boxes) if x0 >= -180 else 180.0, max(b[3] for b in boxes)]
 
 
 def product_catalog_id(product: str) -> str:
@@ -566,9 +568,10 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
             code = layer[1]
             if not (THUMBS / f"{code}.png").is_file():
                 sys.exit(f"missing {THUMBS / code}.png: run the thumbnails command")
-            columns = footer(data_source(out_dir, product, files[code]["file"]))
-            col = build_collection(product, layer, files[code], tiles[code], manifest,
-                                   columns, updated)
+            source = data_source(out_dir, product, files[code]["file"])
+            columns = footer(source)
+            col = build_collection(product, layer, files[code], tiles[code],
+                                   layer_extent(source), columns, updated)
             cdir = pdir / code
             for fname, doc in styles(code, layer[3], tiles[code], product).items():
                 write_json(cdir / "styles" / fname, doc)
