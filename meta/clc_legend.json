@@ -1,0 +1,241 @@
+{
+  "_comment": "CORINE Land Cover 2018 nomenclature and official colours, keyed by Code_18. Read by scripts/datasets/clc_tiles.py (the color and label tile properties) and clc_catalog.py (the MapLibre style and the README legend). Extracted from GeoPQ Workbench's src/data/colormap.rs, which carries the same table: change both together.",
+  "column": "Code_18",
+  "classes": [
+    {
+      "code": "111",
+      "color": "#e6004d",
+      "label": "Continuous urban fabric"
+    },
+    {
+      "code": "112",
+      "color": "#ff0000",
+      "label": "Discontinuous urban fabric"
+    },
+    {
+      "code": "121",
+      "color": "#cc4df2",
+      "label": "Industrial or commercial units"
+    },
+    {
+      "code": "122",
+      "color": "#cc0000",
+      "label": "Road and rail networks and associated land"
+    },
+    {
+      "code": "123",
+      "color": "#e6cccc",
+      "label": "Port areas"
+    },
+    {
+      "code": "124",
+      "color": "#e6cce6",
+      "label": "Airports"
+    },
+    {
+      "code": "131",
+      "color": "#a600cc",
+      "label": "Mineral extraction sites"
+    },
+    {
+      "code": "132",
+      "color": "#a64d00",
+      "label": "Dump sites"
+    },
+    {
+      "code": "133",
+      "color": "#ff4dff",
+      "label": "Construction sites"
+    },
+    {
+      "code": "141",
+      "color": "#ffa6ff",
+      "label": "Green urban areas"
+    },
+    {
+      "code": "142",
+      "color": "#ffe6ff",
+      "label": "Sport and leisure facilities"
+    },
+    {
+      "code": "211",
+      "color": "#ffffa8",
+      "label": "Non-irrigated arable land"
+    },
+    {
+      "code": "212",
+      "color": "#ffff00",
+      "label": "Permanently irrigated land"
+    },
+    {
+      "code": "213",
+      "color": "#e6e600",
+      "label": "Rice fields"
+    },
+    {
+      "code": "221",
+      "color": "#e68000",
+      "label": "Vineyards"
+    },
+    {
+      "code": "222",
+      "color": "#f2a64d",
+      "label": "Fruit trees and berry plantations"
+    },
+    {
+      "code": "223",
+      "color": "#e6a600",
+      "label": "Olive groves"
+    },
+    {
+      "code": "231",
+      "color": "#e6e64d",
+      "label": "Pastures"
+    },
+    {
+      "code": "241",
+      "color": "#ffe6a6",
+      "label": "Annual crops associated with permanent crops"
+    },
+    {
+      "code": "242",
+      "color": "#ffe64d",
+      "label": "Complex cultivation patterns"
+    },
+    {
+      "code": "243",
+      "color": "#e6cc4d",
+      "label": "Land principally occupied by agriculture with significant areas of natural vegetation"
+    },
+    {
+      "code": "244",
+      "color": "#f2cca6",
+      "label": "Agro-forestry areas"
+    },
+    {
+      "code": "311",
+      "color": "#80ff00",
+      "label": "Broad-leaved forest"
+    },
+    {
+      "code": "312",
+      "color": "#00a600",
+      "label": "Coniferous forest"
+    },
+    {
+      "code": "313",
+      "color": "#4dff00",
+      "label": "Mixed forest"
+    },
+    {
+      "code": "321",
+      "color": "#ccf24d",
+      "label": "Natural grasslands"
+    },
+    {
+      "code": "322",
+      "color": "#a6ff80",
+      "label": "Moors and heathland"
+    },
+    {
+      "code": "323",
+      "color": "#a6e64d",
+      "label": "Sclerophyllous vegetation"
+    },
+    {
+      "code": "324",
+      "color": "#a6f200",
+      "label": "Transitional woodland-shrub"
+    },
+    {
+      "code": "331",
+      "color": "#e6e6e6",
+      "label": "Beaches - dunes - sands"
+    },
+    {
+      "code": "332",
+      "color": "#cccccc",
+      "label": "Bare rocks"
+    },
+    {
+      "code": "333",
+      "color": "#ccffcc",
+      "label": "Sparsely vegetated areas"
+    },
+    {
+      "code": "334",
+      "color": "#000000",
+      "label": "Burnt areas"
+    },
+    {
+      "code": "335",
+      "color": "#a6e6cc",
+      "label": "Glaciers and perpetual snow"
+    },
+    {
+      "code": "411",
+      "color": "#a6a6ff",
+      "label": "Inland marshes"
+    },
+    {
+      "code": "412",
+      "color": "#4d4dff",
+      "label": "Peat bogs"
+    },
+    {
+      "code": "421",
+      "color": "#ccccff",
+      "label": "Salt marshes"
+    },
+    {
+      "code": "422",
+      "color": "#e6e6ff",
+      "label": "Salines"
+    },
+    {
+      "code": "423",
+      "color": "#a6a6e6",
+      "label": "Intertidal flats"
+    },
+    {
+      "code": "511",
+      "color": "#00ccf2",
+      "label": "Water courses"
+    },
+    {
+      "code": "512",
+      "color": "#80f2e6",
+      "label": "Water bodies"
+    },
+    {
+      "code": "521",
+      "color": "#00ffa6",
+      "label": "Coastal lagoons"
+    },
+    {
+      "code": "522",
+      "color": "#a6ffe6",
+      "label": "Estuaries"
+    },
+    {
+      "code": "523",
+      "color": "#e6f2ff",
+      "label": "Sea and ocean"
+    },
+    {
+      "code": "999",
+      "color": "#ffffff",
+      "label": "NODATA"
+    },
+    {
+      "code": "990",
+      "color": "#ffffff",
+      "label": "UNCLASSIFIED LAND SURFACE"
+    },
+    {
+      "code": "995",
+      "color": "#e6f2ff",
+      "label": "UNCLASSIFIED WATER BODIES"
+    }
+  ]
+}

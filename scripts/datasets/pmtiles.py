@@ -21,6 +21,10 @@ also drops features, with only a log line to say so: tile() reads the report
 and fails instead, so a layer that does not fit is fixed (a later minimum
 zoom, fewer properties) rather than published with gaps.
 
+A layer too dense for its coarse zooms (CLC: 2.4 million polygons that tile
+the land) is built in bands, one archive per zoom range from its own input
+(aggregates on H3 cells for the coarse zooms), joined by pyramid().
+
 Usage:
   python3 scripts/datasets/pmtiles.py install --dest ~/.local/bin
   python3 scripts/datasets/pmtiles.py tile in.parquet out.pmtiles --layer l1 --max-zoom 10
@@ -101,15 +105,19 @@ def sha256(path: Path) -> str:
 
 
 def tile(src: Path, dest: Path, *, layer: str, min_zoom: int = 0, max_zoom: int = 10,
-         properties: list[str] | None = None) -> dict:
+         properties: list[str] | None = None, verbatim: bool = False) -> dict:
     """Tile src into dest; fail if any tile lost features. Returns the
-    measurements the catalog needs (size, sha256, zooms, layer)."""
+    measurements the catalog needs (size, sha256, zooms, layer). verbatim
+    turns simplification off too, for shapes that must keep theirs (H3
+    cells)."""
     with tempfile.TemporaryDirectory(prefix="tiles-") as tmp:
         report_path = Path(tmp) / "report.json"
         cmd = [binary(), "tiles", str(src), str(dest),
                "--layer-name", layer, "--min-zoom", str(min_zoom), "--max-zoom", str(max_zoom),
                "--no-density-drop", "--polygon-thinning", "0",
                "--report", str(report_path), "--force"]
+        if verbatim:
+            cmd.append("--verbatim")
         for p in properties or []:
             cmd += ["--include-property", p]
         subprocess.run(cmd, check=True)
@@ -128,6 +136,28 @@ def tile(src: Path, dest: Path, *, layer: str, min_zoom: int = 0, max_zoom: int 
         "max_zoom": max_zoom,
         "tiles": sum(z["tile_count"] for z in zooms),
         "properties": properties,
+        "bytes": dest.stat().st_size,
+        "sha256": sha256(dest),
+        "tylertoo": TYLERTOO_VERSION,
+    }
+
+
+def pyramid(bands: list[tuple[int, int, Path, str]], dest: Path) -> dict:
+    """Join archives that each hold one zoom range (built by tile(), so each
+    already passed the size check) into one archive. Each band is
+    (min zoom, max zoom, archive, tile layer); bands may use different
+    layers, as a handover from aggregates to features does."""
+    cmd = [binary(), "pyramid", str(dest), "--force"]
+    for lo, hi, path, layer in bands:
+        cmd += ["--band", f"{lo}-{hi}:{path}:{layer}"]
+    subprocess.run(cmd, check=True)
+    stats = json.loads(subprocess.run([binary(), "stats", "--json", str(dest)], check=True,
+                                      capture_output=True, text=True).stdout)
+    return {
+        "file": dest.name,
+        "min_zoom": min(b[0] for b in bands),
+        "max_zoom": max(b[1] for b in bands),
+        "tiles": sum(z["tile_count"] for z in stats["per_zoom"]),
         "bytes": dest.stat().st_size,
         "sha256": sha256(dest),
         "tylertoo": TYLERTOO_VERSION,
