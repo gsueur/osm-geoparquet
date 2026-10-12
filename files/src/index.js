@@ -424,19 +424,28 @@ async function handleObject(key, request, env) {
   }
 
   const rangeHeader = request.headers.get("range");
-  const ifNoneMatch = request.headers.get("if-none-match");
   const getOpts = {};
   const parsedRange = rangeHeader ? parseRange(rangeHeader) : undefined;
   if (parsedRange) getOpts.range = parsedRange;
-  if (ifNoneMatch) getOpts.onlyIf = { etagDoesNotMatch: ifNoneMatch };
+  // Conditional requests: R2 reads If-None-Match, If-Modified-Since and
+  // If-Match itself when given the request's Headers. This used to build
+  // { etagDoesNotMatch: <the header value> } by hand, passing the quoted
+  // etag ("1232d...") where R2 wants it bare: R2 threw, and every browser
+  // revalidating a cached file (tiles, parquet) after max-age got a 500,
+  // which a map reports as a CORS failure.
+  const conditional = ["if-none-match", "if-modified-since", "if-match"]
+    .some((h) => request.headers.has(h));
+  if (conditional) getOpts.onlyIf = request.headers;
 
   const object = await env.BUCKET.get(key, getOpts);
   if (!object) return new Response("Not Found", { status: 404, headers: corsHeaders() });
 
-  // R2 returns a metadata-only object (body === null) when onlyIf fails
-  // — the client's cached etag still matches. Turn that into 304.
-  if (object.body === null) {
-    return new Response(null, { status: 304, headers: objectHeaders(object) });
+  // A condition that fails gives an R2Object without a `body` property
+  // (not body === null). If-None-Match / If-Modified-Since: the client's
+  // copy is current, 304. If-Match: the object changed under the client, 412.
+  if (!("body" in object) || object.body === null) {
+    const notModified = request.headers.has("if-none-match") || request.headers.has("if-modified-since");
+    return new Response(null, { status: notModified ? 304 : 412, headers: objectHeaders(object) });
   }
 
   const headers = objectHeaders(object);
