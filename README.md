@@ -87,7 +87,16 @@ own: each polygon goes whole to the GAUL country it overlaps most, or the
 nearest one, so no polygon is cut and the country files add up to the Europe
 file. The source is the published Europe file itself (the Copernicus
 download needs an EU Login); the first publish keeps its original bytes in
-`clc/_source/`.
+`clc/_source/`. `clc_2018_h3.parquet` aggregates it on H3 cells (dominant
+class and the share of each CLC group, resolutions 3 to 7), and
+`clc_2018.pmtiles` draws it on a web map: those cells up to zoom 8, where the
+polygons do not fit in tiles, then the polygons to zoom 12, as Fields of the
+World does with its cells. Every feature carries `Code_18` and its official
+legend `color` and `label` from `meta/clc_legend.json`
+(`scripts/datasets/clc_tiles.py`, DuckDB's h3 extension and tylertoo, the
+workflow's `tiles` stage). Its Portolan catalog is at
+`https://parquetry.geomermaids.com/clc/catalog/catalog.json`, rendered by
+`scripts/datasets/clc_catalog.py`.
 
 FEMA's National Flood Hazard Layer (`scripts/datasets/nfhl.py`) sits under
 `https://parquetry.geomermaids.com/nfhl/latest/` as one file per FEMA
