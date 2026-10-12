@@ -25,18 +25,20 @@ GAP_DEG = 1.0      # intervals closer than this merge into one
 WIDE_DEG = 180.0   # a row box wider than this is split into parts
 
 
-def intervals_sql(src: str, where: str = "") -> str:
+def intervals_sql(src: str, where: str = "", global_parts: bool = True) -> str:
     """SQL giving (x0, x1) for every row of `src` (a FROM clause item with
     `bbox` and `geometry` columns), and for every part of a row whose box
-    is wider than WIDE_DEG."""
+    is wider than WIDE_DEG. With global_parts=False, a part that is itself
+    wider than WIDE_DEG (a footprint around every longitude) is left out."""
     cond = f"AND ({where})" if where else ""
+    part_cond = "" if global_parts else f"WHERE ST_XMax(p) - ST_XMin(p) <= {WIDE_DEG}"
     return f"""
         SELECT bbox.xmin::DOUBLE AS x0, bbox.xmax::DOUBLE AS x1 FROM {src}
         WHERE bbox.xmax - bbox.xmin <= {WIDE_DEG} {cond}
         UNION ALL
         SELECT ST_XMin(p), ST_XMax(p) FROM (
             SELECT unnest(ST_Dump(geometry::GEOMETRY)).geom AS p FROM {src}
-            WHERE bbox.xmax - bbox.xmin > {WIDE_DEG} {cond})"""
+            WHERE bbox.xmax - bbox.xmin > {WIDE_DEG} {cond}) {part_cond}"""
 
 
 def merge(intervals: Iterable[Sequence[float]], gap: float = GAP_DEG) -> list[list[float]]:
@@ -54,13 +56,13 @@ def merge(intervals: Iterable[Sequence[float]], gap: float = GAP_DEG) -> list[li
     return out
 
 
-def lon_intervals(con, src: str, where: str = "") -> list[list[float]]:
+def lon_intervals(con, src: str, where: str = "", global_parts: bool = True) -> list[list[float]]:
     """The merged longitude intervals a GeoParquet source covers. The
     distinct rows are reduced in SQL to a few thousand at most (rounded
     outward to 1e-4 degree) before merging here."""
     rows = con.execute(f"""
         SELECT floor(x0 * 1e4) / 1e4, ceil(x1 * 1e4) / 1e4
-        FROM ({intervals_sql(src, where)}) GROUP BY ALL""").fetchall()
+        FROM ({intervals_sql(src, where, global_parts)}) GROUP BY ALL""").fetchall()
     return merge(rows)
 
 
