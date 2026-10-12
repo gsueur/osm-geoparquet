@@ -452,7 +452,7 @@ def build_root(collections: list[dict], updated: str) -> dict:
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": CATALOG_ID,
-        "title": f"FAO GAUL {VERSION} as GeoParquet",
+        "title": f"FAO GAUL {VERSION}",
         "description": (
             f"The Global Administrative Unit Layers (GAUL) {VERSION}, FAO's "
             f"subnational administrative units for every country, repacked from "

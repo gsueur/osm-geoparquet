@@ -319,7 +319,7 @@ def build_root(collection: dict, day: str, updated: str) -> dict:
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": CATALOG_ID,
-        "title": "FEMA National Flood Hazard Layer as GeoParquet",
+        "title": "FEMA National Flood Hazard Layer",
         "description": (
             f"The flood zones of FEMA's National Flood Hazard Layer for the United "
             f"States, assembled from the county-by-county shapefile deliveries into "

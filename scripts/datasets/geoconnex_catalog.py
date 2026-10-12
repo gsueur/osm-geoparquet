@@ -428,7 +428,7 @@ def build_root(layers: dict, source: dict, span: list[str], updated: str) -> dic
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, VERSION_EXT],
         "id": CATALOG_ID,
-        "title": "Geoconnex: US water reference features and monitoring sites as GeoParquet",
+        "title": "Geoconnex: US water reference features and monitoring sites",
         "description": (
             "Geoconnex (Internet of Water) links US water data to the places it describes. "
             f"This republishes it as GeoParquet that reads fast over HTTP: {n_ref} reference "
