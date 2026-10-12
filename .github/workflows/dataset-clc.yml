@@ -57,7 +57,9 @@ env:
 jobs:
   clc:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # The tiles stage took 114 min on 2026-10-12 (H3 sampling of 2.4 million
+    # polygons, then tiling): 120 left no margin.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
 
