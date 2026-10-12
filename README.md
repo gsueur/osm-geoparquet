@@ -68,7 +68,12 @@ DuckDB writes none under 2,048 rows), so a bbox filter on one point reads a
 couple of MB even in the largest country file. A `publish` re-run replaces
 bytes uploaded as immutable: read the note at the top of `dataset-gaul.yml`
 first. Every file has a bbox covering and a sha256 in
-`_manifest.json`. Its Portolan catalog is at
+`_manifest.json`. Each layer also comes as vector tiles for a web map
+(`GAUL_2024_L1.pmtiles`, zoom 0 to 10, L2 from zoom 3), built with
+[tylertoo](https://github.com/geoparquet-io/tylertoo) through
+`scripts/datasets/pmtiles.py`, which pins the release and fails the build if
+a tile over the size cap would drop features; the workflow's `tiles` stage
+adds them to the published release without rebuilding it. Its Portolan catalog is at
 `https://parquetry.geomermaids.com/gaul/catalog/catalog.json`, rendered by
 `scripts/datasets/gaul_catalog.py`. The licence obligations (citation,
 disclaimers) are encoded in its `ATTRIBUTION.txt`, quoted from the Terms of
