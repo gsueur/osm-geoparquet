@@ -320,7 +320,14 @@ def measure(base: str) -> tuple[dict, dict]:
                        min(bbox.ymin) FILTER (WHERE {US_REGION}),
                        max(bbox.ymax) FILTER (WHERE {US_REGION})
                 FROM {src}""").fetchone()
-            b = wrapped_bbox(lon_intervals(con, src, US_REGION), y0, y1)
+            # A polygon part around every longitude (a ScienceBase footprint
+            # for a global dataset) is no US place: out of the extent, counted.
+            outside += con.execute(f"""
+                SELECT count(*) FROM {src}
+                WHERE bbox.xmax - bbox.xmin > 180 AND ({US_REGION})
+                  AND list_bool_or(list_transform(ST_Dump(geometry::GEOMETRY),
+                        d -> ST_XMax(d.geom) - ST_XMin(d.geom) > 180))""").fetchone()[0]
+            b = wrapped_bbox(lon_intervals(con, src, US_REGION, global_parts=False), y0, y1)
             layers[theme] = {
                 "group": group, "entry": e, "label": manifest["labels"][theme],
                 "bbox": [round(b[0], 6), max(-90.0, round(b[1], 6)),
@@ -387,8 +394,9 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
             f"Read in place over HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}. "
             f"This collection reads latest/, replaced when Geoconnex publishes a new export."
             + (f" {layer['outside']:,} features have coordinates outside the US and its "
-               f"territories (placeholders or sign errors in the provider's data): they are "
-               f"in the file, but left out of the extent." if layer["outside"] else "")
+               f"territories, or a footprint around every longitude (placeholders, sign "
+               f"errors or global records in the provider's data): they are in the file, "
+               f"but left out of the extent." if layer["outside"] else "")
         ),
         "keywords": ["Geoconnex", "Internet of Water", "water", "hydrology", "United States",
                      "GeoParquet", layer["group"], theme.replace("_", " ")],
