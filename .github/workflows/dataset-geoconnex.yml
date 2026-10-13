@@ -6,10 +6,10 @@
 # reads fast over HTTP. scripts/datasets/geoconnex.py documents the sources
 # and the layout.
 #
-# Weekly: a run first compares upstream (the export's ETag, the ref_rivers
-# release) with the published latest/_source.json and stops when nothing
-# moved. Gages, dams and aquifers come from the API, which has no version:
-# they are refreshed whenever the export or the rivers move, on a manual
+# Weekly: a run first compares upstream (a fingerprint of the Geoconnex
+# sitemap files, the ref_rivers release) with the published
+# latest/_source.json and stops when nothing moved. Gages, dams and aquifers come from the API, which has no version:
+# they are refreshed whenever the sitemap files or the rivers move, on a manual
 # run, and by a monthly run (the 2nd) that rebuilds whatever upstream says.
 #
 #   build    fetch, write, tile and verify, upload nothing
@@ -76,8 +76,8 @@ jobs:
           uv run --project scripts python scripts/datasets/geoconnex.py upstream > upstream.json
           cat upstream.json
           live=$(curl -fsS "$PUBLIC/latest/_source.json" || echo '{}')
-          now=$(jq -c '[.export.etag, .mainstems.release]' upstream.json)
-          was=$(echo "$live" | jq -c '[.export.etag, .mainstems.release]')
+          now=$(jq -c '[.summoned.fingerprint, .mainstems.release]' upstream.json)
+          was=$(echo "$live" | jq -c '[.summoned.fingerprint, .mainstems.release]')
           echo "upstream $now, published $was"
           if [ "$CATALOG_ONLY" = "true" ]; then
             echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
