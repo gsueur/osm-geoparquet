@@ -36,7 +36,9 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets.census import LAYOUTS, PRODUCTS, SOURCE_PAGE, YEAR, color_index
+from datasets.census import (
+    LAYOUTS, PLACEHOLDERS, PRODUCTS, SOURCE_PAGE, YEAR, color_index, real_areas,
+)
 from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
@@ -110,29 +112,86 @@ DISCLAIMER = (
     "are for statistical data collection and tabulation only: not a determination of "
     "jurisdictional authority, ownership or entitlement, and not legal land descriptions.")
 
-# From the record layouts (section 8). The area code column differs per layer.
+# From the record layouts. The area code column differs per layer; a column
+# with a 20 suffix (GEOID20) is the 2020 Census value of the one without.
 COLUMN_DOCS = {
     "STATEFP": "State FIPS code.",
+    "REGION": "Census region code.",
+    "DIVISION": "Census division code.",
+    "STATENS": "State National Standards (NS) code.",
+    "STUSPS": "Two-letter USPS state abbreviation.",
+    "COUNTYFP": "County FIPS code.",
+    "COUNTYNS": "County National Standards (NS) code.",
+    "PLACEFP": "Place FIPS code.",
+    "PLACENS": "Place National Standards (NS) code.",
+    "PCICBSA": "Principal city of a core based statistical area (Y or N).",
+    "CONCTYFP": "Consolidated city FIPS code.",
+    "CONCTYNS": "Consolidated city National Standards (NS) code.",
+    "COUSUBFP": "County subdivision FIPS code.",
+    "COUSUBNS": "County subdivision National Standards (NS) code.",
+    "TRACTCE": "Census tract code.",
+    "BLKGRPCE": "Block group code.",
+    "CSAFP": "Combined statistical area FIPS code.",
+    "CBSAFP": "Core based statistical area FIPS code.",
+    "METDIVFP": "Metropolitan division FIPS code.",
+    "MEMI": "Metropolitan (1) or micropolitan (2) statistical area.",
+    "UACE": "Urban area code.",
+    "ZCTA5CE": "5-digit ZIP Code Tabulation Area code.",
+    "CLASSFP": "FIPS class code.",
+    "NAME": "Name.",
+    "ELSDLEA": "Elementary school district local education agency (LEA) code.",
+    "SCSDLEA": "Secondary school district local education agency (LEA) code.",
+    "UNSDLEA": "Unified school district local education agency (LEA) code. 99997: school "
+               "district not defined.",
+    "SDADMLEA": "School district administrative area local education agency (LEA) code.",
+    "LOGRADE": "Lowest grade covered by the school district.",
+    "HIGRADE": "Highest grade covered by the school district.",
+    "SDTYP": "School district type.",
     "CD120FP": "120th congressional district FIPS code. 00: at-large district; 98: "
                "non-voting delegate or resident commissioner; ZZ: no district defined.",
     "SLDUST": "State legislative district (upper chamber) code. ZZZ: no district defined.",
     "SLDLST": "State legislative district (lower chamber) code. ZZZ: no district defined.",
-    "GEOID": "District identifier: state FIPS code followed by the district code.",
+    "GEOID": "Area identifier: the codes of the areas it nests in, then its own code "
+             "(e.g. state + county + tract for a tract).",
     "GEOIDFQ": "Fully qualified GEOID, used to join data tables from data.census.gov.",
     "NAMELSAD": "Name and translated legal/statistical area description.",
     "LSAD": "Legal/statistical area description code.",
     "CDSESSN": "Congressional session code (120).",
     "LSY": "Legislative session year.",
-    "MTFCC": "MAF/TIGER feature class code (G5200 congressional, G5210 upper, G5220 lower).",
+    "MTFCC": "MAF/TIGER feature class code, the kind of area (e.g. G5200 congressional "
+             "district, G4020 county, G5020 census tract).",
     "FUNCSTAT": "Functional status.",
     "ALAND": "Land area, square metres.",
     "AWATER": "Water area, square metres.",
     "INTPTLAT": "Latitude of the internal point (text, as published).",
     "INTPTLON": "Longitude of the internal point (text, as published).",
-    "geometry": "District outline as native Parquet GEOMETRY (WKB), NAD83 (EPSG:4269), "
+    "geometry": "Area outline as native Parquet GEOMETRY (WKB), NAD83 (EPSG:4269), "
                 "longitude and latitude, 2D.",
     "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax), declared as the GeoParquet "
             "covering. Filter on it to prune row groups.",
+}
+
+
+
+def geoid(code: str) -> str:
+    """The identifier column: GEOID20 on the layers frozen at the 2020 Census."""
+    return "GEOID20" if code in ("uac20", "zcta520") else "GEOID"
+
+
+def column_doc(name: str) -> str | None:
+    if name in COLUMN_DOCS:
+        return COLUMN_DOCS[name]
+    if name.endswith("20") and name[:-2] in COLUMN_DOCS:
+        return f"2020 Census. {COLUMN_DOCS[name[:-2]]}"
+    return None
+
+
+# Keywords per product, beside the common ones.
+KEYWORDS = {
+    "legislative": ["elections", "districts"],
+    "substategeo": ["counties", "places", "census tracts", "block groups"],
+    "nationgeo": ["metropolitan areas", "urban areas", "ZIP codes", "ZCTA"],
+    "school": ["school districts", "education"],
 }
 
 # The page's district palette: neighbours never share a colour (color_index).
@@ -184,8 +243,12 @@ def styles(code: str, key: str, tiles: dict, product: str) -> dict[str, dict]:
     source = {"data": {"type": "vector", "url": f"pmtiles://{product_url(product)}/{tiles['file']}",
                        "attribution": ATTRIBUTION}}
     # A case chain rather than a match: the colours only separate neighbours,
-    # so no legend should be read off them.
-    fill = ["case", ["in", "ZZ", ["get", key]], UNDEFINED]
+    # so no legend should be read off them. Placeholders are grey.
+    placeholder = {"CD120FP": ["in", "ZZ", ["get", key]],
+                   "SLDUST": ["in", "ZZ", ["get", key]],
+                   "SLDLST": ["in", "ZZ", ["get", key]],
+                   "UNSDLEA": ["==", ["get", key], "99997"]}.get(key)
+    fill = ["case", placeholder, UNDEFINED] if placeholder else ["case"]
     for i, c in enumerate(PALETTE[:-1]):
         fill += [["==", ["get", "color_index"], i], c]
     fill.append(PALETTE[-1])
@@ -194,7 +257,7 @@ def styles(code: str, key: str, tiles: dict, product: str) -> dict[str, dict]:
                          "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.4, 9, 1.6]}}
     return {
         "default.json": {
-            "version": 8, "name": f"{code}: districts, neighbours apart", "sources": source,
+            "version": 8, "name": f"{code}: areas, neighbours apart", "sources": source,
             "layers": [{"id": f"{code}-fill", "type": "fill", "source": "data",
                         "source-layer": code,
                         "paint": {"fill-color": fill, "fill-opacity": 0.6}}, outline],
@@ -208,9 +271,9 @@ def styles(code: str, key: str, tiles: dict, product: str) -> dict[str, dict]:
 
 
 STYLE_ASSETS = {
-    "style": ("./styles/default.json", "Districts, coloured so neighbours differ",
+    "style": ("./styles/default.json", "Areas, coloured so neighbours differ",
               ["style", "default"]),
-    "style-outlines": ("./styles/outlines.json", "District outlines only, to lay over other data",
+    "style-outlines": ("./styles/outlines.json", "Outlines only, to lay over other data",
                        ["style"]),
 }
 
@@ -222,8 +285,9 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
     gpkg_layer, code, title, key, _, _ = layer
     path = f"{DATASET_PREFIX}/tiger/{YEAR}/{product}/{entry['file']}"
     tiles_path = f"{DATASET_PREFIX}/tiger/{YEAR}/{product}/{tiles['file']}"
-    districts = sum(entry["by_state"].values())
-    undocumented = [c for c, _ in columns if c not in COLUMN_DOCS]
+    states = entry["by_state"]
+    areas = sum(states.values()) if states else entry["features"]
+    undocumented = [c for c, _ in columns if column_doc(c) is None]
     if undocumented:
         sys.exit(f"{code}: no column doc for {undocumented}")
     return {
@@ -235,15 +299,18 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
         "title": f"{title}, {YEAR}",
         "description": (
             f"The '{gpkg_layer}' layer of the {YEAR} TIGER/Line {PRODUCTS[product]['title']} "
-            f"National GeoPackage: {entry['features']:,} rows, of which {districts:,} districts "
-            f"in {len(entry['by_state'])} states and territories (the rest are TIGER's "
-            f"placeholders, documented in table:columns). Columns and values unchanged; 2D "
+            f"National GeoPackage: {entry['features']:,} rows"
+            + (f", of which {areas:,} areas in {len(states)} states and territories"
+               if states else "")
+            + (" (the rest are TIGER's placeholders, documented in table:columns)"
+               if areas < entry["features"] else "")
+            + f". Columns and values unchanged; 2D "
             f"geometry in NAD83 (EPSG:4269) with a bbox covering, Hilbert-sorted, as one "
             f"GeoParquet 2.0 file read in place over HTTPS or the anonymous S3 endpoint "
             f"{S3_ENDPOINT}, and a PMTiles archive for web maps. {DISCLAIMER} "
             f"Credit: {ATTRIBUTION}."
         ),
-        "keywords": ["TIGER/Line", "US Census Bureau", "boundaries", "elections", "districts",
+        "keywords": ["TIGER/Line", "US Census Bureau", "boundaries", *KEYWORDS[product],
                      code, "GeoParquet", "PMTiles"],
         "license": "other",
         "version": YEAR,
@@ -256,7 +323,7 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
         },
         "table:row_count": entry["features"],
         "table:primary_geometry": "geometry",
-        "table:columns": [{"name": n, "type": t, "description": COLUMN_DOCS[n]} for n, t in columns],
+        "table:columns": [{"name": n, "type": t, "description": column_doc(n)} for n, t in columns],
         "assets": {
             "data": {
                 "href": f"{PUBLIC_BASE}/{path}",
@@ -278,7 +345,7 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
                 "description": f"PMTiles, layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to "
                                f"{tiles['max_zoom']}, {tiles['tiles']:,} tiles; properties "
                                f"{', '.join(tiles['properties'])} (color_index: a colour per "
-                               f"district such that neighbours differ). Built with tylertoo "
+                               f"area such that neighbours differ). Built with tylertoo "
                                f"{tiles['tylertoo']}.",
                 "roles": ["visual"],
                 "file:size": tiles["bytes"],
@@ -291,7 +358,7 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
-                "title": f"{title}, conterminous United States",
+                "title": f"{title}, overview map",
                 "roles": ["thumbnail"],
                 "file:size": (THUMBS / f"{code}.png").stat().st_size,
                 "file:checksum": multihash(THUMBS / f"{code}.png"),
@@ -309,7 +376,7 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
             {"rel": "alternate", "href": f"{product_url(product)}/", "type": "text/html",
              "title": "Browse the files"},
             {"rel": "alternate", "href": PAGE_URL, "type": "text/html",
-             "title": "census.geomermaids.com: the districts on a map"},
+             "title": "census.geomermaids.com"},
             {"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{tiles_path}", "type": PMTILES_TYPE,
              "title": f"{title}, vector tiles", "pmtiles:layers": [tiles["layer"]]},
         ],
@@ -385,21 +452,34 @@ TIGER/Line is a work of the US federal government, not subject to copyright in
 the United States (17 U.S.C. 105). Credit "{ATTRIBUTION}". {DISCLAIMER}"""
 
 
+# A point each example query finds an area at: Austin, where the layer has one.
+EXAMPLE_POINT = {
+    "elsd": (-87.6877, 42.0451), "scsd": (-87.6877, 42.0451),  # Evanston, IL
+    "sdadm": (-72.5754, 44.2601),                                # Montpelier, VT
+    "csa": (-71.0589, 42.3601), "metdiv": (-71.0589, 42.3601),   # Boston, MA
+    "concity": (-86.7816, 36.1627),                              # Nashville, TN
+}
+
+
 def access_md(product: str, code: str, key: str) -> str:
     url = f"{product_url(product)}/{code}.parquet"
+    gid = geoid(code)
+    name = {"uac20": "NAMELSAD20", "zcta520": "ZCTA5CE20"}.get(code, "NAME" if product == "school" or code == "state" else "NAMELSAD")
+    x, y = EXAMPLE_POINT.get(code, (-97.74, 30.27))
+    placeholders = (f" Leave out TIGER's placeholders with\n`WHERE NOT ({PLACEHOLDERS[key]})`."
+                    if key in PLACEHOLDERS else "")
     return f"""\
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
-SELECT GEOID, NAMELSAD
+SELECT {gid}, {name}
 FROM read_parquet('{url}')
-WHERE bbox.xmin <= -97.74 AND bbox.xmax >= -97.74
-  AND bbox.ymin <= 30.27 AND bbox.ymax >= 30.27
-  AND ST_Contains(geometry, ST_Point(-97.74, 30.27));
+WHERE bbox.xmin <= {x} AND bbox.xmax >= {x}
+  AND bbox.ymin <= {y} AND bbox.ymax >= {y}
+  AND ST_Contains(geometry, ST_Point({x}, {y}));
 ```
 
 The same file at `s3://{BUCKET}/{DATASET_PREFIX}/tiger/{YEAR}/{product}/{code}.parquet` on the
-anonymous S3 endpoint `{S3_ENDPOINT}`. Leave out TIGER's placeholders with
-`WHERE {key} NOT LIKE 'ZZ%'{" AND " + key + " <> '98'" if key == "CD120FP" else ""}`."""
+anonymous S3 endpoint `{S3_ENDPOINT}`.{placeholders}"""
 
 
 def collection_readme(col: dict, product: str, layer: tuple, entry: dict, tiles: dict) -> str:
@@ -414,7 +494,7 @@ def collection_readme(col: dict, product: str, layer: tuple, entry: dict, tiles:
 | | |
 |---|---|
 | File | `{entry['file']}`, {entry['bytes'] / 1e6:,.1f} MB, {entry['row_groups']} row groups, sha256 `{entry['sha256'][:12]}...` |
-| Rows | {entry['features']:,} ({sum(entry['by_state'].values()):,} districts) |
+| Rows | {entry['features']:,} |
 | Map tiles | `{tiles['file']}`, {tiles['bytes'] / 1e6:,.1f} MB, zoom {tiles['min_zoom']} to {tiles['max_zoom']} |
 | CRS | NAD83, EPSG:4269 (geographic) |
 | On a map | {PAGE_URL} |
@@ -427,7 +507,7 @@ def collection_readme(col: dict, product: str, layer: tuple, entry: dict, tiles:
 
 `{product_url(product)}/{tiles['file']}`, tile layer `{tiles['layer']}`, properties
 {', '.join(f"`{p}`" for p in tiles['properties'])}. `color_index` (0 to 5) gives every
-district a colour no neighbour shares; `styles/default.json` uses it, and
+area a colour no neighbour shares; `styles/default.json` uses it, and
 `styles/outlines.json` draws the boundaries alone. The tiles read NAD83 as
 lon/lat, within 2 m in the conterminous US.
 
@@ -459,8 +539,8 @@ def collection_agents(col: dict, product: str, layer: tuple) -> str:
     return f"""\
 # {col['title']}: agent guide
 
-One row per district (plus TIGER's placeholders), NAD83 (EPSG:4269), geometry
-column `geometry`, area code in `{key}`, identifier `GEOID`.
+One row per area{" (plus TIGER's placeholders)" if key in PLACEHOLDERS else ""}, NAD83 (EPSG:4269), geometry
+column `geometry`, area code in `{key}`, identifier `{geoid(code)}`.
 
 ## Access
 
@@ -472,7 +552,8 @@ column `geometry`, area code in `{key}`, identifier `GEOID`.
   reads one row group.
 - `ALAND` and `AWATER` are in square metres, as published. For other areas,
   `ST_Area_Spheroid` works on NAD83 coordinates.
-- Join to Census tables on `GEOID`, or on `GEOIDFQ` for data.census.gov.
+- Join to Census tables on the identifier, or on the fully qualified one
+  (`GEOIDFQ`, `GEOIDFQ20`) for data.census.gov.
 - For a map, use the `rel: pmtiles` link (source-layer `{code}`) and the
   `default` style asset.
 - Credit: {ATTRIBUTION}. Boundaries are statistical, not legal descriptions.
@@ -619,7 +700,22 @@ def publish(out_dir: Path | None, remote: str, *, dry_run: bool) -> None:
 CONUS = (-125.0, 24.0, -66.5, 49.5)
 
 
-def thumbnails(out_dir: Path) -> None:
+def thumb_window(con, path: Path) -> tuple[float, float, float, float]:
+    """The conterminous US, or the layer's own extent there when it covers a
+    small part of it (Vermont's administrative school areas)."""
+    bx0, by0, bx1, by1 = con.execute(f"""
+        SELECT min(bbox.xmin), min(bbox.ymin), max(bbox.xmax), max(bbox.ymax)
+        FROM read_parquet('{path}')
+        WHERE bbox.xmax > {CONUS[0]} AND bbox.xmin < {CONUS[2]}
+          AND bbox.ymax > {CONUS[1]} AND bbox.ymin < {CONUS[3]}""").fetchone()
+    full = (CONUS[2] - CONUS[0]) * (CONUS[3] - CONUS[1])
+    if (bx1 - bx0) * (by1 - by0) > 0.1 * full:
+        return CONUS
+    pad = 0.15 * max(bx1 - bx0, by1 - by0)
+    return bx0 - pad, by0 - pad, bx1 + pad, by1 + pad
+
+
+def thumbnails(out_dir: Path, only: list[str] | None = None) -> None:
     """Each layer over the conterminous US, coloured as the default style."""
     import matplotlib
     matplotlib.use("Agg")
@@ -631,20 +727,26 @@ def thumbnails(out_dir: Path) -> None:
 
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
-    x0, y0, x1, y1, aspect = frame(*CONUS)
     THUMBS.mkdir(parents=True, exist_ok=True)
     for product, spec in PRODUCTS.items():
+        if only and product not in only:
+            continue
         for _, code, _, key, _, _ in spec["layers"]:
             path = out_dir / "tiger" / YEAR / product / f"{code}.parquet"
             colours = color_index(con, path)
+            gid = geoid(code)
+            win = thumb_window(con, path)
+            x0, y0, x1, y1, aspect = frame(*win)
+            tolerance = 0.02 * (win[2] - win[0]) / (CONUS[2] - CONUS[0])
             rows = con.execute(f"""
-                SELECT GEOID, {key}, ST_AsWKB(ST_SimplifyPreserveTopology(geometry::GEOMETRY, 0.02))
+                SELECT {gid}, NOT ({real_areas(key)}),
+                       ST_AsWKB(ST_SimplifyPreserveTopology(geometry::GEOMETRY, {tolerance}))
                 FROM read_parquet('{path}')
-                WHERE bbox.xmax > {CONUS[0]} AND bbox.xmin < {CONUS[2]}
-                  AND bbox.ymax > {CONUS[1]} AND bbox.ymin < {CONUS[3]}""").fetchall()
+                WHERE bbox.xmax > {win[0]} AND bbox.xmin < {win[2]}
+                  AND bbox.ymax > {win[1]} AND bbox.ymin < {win[3]}""").fetchall()
             polys, fills = [], []
-            for geoid, area_code, wkb in rows:
-                colour = UNDEFINED if "ZZ" in area_code else PALETTE[colours[geoid]]
+            for area_id, placeholder, wkb in rows:
+                colour = UNDEFINED if placeholder else PALETTE[colours[area_id]]
                 for part in shapely.get_parts(shapely.from_wkb(bytes(wkb))):
                     polys.append(shapely.get_coordinates(part.exterior))
                     fills.append(colour)
@@ -652,15 +754,21 @@ def thumbnails(out_dir: Path) -> None:
             ax = fig.add_axes((0, 0, 1, 1))
             ax.set_facecolor(BACKGROUND)
             fig.patch.set_facecolor(BACKGROUND)
-            ax.add_collection(PolyCollection(polys, facecolors=fills, edgecolors="#ffffff",
-                                             linewidths=0.25, alpha=0.85))
+            # Past some 20,000 areas the outlines outweigh the fills: none. A
+            # few small areas over the whole country (consolidated cities)
+            # get a thick outline of their own colour, or they are specks.
+            dense, sparse = len(rows) > 20_000, len(rows) < 50 and win == CONUS
+            ax.add_collection(PolyCollection(
+                polys, facecolors=fills,
+                edgecolors=fills if sparse else "none" if dense else "#ffffff",
+                linewidths=4 if sparse else 0 if dense else 0.25, alpha=0.85))
             ax.set_xlim(x0, x1)
             ax.set_ylim(y0, y1)
             ax.set_aspect(aspect)
             ax.axis("off")
             fig.savefig(THUMBS / f"{code}.png", dpi=100, facecolor=BACKGROUND)
             plt.close(fig)
-            print(f"  {code}: {len(rows):,} districts -> {(THUMBS / f'{code}.png').relative_to(REPO)}")
+            print(f"  {code}: {len(rows):,} areas -> {(THUMBS / f'{code}.png').relative_to(REPO)}")
 
 
 # ---------- CLI ----------
@@ -684,6 +792,7 @@ def main() -> None:
     u.add_argument("--dry-run", action="store_true")
     t = sub.add_parser("thumbnails")
     out_dir_arg(t, required=True)
+    t.add_argument("--product", action="append", choices=list(PRODUCTS))
     args = p.parse_args()
     if args.cmd == "build":
         print(f"wrote {args.dest}/ ({build(args.out_dir, args.dest):,} rows)")
@@ -692,7 +801,7 @@ def main() -> None:
     elif args.cmd == "publish":
         publish(args.out_dir, args.remote, dry_run=args.dry_run)
     elif args.cmd == "thumbnails":
-        thumbnails(args.out_dir)
+        thumbnails(args.out_dir, args.product)
 
 
 if __name__ == "__main__":

@@ -293,7 +293,13 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
 </ul>
 
 <h2 id="next">More of TIGER/Line</h2>
-<p>The Census Bureau publishes twelve national GeoPackages for 2026, from rails to census blocks. The legislative areas are the first; the others follow under the same layout, <code>census/tiger/2026/&lt;product&gt;/&lt;layer&gt;.parquet</code>, in the same catalog.</p>
+<p>The Census Bureau publishes twelve national GeoPackages for 2026, from rails to census blocks. Four are here, under the same layout, <code>census/tiger/2026/&lt;product&gt;/&lt;layer&gt;.parquet</code>, each layer with its map tiles and in the same catalog:</p>
+<ul>
+  <li><strong>legislative</strong>: <code>cd120</code>, <code>sldu</code>, <code>sldl</code>, the districts above.</li>
+  <li><strong>substategeo</strong>: <code>state</code>, <code>county</code>, <code>place</code>, <code>concity</code>, <code>cousub</code>, <code>tract</code>, <code>bg</code>. Census tracts and block groups are the units Census statistics are published on: join them on <code>GEOID</code>.</li>
+  <li><strong>nationgeo</strong>: <code>cbsa</code> (metropolitan and micropolitan areas), <code>csa</code>, <code>metdiv</code>, <code>uac20</code> (urban areas), <code>zcta520</code> (ZIP Code Tabulation Areas).</li>
+  <li><strong>school</strong>: <code>unsd</code>, <code>elsd</code>, <code>scsd</code>, <code>sdadm</code>, the school districts.</li>
+</ul>
 
 <h2 id="licence">Licence</h2>
 <p>TIGER/Line is a work of the US federal government, not subject to copyright in the United States (17 U.S.C. 105): no restriction on use or redistribution. Credit "U.S. Census Bureau, TIGER/Line 2026". The Census Bureau makes no warranty on the data and its boundaries are for statistical purposes, not legal land descriptions.</p>
