@@ -767,9 +767,9 @@
   }
 
   // Label candidates, first match wins: OSM and GMWID tags, then the name
-  // columns of GAUL, Geoconnex, NFHL and CORINE.
+  // columns of GAUL, Geoconnex, Census, NFHL and CORINE.
   const LABEL_COLUMNS = ['name', 'primary_name', 'gaul2_name', 'gaul1_name', 'gaul0_name',
-                         'flood_zone', 'Code_18'];
+                         'NAMELSAD', 'NAMELSAD20', 'NAME', 'flood_zone', 'Code_18'];
   const quoteIdent = (c) => '"' + String(c).replace(/"/g, '""') + '"';
 
   // The GeoParquet `geo` footer, or null.
@@ -1116,8 +1116,8 @@
   const PMTILES_RE = /\.pmtiles(?:[?#]|$)/i;
   const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'];
   const ACCENT_HEX = '#d2553a';
-  const LABEL_KEYS = ['label', 'name', 'NAMELSAD', 'gaul2_name', 'gaul1_name', 'gaul0_name',
-                      'primary_name', 'flood_zone'];
+  const LABEL_KEYS = ['label', 'name', 'NAMELSAD', 'NAMELSAD20', 'NAME', 'gaul2_name',
+                      'gaul1_name', 'gaul0_name', 'primary_name', 'flood_zone'];
   let ml = null;   // { maplibregl, protocol, map, el, layers: [] }
 
   function loadScript(src) {
