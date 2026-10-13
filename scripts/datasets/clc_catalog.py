@@ -205,28 +205,45 @@ def source(tiles: dict) -> dict:
     }}
 
 
-def legend_match() -> list:
-    match = ["match", ["get", "Code_18"]]
+def present_codes(source: str) -> set[str]:
+    """The CLC codes the data holds: a legend lists those and no others
+    (990 and 995 are in the CLC nomenclature, not in the 2018 data)."""
+    con = duckdb.connect()
+    con.execute("INSTALL httpfs; LOAD httpfs")
+    return {r[0] for r in con.execute(
+        f"SELECT DISTINCT Code_18 FROM read_parquet('{source}')").fetchall()}
+
+
+def legend_match(codes: set[str], color=None, fallback: str = "#ffffff") -> list:
+    """A match on `label`, not on `Code_18`: the Portolan browser names each
+    legend entry after its match key, and every feature carries both."""
+    match = ["match", ["get", "label"]]
     for c in legend():
-        match += [c["code"], c["color"]]
-    return match + ["#ffffff"]
+        if c["code"] in codes:
+            match += [c["label"], color(c["code"]) if color else c["color"]]
+    return match + [fallback]
 
 
-def styles(tiles: dict) -> dict[str, dict]:
+def styles(tiles: dict, codes: set[str]) -> dict[str, dict]:
     """The MapLibre styles, by file name under styles/. The default draws the
     official legend on both layers; the others draw one CLC group's share,
-    from the cells' percentage at small scales and the classes at large."""
+    from the cells' percentage at small scales and the classes at large.
+    Each layer has the zoom range its source layer covers, so the browser's
+    legend describes the layer on screen."""
     cells, polys = tiles["layers"]
+    handover = next(b["min_zoom"] for b in tiles["bands"] if b["h3_res"] is None)
     out = {"default.json": {
         "version": 8,
         "name": f"{TITLE}, official CLC legend",
         "sources": source(tiles),
         "layers": [
             {"id": "cells-fill", "type": "fill", "source": "data", "source-layer": cells,
-             "paint": {"fill-color": legend_match(),
+             "maxzoom": handover,
+             "paint": {"fill-color": legend_match(codes),
                        "fill-outline-color": "rgba(255,255,255,0.35)"}},
             {"id": "clc-fill", "type": "fill", "source": "data", "source-layer": polys,
-             "paint": {"fill-color": legend_match(), "fill-antialias": False}},
+             "minzoom": handover,
+             "paint": {"fill-color": legend_match(codes), "fill-antialias": False}},
         ],
     }}
     for name, group, prefix, ramp in (
@@ -243,10 +260,13 @@ def styles(tiles: dict) -> dict[str, dict]:
             "sources": source(tiles),
             "layers": [
                 {"id": "cells-fill", "type": "fill", "source": "data", "source-layer": cells,
+                 "maxzoom": handover,
                  "paint": {"fill-color": steps, "fill-outline-color": "rgba(255,255,255,0.35)"}},
                 {"id": "clc-fill", "type": "fill", "source": "data", "source-layer": polys,
-                 "paint": {"fill-color": ["match", ["slice", ["get", "Code_18"], 0, 1],
-                                          prefix, ramp[-1], ramp[0]],
+                 "minzoom": handover,
+                 "paint": {"fill-color": legend_match(
+                               {c for c in codes if c.startswith(prefix)},
+                               lambda _: ramp[-1], ramp[0]),
                            "fill-antialias": False}},
             ],
         }
@@ -496,7 +516,7 @@ Every feature of both layers carries `Code_18`, `color` (the official legend hex
 and `label` (the class name), so `["get", "color"]` is a complete fill colour in
 any client. The cells also carry `dominant_pct`, the `*_pct` share of each CLC
 group, `coverage_pct` and their `h3` index. Styles: `styles/default.json` (the
-official legend, a `match` on `Code_18`), `styles/artificial.json` and
+official legend, a `match` on `label`), `styles/artificial.json` and
 `styles/forest.json` (one group's share). Use the GeoParquet for areas and
 exact boundaries."""
 
@@ -709,7 +729,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     dest.mkdir(parents=True)
     col = build_collection(main, countries, tiles, h3, columns, bbox, updated)
     cdir = dest / col["id"]
-    for fname, doc in styles(tiles).items():
+    for fname, doc in styles(tiles, present_codes(europe_source(out_dir))).items():
         write_json(cdir / "styles" / fname, doc)
     for asset in col["assets"].values():
         if "style" in asset["roles"]:
