@@ -12,7 +12,7 @@
 # they are refreshed whenever the export or the rivers move, on a manual
 # run, and by a monthly run (the 2nd) that rebuilds whatever upstream says.
 #
-#   build    fetch, write and verify, upload nothing
+#   build    fetch, write, tile and verify, upload nothing
 #   publish  the same, then upload (a scheduled run publishes), then the
 #            Portolan catalog at /geoconnex/catalog/
 #   catalog  only the catalog, rendered from the files already published
@@ -100,9 +100,12 @@ jobs:
         if: steps.check.outputs.go == 'true'
         run: uv run --project scripts python scripts/datasets/geoconnex.py fetch --work-dir "$WORK/src"
 
-      - name: Build and verify
+      - name: Build, tile and verify
         if: steps.check.outputs.go == 'true'
         run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
           /usr/bin/time -v uv run --project scripts python scripts/datasets/geoconnex.py build \
             --work-dir "$WORK/src" --out-dir "$WORK/out" 2> >(tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
@@ -124,13 +127,16 @@ jobs:
           rclone copy "$out/latest" "$REMOTE/latest" --include "*.parquet" \
             --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
             --transfers 8 --stats 30s --stats-one-line
-          rclone copy "$out/latest" "$REMOTE/latest" --exclude "*.parquet" --ignore-times \
-            --header-upload "$CACHE"
+          rclone copy "$out/latest" "$REMOTE/latest" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copy "$out/latest" "$REMOTE/latest" --exclude "*.parquet" --exclude "*.pmtiles" \
+            --ignore-times --header-upload "$CACHE"
           rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --ignore-times --header-upload "$CACHE"
           for dir in reference providers; do
-            comm -13 <(cd "$out/latest/$dir" && ls *.parquet | sort) \
-                     <(rclone lsf "$REMOTE/latest/$dir" --include "*.parquet" | sort) |
+            comm -13 <(cd "$out/latest/$dir" && ls *.parquet *.pmtiles | sort) \
+                     <(rclone lsf "$REMOTE/latest/$dir" --include "*.parquet" --include "*.pmtiles" | sort) |
             while read -r gone; do
               echo "removing $dir/$gone, no longer built"
               rclone deletefile "$REMOTE/latest/$dir/$gone"
@@ -145,7 +151,8 @@ jobs:
           for f in index.json snapshots.json latest/_source.json latest/ATTRIBUTION.txt \
                    latest/reference/_manifest.json latest/providers/_manifest.json \
                    latest/reference/mainstems.parquet latest/reference/gages.parquet \
-                   latest/providers/epa_wqp.parquet; do
+                   latest/providers/epa_wqp.parquet latest/reference/mainstems.pmtiles \
+                   latest/reference/hu12.pmtiles latest/providers/epa_wqp.pmtiles; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
@@ -153,6 +160,8 @@ jobs:
           want=$(stat -c %s "$WORK/out/latest/reference/mainstems.parquet")
           got=$(curl -sI "$PUBLIC/latest/reference/mainstems.parquet" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
           [ "$want" = "$got" ] || { echo "BAD mainstems: $got bytes online, $want built"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/latest/reference/mainstems.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
           exit $fail
 
       # After the data, so the catalog never links a file that is not there:
