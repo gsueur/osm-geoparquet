@@ -62,7 +62,14 @@ CRS = "EPSG:4269"
 
 # product -> its GeoPackage and layers. Each layer: (layer name in the
 # GeoPackage, TIGER code, title, the column naming the area, PMTiles zooms,
-# properties kept in the tiles).
+# properties kept in the tiles). A layer several GeoPackages repeat (State)
+# is published once, from substategeo. The minimum zooms are the lowest at
+# which no tile goes over the tiler's size cap (pmtiles.tile() checks). Tract
+# tiles keep GEOID (it holds the state, county and tract), the name and ALAND,
+# block group tiles GEOID and the name: with more, the densest tile at their
+# first zoom (New York) goes over.
+AREA = ["GEOID", "NAMELSAD", "ALAND", "AWATER"]
+AREA20 = ["GEOID20", "NAMELSAD20", "ALAND20", "AWATER20"]
 PRODUCTS = {
     "legislative": {
         "title": "Legislative Areas",
@@ -79,7 +86,88 @@ PRODUCTS = {
              ["STATEFP", "SLDLST", "GEOID", "NAMELSAD", "ALAND", "AWATER"]),
         ],
     },
+    "substategeo": {
+        "title": "Sub-State Geography",
+        "gpkg": f"tlgpkg_{YEAR}_us_substategeo.gpkg",
+        "layers": [
+            ("State", "state", "States and equivalent entities", "STATEFP", (0, 12),
+             ["STATEFP", "STUSPS", "GEOID", "NAME", "ALAND", "AWATER"]),
+            ("County", "county", "Counties and equivalent entities", "COUNTYFP", (0, 12),
+             ["STATEFP", "COUNTYFP", *AREA]),
+            ("Place", "place", "Places: incorporated places and census designated places",
+             "PLACEFP", (6, 12), ["STATEFP", "PLACEFP", *AREA]),
+            ("Consolidated City", "concity", "Consolidated cities", "CONCTYFP", (0, 12),
+             ["STATEFP", "CONCTYFP", *AREA]),
+            ("County Subdivision", "cousub", "County subdivisions", "COUSUBFP", (6, 12),
+             ["STATEFP", "COUNTYFP", "COUSUBFP", *AREA]),
+            ("Census Tract", "tract", "Census tracts", "TRACTCE", (7, 12),
+             AREA[:3]),
+            ("Block Group", "bg", "Census block groups", "BLKGRPCE", (9, 12),
+             AREA[:2]),
+        ],
+    },
+    "nationgeo": {
+        "title": "Nation-Level Geography",
+        "gpkg": f"tlgpkg_{YEAR}_us_nationgeo.gpkg",
+        "layers": [
+            ("Core Based Statistical Area", "cbsa",
+             "Core based statistical areas: metropolitan and micropolitan", "CBSAFP", (0, 12),
+             ["CBSAFP", "MEMI", *AREA]),
+            ("Combined Statistical Area", "csa", "Combined statistical areas", "CSAFP", (0, 12),
+             ["CSAFP", *AREA]),
+            ("Metropolitan Division", "metdiv", "Metropolitan divisions", "METDIVFP", (0, 12),
+             ["CBSAFP", "METDIVFP", *AREA]),
+            ("Urban Area 20", "uac20", "2020 Census urban areas", "UACE20", (0, 12),
+             ["UACE20", *AREA20]),
+            ("ZIP Code Tabulation Area 5 Digit 20", "zcta520",
+             "2020 Census ZIP Code Tabulation Areas (ZCTA5)", "ZCTA5CE20", (6, 12),
+             ["ZCTA5CE20", "GEOID20", "ALAND20", "AWATER20"]),
+        ],
+    },
+    "school": {
+        "title": "School Districts",
+        "gpkg": f"tlgpkg_{YEAR}_us_school.gpkg",
+        "layers": [
+            ("School District-Unified", "unsd", "Unified school districts", "UNSDLEA", (4, 12),
+             ["STATEFP", "UNSDLEA", "GEOID", "NAME", "LOGRADE", "HIGRADE", "ALAND", "AWATER"]),
+            ("School District-Elementary", "elsd", "Elementary school districts", "ELSDLEA",
+             (0, 12),
+             ["STATEFP", "ELSDLEA", "GEOID", "NAME", "LOGRADE", "HIGRADE", "ALAND", "AWATER"]),
+            ("School District-Secondary", "scsd", "Secondary school districts", "SCSDLEA",
+             (0, 12),
+             ["STATEFP", "SCSDLEA", "GEOID", "NAME", "LOGRADE", "HIGRADE", "ALAND", "AWATER"]),
+            ("School District-Administrative", "sdadm",
+             "School district administrative areas (Vermont)", "SDADMLEA", (0, 12),
+             ["STATEFP", "SDADMLEA", "GEOID", "NAME", "LOGRADE", "HIGRADE", "ALAND", "AWATER"]),
+        ],
+    },
 }
+
+# TIGER's placeholder rows, by area code column: they stand for where no area
+# is defined (water, mostly) and are not areas. Kept in the files, left out
+# of counts, drawn grey.
+PLACEHOLDERS = {
+    "CD120FP": "CD120FP LIKE 'ZZ%' OR CD120FP = '98'",
+    "SLDUST": "SLDUST LIKE 'ZZ%'",
+    "SLDLST": "SLDLST LIKE 'ZZ%'",
+    "UNSDLEA": "UNSDLEA = '99997'",
+}
+
+
+def real_areas(key: str) -> str:
+    """SQL condition keeping the rows that are areas, not placeholders."""
+    return f"NOT ({PLACEHOLDERS[key]})" if key in PLACEHOLDERS else "true"
+
+
+def id_column(con, path: Path) -> str:
+    """GEOID, or GEOID20 on the layers frozen at the 2020 Census."""
+    cols = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()}
+    return "GEOID" if "GEOID" in cols else "GEOID20"
+
+
+def has_state(con, path: Path) -> bool:
+    return "STATEFP" in {r[0] for r in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()}
 
 # State FIPS -> (USPS code, name), for the per-state counts the page draws.
 STATES = {
@@ -212,11 +300,13 @@ def write_layer(con, gpkg: Path, layer: str, dest: Path, crs: dict) -> dict:
             "row_groups": groups, "largest_row_group_bytes": largest, "sha256": sha256(dest)}
 
 
-def by_state(con, path: Path, key: str) -> dict[str, int]:
-    """Districts per state, without TIGER's placeholders: ZZ / ZZZ (no
-    district defined) and, for Congress, 98 (the non-voting delegates)."""
+def by_state(con, path: Path, key: str) -> dict[str, int] | None:
+    """Areas per state, without TIGER's placeholders (PLACEHOLDERS). None for
+    a national layer that has no state (metro areas, ZCTAs)."""
+    if not has_state(con, path):
+        return None
     rows = con.execute(f"""SELECT STATEFP, count(*) FROM read_parquet('{path}')
-                           WHERE {key} NOT LIKE 'ZZ%' AND {key} <> '98'
+                           WHERE {real_areas(key)}
                            GROUP BY 1 ORDER BY 1""").fetchall()
     unknown = [s for s, _ in rows if s not in STATES]
     if unknown:
@@ -263,8 +353,9 @@ def color_index(con, parquet: Path) -> dict[str, int]:
     colouring, most-connected first, over the districts that touch.
     Neighbours are found on geometries simplified to ~100 m, which is
     enough to tell who borders whom and keeps the join quick."""
+    gid = id_column(con, parquet)
     con.execute(f"""CREATE OR REPLACE TEMP TABLE simple AS
-        SELECT GEOID, ST_SimplifyPreserveTopology(geometry::GEOMETRY, 0.001) AS g, bbox
+        SELECT {gid} AS GEOID, ST_SimplifyPreserveTopology(geometry::GEOMETRY, 0.001) AS g, bbox
         FROM read_parquet('{parquet}')""")
     pairs = con.execute("""
         SELECT a.GEOID, b.GEOID FROM simple a JOIN simple b
@@ -301,12 +392,13 @@ def tiles(con, parquet: Path, code: str, zooms: tuple[int, int], properties: lis
     2 m of it), with `color_index` added: the tiles only, the GeoParquet
     stays TIGER's."""
     colours = color_index(con, parquet)
-    con.execute("CREATE OR REPLACE TEMP TABLE colours (GEOID VARCHAR, color_index UTINYINT)")
+    gid = id_column(con, parquet)
+    con.execute(f"CREATE OR REPLACE TEMP TABLE colours ({gid} VARCHAR, color_index UTINYINT)")
     con.executemany("INSERT INTO colours VALUES (?, ?)", list(colours.items()))
     lonlat = parquet.with_suffix(".lonlat.parquet")
     con.execute(f"""COPY (SELECT {', '.join(f'p.{c}' for c in properties)}, c.color_index,
                                  ST_SetCRS(p.geometry::GEOMETRY, 'OGC:CRS84') AS geometry
-                          FROM read_parquet('{parquet}') p JOIN colours c USING (GEOID))
+                          FROM read_parquet('{parquet}') p JOIN colours c USING ({gid}))
                     TO '{lonlat}' (FORMAT PARQUET)""")
     properties = [*properties, "color_index"]
     entry = pmtiles.tile(lonlat, parquet.with_suffix(".pmtiles"), layer=code,
@@ -359,7 +451,7 @@ This data is packaged and hosted by Geomermaids:
 """
 
 
-def build(work: Path, out: Path, local: dict[str, Path]) -> None:
+def build(work: Path, out: Path, local: dict[str, Path], only: list[str] | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     con.execute(f"INSTALL spatial; LOAD spatial; SET temp_directory = '{work}'")
@@ -367,6 +459,8 @@ def build(work: Path, out: Path, local: dict[str, Path]) -> None:
     source = upstream()
     t0 = time.monotonic()
     for product, spec in PRODUCTS.items():
+        if only and product not in only:
+            continue
         gpkg = local.get(product) or fetch(product, work)
         folder = out / "tiger" / YEAR / product
         folder.mkdir(parents=True, exist_ok=True)
@@ -382,7 +476,9 @@ def build(work: Path, out: Path, local: dict[str, Path]) -> None:
             tile_entries.append({"name": code, **tiles(con, dest, code, zooms, props)})
             print(f"  {product}/{code}: {entry['features']:,} rows, {entry['bytes'] / 1e6:.1f} MB, "
                   f"{entry['row_groups']} row groups, {time.monotonic() - t0:.0f} s", flush=True)
-        bounds = state_bounds(con, folder / f"{spec['layers'][0][1]}.parquet")
+        with_state = [code for _, code, *_ in spec["layers"]
+                      if has_state(con, folder / f"{code}.parquet")]
+        bounds = state_bounds(con, folder / f"{with_state[0]}.parquet") if with_state else {}
         (folder / "ATTRIBUTION.txt").write_text(attribution(product, source[product]))
         (folder / "_manifest.json").write_text(json.dumps({
             "state_name": f"TIGER/Line {YEAR}: {spec['title']}",
@@ -393,8 +489,8 @@ def build(work: Path, out: Path, local: dict[str, Path]) -> None:
             "source": source[product],
             "files": files,
             "pmtiles": tile_entries,
-            "states": {fips: {"code": c, "name": n, "bounds": bounds.get(fips)}
-                       for fips, (c, n) in STATES.items()},
+            **({"states": {fips: {"code": c, "name": n, "bounds": bounds.get(fips)}
+                           for fips, (c, n) in STATES.items()}} if bounds else {}),
         }, indent=2) + "\n")
     # The parquetry repository files at the dataset root.
     (out / "index.json").write_text(json.dumps({"datasets": [
@@ -415,6 +511,8 @@ def main() -> None:
                    help="the census/ prefix, e.g. out/census")
     b.add_argument("--gpkg", action="append", default=[], metavar="PRODUCT=PATH",
                    help="use a GeoPackage already on disk")
+    b.add_argument("--product", action="append", choices=list(PRODUCTS),
+                   help="build only this product (repeatable; default: all)")
     args = p.parse_args()
     if args.cmd == "upstream":
         print(json.dumps(upstream(), indent=2))
@@ -425,7 +523,7 @@ def main() -> None:
         if product not in PRODUCTS:
             sys.exit(f"unknown product {product!r}")
         local[product] = Path(path).expanduser()
-    build(args.work_dir, args.out_dir, local)
+    build(args.work_dir, args.out_dir, local, args.product)
 
 
 if __name__ == "__main__":
