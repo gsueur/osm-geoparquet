@@ -8,8 +8,9 @@
 #
 # Weekly: a run first compares upstream (the export's ETag, the ref_rivers
 # release) with the published latest/_source.json and stops when nothing
-# moved. Gages and dams come from the API, which has no version: they are
-# refreshed whenever the export or the rivers move, or on a manual run.
+# moved. Gages, dams and aquifers come from the API, which has no version:
+# they are refreshed whenever the export or the rivers move, on a manual
+# run, and by a monthly run (the 2nd) that rebuilds whatever upstream says.
 #
 #   build    fetch, write and verify, upload nothing
 #   publish  the same, then upload (a scheduled run publishes), then the
@@ -23,6 +24,8 @@ name: dataset-geoconnex
 on:
   schedule:
     - cron: "41 7 * * 1"
+    # Monthly: rebuild regardless, for the API layers (gages, dams, aquifers).
+    - cron: "23 8 2 * *"
   workflow_dispatch:
     inputs:
       stage:
@@ -78,6 +81,8 @@ jobs:
           echo "upstream $now, published $was"
           if [ "$CATALOG_ONLY" = "true" ]; then
             echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "23 8 2 * *" ]; then
+            echo "monthly refresh of the API layers"; echo "go=true" >> "$GITHUB_OUTPUT"
           elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
             echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
           else
