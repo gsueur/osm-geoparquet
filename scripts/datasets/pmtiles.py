@@ -14,9 +14,12 @@ so the CLI is used, pinned to one release and checked against the sha256
 values below, recorded from that release's checksums file. `install`
 downloads it; `tile` finds it on PATH or in $TYLERTOO.
 
-Two defaults do not suit administrative units and are always turned off
-here: the per-level density budget and polygon thinning both drop polygons
-from a layer that must tile the land without holes. A tile over the size cap
+Two defaults do not suit administrative units and are turned off for a
+coverage (the default): the per-level density budget and polygon thinning
+both drop polygons from a layer that must tile the land without holes.
+Points and lines keep them (coverage=False): the coarse zooms then show a
+thinned selection, ranked with --sort-key, and every feature from the
+maximum zoom. A tile over the size cap
 also drops features, with only a log line to say so: tile() reads the report
 and fails instead, so a layer that does not fit is fixed (a later minimum
 zoom, fewer properties) rather than published with gaps.
@@ -104,23 +107,32 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+# A feature as wide as a continent lands in every tile of every zoom: one
+# world footprint at zoom 12 is 16.7 million tiles, written for hours. The
+# limit turns that into a failed build.
+TIMEOUT_S = 30 * 60
+
+
 def tile(src: Path, dest: Path, *, layer: str, min_zoom: int = 0, max_zoom: int = 10,
-         properties: list[str] | None = None, verbatim: bool = False) -> dict:
+         properties: list[str] | None = None, verbatim: bool = False,
+         coverage: bool = True, extra: list[str] | None = None) -> dict:
     """Tile src into dest; fail if any tile lost features. Returns the
     measurements the catalog needs (size, sha256, zooms, layer). verbatim
     turns simplification off too, for shapes that must keep theirs (H3
-    cells)."""
+    cells). coverage=False keeps the thinning of points and lines; extra
+    passes further tylertoo options (--sort-key...)."""
     with tempfile.TemporaryDirectory(prefix="tiles-") as tmp:
         report_path = Path(tmp) / "report.json"
         cmd = [binary(), "tiles", str(src), str(dest),
                "--layer-name", layer, "--min-zoom", str(min_zoom), "--max-zoom", str(max_zoom),
-               "--no-density-drop", "--polygon-thinning", "0",
-               "--report", str(report_path), "--force"]
+               "--report", str(report_path), "--force", *(extra or [])]
+        if coverage:
+            cmd += ["--no-density-drop", "--polygon-thinning", "0"]
         if verbatim:
             cmd.append("--verbatim")
         for p in properties or []:
             cmd += ["--include-property", p]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=TIMEOUT_S)
         report = json.loads(report_path.read_text())
     zooms = report["export"]["zooms"]
     lossy = [(z["zoom"], z["oversized_tiles"], z["encode_dropped_features"])

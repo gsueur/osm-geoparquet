@@ -13,6 +13,8 @@ a bbox around Boston read for 95 s. This republishes it as:
   <out>/latest/reference/<layer>.parquet     one file per reference layer,
                                              with the layer's full attributes
   <out>/latest/providers/<source>.parquet    one file per harvested source
+  <out>/latest/*/<name>.pmtiles              a PMTiles archive beside each
+                                             water layer (TILES, PROVIDER_TILES)
   <out>/latest/{reference,providers}/_manifest.json
   <out>/latest/ATTRIBUTION.txt, _source.json what was read, and its versions
   <out>/index.json, snapshots.json           the parquetry repository files
@@ -33,6 +35,14 @@ Each reference layer comes from where its attributes are complete:
 
 Providers are the export's other sitemaps, as they are: uri, name,
 description, mainstem_uri, geometry.
+
+The PMTiles cover the water features: every reference layer and every
+provider but the general USGS products Geoconnex also harvests (NOT_TILED),
+which belong in a USGS dataset of their own. Polygons are coverages,
+complete at every zoom from a minimum zoom the tile size cap allows; points
+and lines are thinned at coarse zooms, ranked by drainage area where there
+is one, and complete at the maximum zoom. Each zoom choice was measured
+(2026-10-13): no tile goes over the cap, which pmtiles.tile() checks.
 
   python3 scripts/datasets/geoconnex.py fetch --work-dir work
   python3 scripts/datasets/geoconnex.py build --work-dir work --out-dir out/geoconnex
@@ -56,6 +66,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets import pmtiles
 from datasets.infra import GEOMETRY_TYPE_NAMES
 
 EXPORT = "https://storage.googleapis.com/metadata-geoconnex-us/exports/geoconnex_features.parquet"
@@ -94,6 +105,39 @@ SKIPPED_SITEMAPS = {"ref:states", "ref:counties", "ref:places", "ref:cbsa", "ref
                     "ref:mainstems", "ref:gages", "ref:dams",
                     "ref:princi_aq", "ref:nat_aq", "ref:sec_hydrg_reg"}
 PAGE = 10_000
+
+# Tiles per reference layer: (min zoom, max zoom, properties, coverage,
+# extra tylertoo options). Coverage polygons start where the densest tile
+# fits the cap (HU10 overflows below zoom 4, HU12 below 6). Points and lines
+# rank by drainage area, so the coarse zooms keep the big rivers; `id`
+# rather than `uri` (the same id after a constant prefix) keeps the
+# mainstems tiles under the cap at zoom 4.
+POLYGONS = (0, 12, ["huc", "name"], True, [])
+TILES = {
+    "mainstems": (0, 12, ["id", "primary_name", "outlet_drainagearea_sqkm"], False,
+                  ["--sort-key", "outlet_drainagearea_sqkm"]),
+    "gages": (0, 12, ["id", "name", "gage_totdasqkm"], False, ["--sort-key", "gage_totdasqkm"]),
+    "dams": (0, 12, ["id", "name", "drainage_area_sqkm"], False,
+             ["--sort-key", "drainage_area_sqkm"]),
+    "hu02": POLYGONS, "hu04": POLYGONS, "hu06": POLYGONS, "hu08": POLYGONS,
+    "hu10": (4, *POLYGONS[1:]),
+    "hu12": (6, *POLYGONS[1:]),
+    "principal_aquifers": (0, 12, ["aq_name", "aq_code", "rock_type"], True, []),
+    "national_aquifers": (0, 12, ["aq_name", "nat_aqfr_cd"], True, []),
+    "hydrogeologic_regions": (0, 12, ["id", "shr", "geologicpr", "subprovinc"], True, []),
+    "water_systems": (0, 12, ["pwsid", "name"], True, []),
+}
+# General USGS products, not water features: no tiles here.
+NOT_TILED = {"usgs_national_geologic_map", "usgs_gnis", "usgs_sciencebase"}
+# Providers: to zoom 14, where a dense city (2,208 Water Quality Portal
+# sites on one spot in a WQP tile) fits the cap. WQP needs points thinned
+# four times harder at coarse zooms.
+PROVIDER_TILES = (0, 14, ["uri", "name"])
+PROVIDER_EXTRA = {"epa_wqp": ["--point-thinning", "16"]}
+# A provider polygon wider than this is a region footprint ("Worldwide",
+# "United States" in USBR RISE), not a site: kept in the file, out of the
+# tiles, where it would fill every tile of every zoom.
+FOOTPRINT_DEG = 10
 # Uncompressed bytes of a row group: geometry plus every string. A bbox
 # filter on one point then reads one group of 1 to 2 MB compressed. A
 # feature bigger than this gets a group of its own.
@@ -383,6 +427,35 @@ def verify(con: duckdb.DuckDBPyConnection, path: Path, expected: int) -> None:
         sys.exit(f"{path}: " + "; ".join(problems))
 
 
+def reference_tiles(layer: str, path: Path) -> dict:
+    min_zoom, max_zoom, properties, coverage, extra = TILES[layer]
+    return pmtiles.tile(path, path.with_suffix(".pmtiles"), layer=layer, min_zoom=min_zoom,
+                        max_zoom=max_zoom, properties=properties, coverage=coverage, extra=extra)
+
+
+def provider_tiles(con: duckdb.DuckDBPyConnection, theme: str, path: Path) -> dict | None:
+    """The provider's PMTiles, from a copy without its region footprints;
+    None for the products not tiled here. Polygons only: a coverage."""
+    if theme in NOT_TILED:
+        return None
+    polygon = "ST_GeometryType(geometry) IN ('POLYGON', 'MULTIPOLYGON')"
+    footprint = f"{polygon} AND bbox.xmax - bbox.xmin > {FOOTPRINT_DEG}"
+    types, left_out = con.execute(f"""
+        SELECT list(DISTINCT ST_GeometryType(geometry)::VARCHAR), count(*) FILTER (WHERE {footprint})
+        FROM read_parquet('{path}')""").fetchone()
+    src = path.with_suffix(".tiles.parquet")
+    con.execute(f"""COPY (SELECT uri, name, geometry FROM read_parquet('{path}')
+                          WHERE NOT ({footprint}))
+                    TO '{src}' (FORMAT PARQUET)""")
+    min_zoom, max_zoom, properties = PROVIDER_TILES
+    entry = pmtiles.tile(src, path.with_suffix(".pmtiles"), layer=theme, min_zoom=min_zoom,
+                         max_zoom=max_zoom, properties=properties,
+                         coverage=all(t in ("POLYGON", "MULTIPOLYGON") for t in types),
+                         extra=PROVIDER_EXTRA.get(theme))
+    src.unlink()
+    return {**entry, "left_out": left_out}
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -411,9 +484,11 @@ def build(args) -> None:
         expected = con.execute(f"SELECT count(*) FROM ref_{layer} WHERE geom IS NOT NULL").fetchone()[0]
         e = write(con, f"ref_{layer}", latest / "reference" / f"{layer}.parquet")
         verify(con, latest / "reference" / e["file"], expected)
-        reference[layer] = {**e, "source": origin[layer]}
+        tiles = reference_tiles(layer, latest / "reference" / e["file"])
+        reference[layer] = {**e, "source": origin[layer], "pmtiles": tiles}
         print(f"  reference/{layer}: {e['features']:,} features, {e['bytes'] / 1e6:,.1f} MB, "
-              f"{e['row_groups']} groups, {time.monotonic() - t0:.0f} s", flush=True)
+              f"{e['row_groups']} groups, tiles {tiles['bytes'] / 1e6:,.1f} MB, "
+              f"{time.monotonic() - t0:.0f} s", flush=True)
 
     export = f"read_parquet('{work / 'export.parquet'}')"
     sitemaps = con.execute(f"SELECT geoconnex_sitemap, count(*) FROM {export} GROUP BY 1 ORDER BY 2 DESC").fetchall()
@@ -434,9 +509,12 @@ def build(args) -> None:
         expected = con.execute("SELECT count(*) FROM p WHERE geom IS NOT NULL").fetchone()[0]
         e = write(con, "p", latest / "providers" / f"{theme}.parquet")
         verify(con, latest / "providers" / e["file"], expected)
-        providers[theme] = {**e, "sitemap": sitemap}
+        tiles = provider_tiles(con, theme, latest / "providers" / e["file"])
+        providers[theme] = {**e, "sitemap": sitemap, "pmtiles": tiles}
         print(f"  providers/{theme}: {e['features']:,} features, {e['bytes'] / 1e6:,.1f} MB, "
-              f"{e['row_groups']} groups, {time.monotonic() - t0:.0f} s", flush=True)
+              f"{e['row_groups']} groups, "
+              + (f"tiles {tiles['bytes'] / 1e6:,.1f} MB" if tiles else "no tiles")
+              + f", {time.monotonic() - t0:.0f} s", flush=True)
 
     today = dt.date.today().isoformat()
     for folder, layers, title, labels in [

@@ -5,7 +5,9 @@ Render, validate and publish the Portolan catalog for Geoconnex.
 Two groups, as the files are laid out: reference/ (rivers, gages, dams,
 watersheds, aquifers, water systems) and providers/ (one file per source
 Geoconnex harvests). One STAC Collection per file, its data asset the file
-itself. Counts, sizes, row groups and sha256 come from the folder's
+itself; a water layer also gets its PMTiles archive (a `rel: pmtiles` link
+with `pmtiles:layers`, web-map-links, the file as a `visual` asset) and a
+MapLibre style under styles/. Counts, sizes, row groups and sha256 come from the folder's
 _manifest.json, extents and column types from each file's footer, versions
 from latest/_source.json: everything is read from what was just published
 (over HTTPS, or from a local geoconnex.py output dir). latest/ is replaced
@@ -40,7 +42,9 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.geoconnex import GROUP_BYTES, LABELS
+from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
 from extent import lon_intervals, wrapped_bbox
@@ -73,6 +77,24 @@ CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "geoconnex-geoparquet"
 THUMBS = REPO / "catalog" / "thumbnails" / "geoconnex"
 GEOCONNEX_URL = "https://geoconnex.us"
+# The catalog Geoconnex maintains itself (scheduler#265): the source of
+# record, registered in the Portolan registry; this one is the copy laid
+# out for queries by area.
+UPSTREAM_CATALOG = "https://storage.googleapis.com/harvest-geoconnex-us/stac/catalog.json"
+# Its collection per sitemap, `ref:pws` -> ref-pws/collection.json; the
+# reference layers read from the API are named after their sitemap there.
+UPSTREAM_SITEMAPS = {
+    "mainstems": "ref:mainstems", "gages": "ref:gages", "dams": "ref:dams",
+    "hu02": "ref:hu02", "hu04": "ref:hu04", "hu06": "ref:hu06", "hu08": "ref:hu08",
+    "hu10": "ref:hu10", "hu12": "ref:hu12", "principal_aquifers": "ref:princi_aq",
+    "national_aquifers": "ref:nat_aq", "hydrogeologic_regions": "ref:sec_hydrg_reg",
+    "water_systems": "ref:pws",
+}
+
+
+def upstream_collection(theme: str, layer: dict) -> str:
+    sitemap = UPSTREAM_SITEMAPS[theme] if layer["group"] == "reference" else layer["label"]
+    return UPSTREAM_CATALOG.replace("catalog.json", f"{sitemap.replace(':', '-')}/collection.json")
 DOCS_URL = "https://docs.geoconnex.us"
 
 LICENSE = "CC0-1.0"
@@ -357,6 +379,55 @@ def describe(theme: str, layer: dict) -> str:
     return f"{doc} Geoconnex sitemap `{layer['label']}`."
 
 
+# ---------- styles ----------
+
+STYLE_COLORS = {"reference": "#2f6db5", "providers": "#1f8a70"}
+POLYGON_TYPES = ["Polygon", "MultiPolygon"]
+LINE_TYPES = ["LineString", "MultiLineString"]
+POINT_TYPES = ["Point", "MultiPoint"]
+
+
+def style(theme: str, layer: dict) -> dict:
+    """One MapLibre layer per kind of geometry the file holds. Rivers are
+    drawn wider as their drainage area grows; points grow with the zoom."""
+    tiles = layer["entry"]["pmtiles"]
+    color = STYLE_COLORS[layer["group"]]
+    types = set(layer["types"])
+
+    def of(kinds: list[str]) -> list:
+        return ["match", ["geometry-type"], kinds, True, False]
+
+    base = {"source": "data", "source-layer": tiles["layer"]}
+    layers = []
+    if types & set(POLYGON_TYPES):
+        layers += [
+            {"id": f"{theme}-fill", "type": "fill", **base, "filter": of(POLYGON_TYPES),
+             "paint": {"fill-color": color, "fill-opacity": 0.15}},
+            {"id": f"{theme}-outline", "type": "line", **base, "filter": of(POLYGON_TYPES),
+             "paint": {"line-color": color,
+                       "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.4, 10, 1.4]}},
+        ]
+    if types & set(LINE_TYPES):
+        width = (["interpolate", ["linear"], ["get", "outlet_drainagearea_sqkm"],
+                  0, 0.6, 1_000, 1.2, 100_000, 2.5, 1_000_000, 4]
+                 if theme == "mainstems" else 1.2)
+        layers.append({"id": f"{theme}-line", "type": "line", **base, "filter": of(LINE_TYPES),
+                       "paint": {"line-color": color, "line-width": width}})
+    if types & set(POINT_TYPES):
+        layers.append({"id": f"{theme}-point", "type": "circle", **base, "filter": of(POINT_TYPES),
+                       "paint": {"circle-color": color,
+                                 "circle-radius": ["interpolate", ["linear"], ["zoom"],
+                                                   3, 1.5, 8, 3, 14, 5],
+                                 "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5}})
+    return {
+        "version": 8, "name": title_of(theme, layer),
+        "sources": {"data": {"type": "vector",
+                             "url": f"pmtiles://{DATA_URL}/{layer['group']}/{tiles['file']}",
+                             "attribution": "Geoconnex, Internet of Water"}},
+        "layers": layers,
+    }
+
+
 # ---------- STAC ----------
 
 def data_asset(theme: str, layer: dict) -> dict:
@@ -377,29 +448,64 @@ def data_asset(theme: str, layer: dict) -> dict:
     }
 
 
+def tiles_assets(theme: str, layer: dict) -> dict:
+    tiles = layer["entry"].get("pmtiles")
+    if not tiles:
+        return {}
+    path = f"{DATASET_PREFIX}/latest/{layer['group']}/{tiles['file']}"
+    left_out = tiles.get("left_out")
+    return {
+        "pmtiles": {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PMTILES_TYPE,
+            "title": f"{title_of(theme, layer)}, vector tiles",
+            "description": f"PMTiles, layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to "
+                           f"{tiles['max_zoom']}, {tiles['tiles']:,} tiles; properties "
+                           f"{', '.join(tiles['properties'])}. Built with tylertoo "
+                           f"{tiles['tylertoo']}."
+                           + (f" {left_out:,} polygons wider than 10 degrees (region "
+                              f"footprints) are in the file but not in the tiles."
+                              if left_out else ""),
+            "roles": ["visual"],
+            "file:size": tiles["bytes"],
+            "file:checksum": "1220" + tiles["sha256"],
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        },
+        "style": {"href": "./styles/default.json", "type": STYLE_TYPE,
+                  "title": "Default map style", "roles": ["style", "default"]},
+    }
+
+
 def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> dict:
     e = layer["entry"]
     title = title_of(theme, layer)
     thumb = THUMBS / f"{theme}.png"
+    tiles = e.get("pmtiles")
+    tiles_href = (f"{PUBLIC_BASE}/{DATASET_PREFIX}/latest/{layer['group']}/{tiles['file']}"
+                  if tiles else None)
     return {
         "type": "Collection",
         "stac_version": "1.1.0",
-        "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT],
+        "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT,
+                            *([WEB_MAP_LINKS_EXT] if tiles else [])],
         "id": theme,
         "title": title,
         "description": (
             f"{describe(theme, layer)} From Geoconnex (Internet of Water): {e['features']:,} "
             f"features in one GeoParquet file ({e['bytes'] / 1e6:,.1f} MB), Hilbert-sorted "
             f"with a bbox covering, so a bbox filter reads only the row groups it touches. "
-            f"Read in place over HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}. "
-            f"This collection reads latest/, replaced when Geoconnex publishes a new export."
+            f"Read in place over HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}"
+            + (", with a PMTiles archive for web maps" if tiles else "")
+            + ". This collection reads latest/, replaced when Geoconnex publishes a new export."
             + (f" {layer['outside']:,} features have coordinates outside the US and its "
                f"territories, or a footprint around every longitude (placeholders, sign "
                f"errors or global records in the provider's data): they are in the file, "
                f"but left out of the extent." if layer["outside"] else "")
         ),
         "keywords": ["Geoconnex", "Internet of Water", "water", "hydrology", "United States",
-                     "GeoParquet", layer["group"], theme.replace("_", " ")],
+                     "GeoParquet", *(["PMTiles"] if tiles else []), layer["group"],
+                     theme.replace("_", " ")],
         "license": LICENSE,
         "version": span[-1][:10],
         "updated": updated,
@@ -411,6 +517,7 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
                           for n, t in layer["columns"]],
         "assets": {
             "data": data_asset(theme, layer),
+            **tiles_assets(theme, layer),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -429,6 +536,12 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
             VIA_LINK,
             {"rel": "alternate", "href": f"{DATA_URL}/{layer['group']}/", "type": "text/html",
              "title": "Browse the latest files"},
+            {"rel": "canonical", "href": upstream_collection(theme, layer),
+             "type": "application/json",
+             "title": "The same source in the catalog Geoconnex maintains"},
+            *([{"rel": "pmtiles", "href": tiles_href, "type": PMTILES_TYPE,
+                "title": f"{title}, vector tiles", "pmtiles:layers": [tiles["layer"]]}]
+              if tiles else []),
         ],
     }
 
@@ -489,6 +602,8 @@ def build_root(layers: dict, source: dict, span: list[str], updated: str) -> dic
             VIA_LINK,
             {"rel": "about", "href": GEOCONNEX_URL, "type": "text/html",
              "title": "Geoconnex, Internet of Water"},
+            {"rel": "related", "href": UPSTREAM_CATALOG, "type": "application/json",
+             "title": "The catalog Geoconnex maintains, the source of record"},
             {"rel": "related", "href": f"{DATA_URL}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, sources and what was changed"},
             {"rel": "related", "href": f"{DATA_URL}/_source.json", "type": "application/json",
@@ -521,7 +636,12 @@ sorted along a Hilbert curve over its own extent, gets a float32 `bbox`
 covering rounded outward, and is cut into row groups of at most
 {GROUP_BYTES >> 20} MiB uncompressed. Every file is checked (geo footer,
 covering, bbox bounds, extent, GEOMETRY type, row groups, row count) before
-publication. Census layers (states, counties, places) are not republished."""
+publication. Census layers (states, counties, places) are not republished.
+The water layers also get a PMTiles archive for web maps, built with
+tylertoo: polygons complete at every zoom they start from, points and lines
+thinned at coarse zooms and complete at the last one. The general USGS
+products Geoconnex harvests (National Geologic Map, GNIS, ScienceBase) have
+no tiles here."""
 
 
 def access_section(path: str) -> str:
@@ -542,6 +662,15 @@ The same file is `s3://{BUCKET}/{DATASET_PREFIX}/latest/{path}` on the
 anonymous S3 endpoint `{S3_ENDPOINT}` (path-style, empty credentials)."""
 
 
+def tiles_row(layer: dict) -> str:
+    t = layer["entry"].get("pmtiles")
+    if not t:
+        return ""
+    return (f"| Map tiles | `{layer['group']}/{t['file']}`, {t['bytes'] / 1e6:,.1f} MB, layer "
+            f"`{t['layer']}`, zoom {t['min_zoom']} to {t['max_zoom']}, style "
+            f"`styles/default.json` |\n")
+
+
 def collection_readme(col: dict, layer: dict, span: list[str]) -> str:
     e = layer["entry"]
     schema = "\n".join(f"| `{c['name']}` | `{c['type']}` | {c['description']} |"
@@ -555,7 +684,7 @@ def collection_readme(col: dict, layer: dict, span: list[str]) -> str:
 |---|---|
 | Features | {e['features']:,} |
 | File | `{layer['group']}/{e['file']}`, {e['bytes'] / 1e6:,.1f} MB, {e['row_groups']:,} row groups |
-| Geometry | {", ".join(layer['types'])}, lon/lat (OGC:CRS84) |
+{tiles_row(layer)}| Geometry | {", ".join(layer['types'])}, lon/lat (OGC:CRS84) |
 | Extent | {shared.fmt_bbox(layer['bbox'])} |
 | Data as of | Geoconnex export of {span[0][:10]}, built {span[-1][:10]} |
 | License | CC0 1.0 |
@@ -593,6 +722,11 @@ def collection_agents(col: dict, layer: dict) -> str:
         "epa_wqp": "- USGS sites appear here and in `usgs_monitoring_locations`: count distinct "
                    "site numbers (`NWIS/USGS-<id>` here, `monitoring-location/USGS-<id>` there).\n",
     }.get(col["id"], "")
+    t = e.get("pmtiles")
+    if t:
+        tips += (f"- For a map, use the `rel: pmtiles` link (source-layer `{t['layer']}`, "
+                 f"zoom {t['min_zoom']} to {t['max_zoom']}) with `styles/default.json`; "
+                 f"query the GeoParquet for answers.\n")
     return f"""\
 # {col['title']}: agent guide
 
@@ -658,6 +792,11 @@ def root_readme(root: dict, collections: list[dict], layers: dict, span: list[st
 |---|---|---|---|
 {rows}
 
+## Source of record
+
+Geoconnex publishes its own Portolan catalog, kept in sync by its scheduler:
+{UPSTREAM_CATALOG}. This catalog is a copy laid out for fast queries by area.
+
 ## Versions
 
 Only `latest/` is published. A weekly job compares the Geoconnex export and
@@ -715,6 +854,9 @@ water data providers publish, as GeoParquet 2.0. One collection per file.
 - `uri` is the Geoconnex persistent identifier; it resolves to the feature's
   page and data. `mainstem_uri` links a feature to the river it sits on.
 - Rivers (`mainstems`) form a network through `downstream_mainstem_id`.
+- Water layers have a PMTiles archive beside the file (`<id>.pmtiles`, the
+  collection's `rel: pmtiles` link) for maps; answers come from the
+  GeoParquet.
 - CC0. Credit "Geoconnex, Internet of Water" and the source agency.
 """
 
@@ -736,6 +878,10 @@ def build(base: str, dest: Path, *, updated: str | None = None) -> dict:
     for theme, layer in layers.items():
         col = build_collection(theme, layer, span, updated)
         cdir = dest / layer["group"] / theme
+        if layer["entry"].get("pmtiles"):
+            write_json(cdir / "styles" / "default.json", style(theme, layer))
+            col["assets"]["style"]["file:size"] = (cdir / "styles" / "default.json").stat().st_size
+            col["assets"]["style"]["file:checksum"] = multihash(cdir / "styles" / "default.json")
         write_json(cdir / "collection.json", col)
         shutil.copyfile(THUMBS / f"{theme}.png", cdir / "thumbnail.png")
         (cdir / "README.md").write_text(collection_readme(col, layer, span))
