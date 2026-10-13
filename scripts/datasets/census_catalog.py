@@ -399,7 +399,7 @@ WHERE bbox.xmin <= -97.74 AND bbox.xmax >= -97.74
 
 The same file at `s3://{BUCKET}/{DATASET_PREFIX}/tiger/{YEAR}/{product}/{code}.parquet` on the
 anonymous S3 endpoint `{S3_ENDPOINT}`. Leave out TIGER's placeholders with
-`WHERE {key} NOT LIKE 'ZZ%'`{" AND " + key + " <> '98'" if key == "CD120FP" else ""}."""
+`WHERE {key} NOT LIKE 'ZZ%'{" AND " + key + " <> '98'" if key == "CD120FP" else ""}`."""
 
 
 def collection_readme(col: dict, product: str, layer: tuple, entry: dict, tiles: dict) -> str:
