@@ -6,9 +6,10 @@ data providers publish, as GeoParquet that reads fast over HTTP.
 Geoconnex links US water data to the places it describes. It curates
 reference features (rivers, gages, dams, watersheds, aquifers) and harvests
 the features hundreds of providers publish (Water Quality Portal sites,
-USGS monitoring locations, state gages...). Its own GeoParquet export holds
-all of them in one 3.9 GB file, unsorted, in row groups of up to 416 MB:
-a bbox around Boston read for 95 s. This republishes it as:
+USGS monitoring locations, state gages...). Its scheduler publishes one
+GeoParquet file per sitemap, with the JSON-LD of every feature and row groups
+of up to 140,000 rows, and a Portolan catalog over them (UPSTREAM). This
+republishes them as:
 
   <out>/latest/reference/<layer>.parquet     one file per reference layer,
                                              with the layer's full attributes
@@ -25,16 +26,17 @@ of uncompressed rows, so a bbox filter reads a couple of MB.
 
 Each reference layer comes from where its attributes are complete:
 
-  mainstems   ref_rivers GitHub release, mainstems.gpkg (the export has no
+  mainstems   ref_rivers GitHub release, mainstems.gpkg (the sitemap file has no
               length, drainage area or downstream link)
   gages, dams, the three aquifer layers
               reference.geoconnex.us, OGC API Features, paged
   hu02..hu12, water_systems
-              the export (the API answers 500 on HU12 polygons; name and URI
-              are what the export has)
+              the sitemap files (the API answers 500 on HU12 polygons; name
+              and URI are what the files have)
 
-Providers are the export's other sitemaps, as they are: uri, name,
-description, mainstem_uri, geometry.
+Providers are the other sitemaps, as they are: uri, name, description,
+mainstem_uri, geometry. The `jsonld` column, Geoconnex's source of record,
+is not republished: what it holds beyond the columns varies by provider.
 
 The PMTiles cover the water features: every reference layer and every
 provider but the general USGS products Geoconnex also harvests (NOT_TILED),
@@ -69,7 +71,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets import pmtiles
 from datasets.infra import GEOMETRY_TYPE_NAMES
 
-EXPORT = "https://storage.googleapis.com/metadata-geoconnex-us/exports/geoconnex_features.parquet"
+# One GeoParquet file per sitemap, `ref:hu12` -> ref:hu12.parquet. The
+# single export file (metadata-geoconnex-us) was retired in October 2026.
+SUMMONED = "https://storage.googleapis.com/harvest-geoconnex-us/summoned"
+LISTING = ("https://storage.googleapis.com/storage/v1/b/harvest-geoconnex-us/o"
+           "?prefix=summoned/&fields=items(name,size,crc32c,updated),nextPageToken")
+UPSTREAM = "https://storage.googleapis.com/harvest-geoconnex-us/stac/catalog.json"
 API = "https://reference.geoconnex.us"
 RIVERS_REPO = "internetofwater/ref_rivers"
 API_LAYERS = {            # layer -> API collection
@@ -79,7 +86,7 @@ API_LAYERS = {            # layer -> API collection
     "national_aquifers": "nat_aq",
     "hydrogeologic_regions": "sec_hydrg_reg",
 }
-EXPORT_LAYERS = {         # layer -> export sitemap
+EXPORT_LAYERS = {         # layer -> sitemap file
     "hu02": "ref:hu02", "hu04": "ref:hu04", "hu06": "ref:hu06",
     "hu08": "ref:hu08", "hu10": "ref:hu10", "hu12": "ref:hu12",
     "water_systems": "ref:pws",
@@ -103,7 +110,12 @@ LABELS = {
 SKIPPED_SITEMAPS = {"ref:states", "ref:counties", "ref:places", "ref:cbsa", "ref:ua10", "ref:aiannh",
                     # the API copies, read from there with their attributes
                     "ref:mainstems", "ref:gages", "ref:dams",
-                    "ref:princi_aq", "ref:nat_aq", "ref:sec_hydrg_reg"}
+                    "ref:princi_aq", "ref:nat_aq", "ref:sec_hydrg_reg",
+                    # the ontology itself, two rows, no features
+                    "geoconnex:ontology",
+                    # 2.5 million geologic map units, no water feature: a USGS
+                    # dataset of its own later (and too big to sort here in 16 GB)
+                    "usgs:national_geologic_map"}
 PAGE = 10_000
 
 # Tiles per reference layer: (min zoom, max zoom, properties, coverage,
@@ -128,7 +140,7 @@ TILES = {
     "water_systems": (0, 12, ["pwsid", "name"], True, []),
 }
 # General USGS products, not water features: no tiles here.
-NOT_TILED = {"usgs_national_geologic_map", "usgs_gnis", "usgs_sciencebase"}
+NOT_TILED = {"usgs_gnis", "usgs_sciencebase"}
 # Providers: to zoom 14, where a dense city (2,208 Water Quality Portal
 # sites on one spot in a WQP tile) fits the cap. WQP needs points thinned
 # four times harder at coarse zooms.
@@ -178,18 +190,35 @@ def get(url: str, dest: Path | None = None, tries: int = 5):
             time.sleep(10 * (attempt + 1))
 
 
+def sitemap_files() -> dict:
+    """The sitemap files read, from the bucket listing: sitemap -> size,
+    crc32c checksum and update time."""
+    files, token = {}, None
+    while True:
+        page, _ = get(LISTING + (f"&pageToken={token}" if token else ""))
+        for item in page.get("items", []):
+            sitemap = item["name"].removeprefix("summoned/").removesuffix(".parquet")
+            if item["name"].endswith(".parquet") and sitemap not in SKIPPED_SITEMAPS:
+                files[sitemap] = {"bytes": int(item["size"]), "crc32c": item["crc32c"],
+                                  "updated": item["updated"]}
+        token = page.get("nextPageToken")
+        if not token:
+            return dict(sorted(files.items()))
+
+
 def upstream() -> dict:
-    """The versions of everything read: the export's ETag and date, the
-    ref_rivers release holding mainstems.gpkg. The workflow compares this
-    with the published _source.json and skips a run when nothing moved."""
-    req = urllib.request.Request(EXPORT, method="HEAD", headers={"User-Agent": "geomermaids-parquetry"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        export = {"url": EXPORT, "etag": r.headers.get("ETag"), "last_modified": r.headers.get("Last-Modified"),
-                  "bytes": int(r.headers.get("Content-Length"))}
+    """The versions of everything read: the sitemap files (a fingerprint of
+    their crc32c checksums, the latest update), the ref_rivers release holding
+    mainstems.gpkg. The workflow compares this with the published
+    _source.json and skips a run when nothing moved."""
+    files = sitemap_files()
+    fingerprint = hashlib.sha256(json.dumps({k: v["crc32c"] for k, v in files.items()}).encode())
+    summoned = {"url": SUMMONED, "catalog": UPSTREAM, "fingerprint": fingerprint.hexdigest()[:16],
+                "last_modified": max(v["updated"] for v in files.values()), "files": files}
     releases, _ = get(f"https://api.github.com/repos/{RIVERS_REPO}/releases?per_page=20")
     rel = next(r for r in releases if any(a["name"] == "mainstems.gpkg" for a in r["assets"]))
     asset = next(a for a in rel["assets"] if a["name"] == "mainstems.gpkg")
-    return {"export": export,
+    return {"summoned": summoned,
             "mainstems": {"repo": RIVERS_REPO, "release": rel["tag_name"],
                           "url": asset["browser_download_url"], "bytes": asset["size"]},
             "api": {"url": API, "collections": sorted(API_LAYERS.values())}}
@@ -202,7 +231,10 @@ def fetch(args) -> None:
     (work / "upstream.json").write_text(json.dumps(src, indent=2) + "\n")
     print(json.dumps(src, indent=2), flush=True)
 
-    for name, url, size in [("export.parquet", src["export"]["url"], src["export"]["bytes"]),
+    (work / "summoned").mkdir(exist_ok=True)
+    downloads = [(f"summoned/{sitemap}.parquet", f"{SUMMONED}/{sitemap}.parquet", f["bytes"])
+                 for sitemap, f in src["summoned"]["files"].items()]
+    for name, url, size in [*downloads,
                             ("mainstems.gpkg", src["mainstems"]["url"], src["mainstems"]["bytes"])]:
         dest = work / name
         if dest.exists() and dest.stat().st_size == size:
@@ -304,11 +336,15 @@ def load_reference(con: duckdb.DuckDBPyConnection, work: Path) -> dict[str, str]
         code = "huc" if layer.startswith("hu") else "pwsid"
         con.execute(f"""
             CREATE TABLE ref_{layer} AS
-            SELECT id AS uri, regexp_extract(id, '/([^/]+)$', 1) AS {code},
+            SELECT "@id" AS uri, regexp_extract("@id", '/([^/]+)$', 1) AS {code},
                    feature_name AS name, geometry::GEOMETRY AS geom
-            FROM read_parquet('{work / 'export.parquet'}') WHERE geoconnex_sitemap = '{sitemap}'""")
-        origin[layer] = f"export, sitemap {sitemap}"
+            FROM read_parquet('{sitemap_file(work, sitemap)}')""")
+        origin[layer] = f"{SUMMONED}/{sitemap}.parquet"
     return origin
+
+
+def sitemap_file(work: Path, sitemap: str) -> Path:
+    return work / "summoned" / f"{sitemap}.parquet"
 
 
 def write(con: duckdb.DuckDBPyConnection, table: str, dest: Path) -> dict:
@@ -490,23 +526,27 @@ def build(args) -> None:
               f"{e['row_groups']} groups, tiles {tiles['bytes'] / 1e6:,.1f} MB, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
 
-    export = f"read_parquet('{work / 'export.parquet'}')"
-    sitemaps = con.execute(f"SELECT geoconnex_sitemap, count(*) FROM {export} GROUP BY 1 ORDER BY 2 DESC").fetchall()
-    unknown = [s for s, _ in sitemaps if s.startswith("ref:") and s not in SKIPPED_SITEMAPS
-               and s not in EXPORT_LAYERS.values()]
-    assert not unknown, f"new reference sitemaps in the export, decide where they go: {unknown}"
+    # Largest first, as the manifest lists them.
+    sitemaps = sorted(src["summoned"]["files"], key=lambda s: -src["summoned"]["files"][s]["bytes"])
+    unknown = [s for s in sitemaps if s.startswith("ref:") and s not in EXPORT_LAYERS.values()]
+    assert not unknown, f"new reference sitemaps, decide where they go: {unknown}"
     providers = {}
-    for sitemap, n in sitemaps:
+    for sitemap in sitemaps:
         if sitemap.startswith("ref:"):
             continue
         theme = slug(sitemap)
         assert theme not in providers, f"two sitemaps make {theme}"
         con.execute(f"""
             CREATE OR REPLACE TABLE p AS
-            SELECT id AS uri, feature_name AS name, feature_description AS description,
+            SELECT "@id" AS uri, feature_name AS name, feature_description AS description,
                    mainstem_uri, geometry::GEOMETRY AS geom
-            FROM {export} WHERE geoconnex_sitemap = '{sitemap}'""")
+            FROM read_parquet('{sitemap_file(work, sitemap)}')""")
         expected = con.execute("SELECT count(*) FROM p WHERE geom IS NOT NULL").fetchone()[0]
+        if not expected:
+            # Data pages with no place (EPA How's My Waterway per HUC12,
+            # USBR RISE locations in October 2026): nothing to map.
+            print(f"  providers/{theme}: no geometry, skipped", flush=True)
+            continue
         e = write(con, "p", latest / "providers" / f"{theme}.parquet")
         verify(con, latest / "providers" / e["file"], expected)
         tiles = provider_tiles(con, theme, latest / "providers" / e["file"])
@@ -553,16 +593,16 @@ Land Policy) that links US water data to the places it describes.
   Geoconnex:    https://geoconnex.us, https://docs.geoconnex.us
   Licence:      CC0 1.0 (Geoconnex documentation, reference repositories)
   Read:         {today}
-    export      {src['export']['url']}
-                (Last-Modified {src['export']['last_modified']})
+    sitemaps    {src['summoned']['url']}/<sitemap>.parquet
+                (latest update {src['summoned']['last_modified']}; catalog
+                {src['summoned']['catalog']})
     rivers      {src['mainstems']['url']}
                 (ref_rivers {src['mainstems']['release']}, CC0 1.0)
     API         {src['api']['url']} (gages, dams, aquifers)
 
 No attribution is required. Please credit "Geoconnex, Internet of Water"
 anyway, and the agencies behind each source: USGS (NHDPlus, the Watershed
-Boundary Dataset, gages, aquifers, GNIS, the National Geologic Map
-Database), the US Army Corps of Engineers (National Inventory of Dams), the
+Boundary Dataset, gages, aquifers, GNIS, ScienceBase), the US Army Corps of Engineers (National Inventory of Dams), the
 US EPA (Water Quality Portal with USGS and the National Water Quality
 Monitoring Council; Safe Drinking Water Information System), and the state
 agencies that publish their own gages. US federal works are in the public
@@ -572,8 +612,9 @@ domain.
 
 Nothing in the features. The reference layers keep every attribute their
 source publishes; column names are lower snake case. The provider files
-keep the export's columns (uri, name, description, mainstem_uri) and one
-file per Geoconnex sitemap. Census layers (states, counties, places,
+keep the sitemap files' columns (uri, name, description, mainstem_uri), one
+file per Geoconnex sitemap, without the JSON-LD. Census layers and the
+National Geologic Map are not republished. Census layers (states, counties, places,
 metropolitan and urban areas, tribal areas) are not republished.
 
 Geometry is lon/lat (OGC:CRS84). Each file is sorted along a Hilbert curve
@@ -593,7 +634,7 @@ This data is packaged and hosted by Geomermaids:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    f = sub.add_parser("fetch", help="download the export, mainstems.gpkg and the API layers")
+    f = sub.add_parser("fetch", help="download the sitemap files, mainstems.gpkg and the API layers")
     f.add_argument("--work-dir", type=Path, required=True)
     b = sub.add_parser("build", help="write and verify every file from what fetch downloaded")
     b.add_argument("--work-dir", type=Path, required=True)

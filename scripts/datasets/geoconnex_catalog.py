@@ -31,12 +31,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import shutil
 import sys
 import tempfile
 import urllib.request
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import duckdb
@@ -95,7 +95,6 @@ UPSTREAM_SITEMAPS = {
 def upstream_collection(theme: str, layer: dict) -> str:
     sitemap = UPSTREAM_SITEMAPS[theme] if layer["group"] == "reference" else layer["label"]
     return UPSTREAM_CATALOG.replace("catalog.json", f"{sitemap.replace(':', '-')}/collection.json")
-DOCS_URL = "https://docs.geoconnex.us"
 
 LICENSE = "CC0-1.0"
 LICENSE_LINK = {
@@ -106,9 +105,10 @@ LICENSE_LINK = {
 }
 VIA_LINK = {
     "rel": "via",
-    "href": f"{DOCS_URL}/access/downloads",
+    "href": "https://browser.portolan-sdi.org/#/external/"
+            + UPSTREAM_CATALOG.removeprefix("https://"),
     "type": "text/html",
-    "title": "Geoconnex downloads: the GeoParquet export this republishes",
+    "title": "The catalog Geoconnex maintains, whose GeoParquet files this republishes",
 }
 
 PROVIDERS = [
@@ -140,8 +140,8 @@ GROUPS = {
     "providers": (
         "Features published by data providers",
         "The features Geoconnex harvests from water data providers, one file per source: "
-        "Water Quality Portal sites, USGS monitoring locations, GNIS names, the National "
-        "Geologic Map, state gages and western water sources."),
+        "Water Quality Portal sites, USGS monitoring locations, GNIS names, state gages and "
+        "western water sources."),
 }
 
 # Reference layers: what each holds and where it comes from.
@@ -178,9 +178,9 @@ PROVIDER_DOCS = {
                                   "USGS monitoring locations: stream gages, wells, springs, "
                                   "lakes and other sites of the National Water Information "
                                   "System. Most also appear in the Water Quality Portal."),
-    "usgs:national_geologic_map": ("National Geologic Map units",
-                                   "Geologic map units of the USGS National Geologic Map "
-                                   "Database, as polygons."),
+    "usgs:nhdplusv2:huc12pp": ("HUC12 pour points",
+                               "The outlet of each HUC12 subwatershed on the NHDPlus V2 "
+                               "network, as points."),
     "usgs:gnis": ("GNIS names",
                   "Named features of the USGS Geographic Names Information System."),
     "usgs:sciencebase": ("ScienceBase items",
@@ -361,8 +361,8 @@ def measure(base: str) -> tuple[dict, dict]:
 
 
 def interval(source: dict) -> list[str]:
-    """From the Geoconnex export's date to the day this was built."""
-    start = parsedate_to_datetime(source["export"]["last_modified"]).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """From the latest Geoconnex sitemap file to the day this was built."""
+    start = dt.datetime.fromisoformat(source["summoned"]["last_modified"]).strftime("%Y-%m-%dT%H:%M:%SZ")
     return [start, f"{source['built']}T00:00:00Z"]
 
 
@@ -497,7 +497,7 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
             f"with a bbox covering, so a bbox filter reads only the row groups it touches. "
             f"Read in place over HTTPS or through the anonymous S3 endpoint {S3_ENDPOINT}"
             + (", with a PMTiles archive for web maps" if tiles else "")
-            + ". This collection reads latest/, replaced when Geoconnex publishes a new export."
+            + ". This collection reads latest/, replaced when Geoconnex updates its files."
             + (f" {layer['outside']:,} features have coordinates outside the US and its "
                f"territories, or a footprint around every longitude (placeholders, sign "
                f"errors or global records in the provider's data): they are in the file, "
@@ -583,10 +583,10 @@ def build_root(layers: dict, source: dict, span: list[str], updated: str) -> dic
             "layers with their full attributes (852,673 rivers head to outlet with their "
             "network, stream gages, dams, watersheds HU02 to HU12, aquifers, public water "
             f"systems) and {len(layers) - n_ref} files of the features data providers publish "
-            "(4.6 million Water Quality Portal and USGS monitoring sites, GNIS, the National "
-            "Geologic Map, state gages). One file per layer or source, Hilbert-sorted with a "
+            "(4.6 million Water Quality Portal and USGS monitoring sites, GNIS, state gages, "
+            "HUC12 pour points). One file per layer or source, Hilbert-sorted with a "
             "bbox covering and row groups of at most 4 MiB: a small bbox reads a few MB. "
-            f"Geoconnex export of {span[0][:10]}, checked weekly. CC0."
+            f"Geoconnex files of {span[0][:10]}, checked weekly. CC0."
         ),
         "version": span[-1][:10],
         "updated": updated,
@@ -607,7 +607,7 @@ def build_root(layers: dict, source: dict, span: list[str], updated: str) -> dic
             {"rel": "related", "href": f"{DATA_URL}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, sources and what was changed"},
             {"rel": "related", "href": f"{DATA_URL}/_source.json", "type": "application/json",
-             "title": "Versions read: the Geoconnex export, the rivers release, the API counts"},
+             "title": "Versions read: the Geoconnex sitemap files, the rivers release, the API counts"},
             {"rel": "vcs", "href": REPO_URL, "type": "text/html",
              "title": "Builder and catalog source"},
             {"rel": "issues", "href": f"{REPO_URL}/issues", "type": "text/html",
@@ -627,7 +627,7 @@ each source (USGS, USACE, EPA, the state agencies); the notice is in
 
 PROVENANCE = f"""\
 Built by [geoconnex.py]({REPO_URL}/blob/main/scripts/datasets/geoconnex.py)
-from the Geoconnex GeoParquet export ({DOCS_URL}/access/downloads), the
+from the GeoParquet file Geoconnex publishes per sitemap ({UPSTREAM_CATALOG}), the
 `mainstems.gpkg` of the [ref_rivers](https://github.com/internetofwater/ref_rivers)
 release, and the gages, dams and aquifer collections of
 [reference.geoconnex.us](https://reference.geoconnex.us). Features and
@@ -639,9 +639,9 @@ covering, bbox bounds, extent, GEOMETRY type, row groups, row count) before
 publication. Census layers (states, counties, places) are not republished.
 The water layers also get a PMTiles archive for web maps, built with
 tylertoo: polygons complete at every zoom they start from, points and lines
-thinned at coarse zooms and complete at the last one. The general USGS
-products Geoconnex harvests (National Geologic Map, GNIS, ScienceBase) have
-no tiles here."""
+thinned at coarse zooms and complete at the last one. GNIS and ScienceBase,
+general USGS products, have no tiles here; the National Geologic Map, which
+Geoconnex also harvests, is not republished."""
 
 
 def access_section(path: str) -> str:
@@ -686,7 +686,7 @@ def collection_readme(col: dict, layer: dict, span: list[str]) -> str:
 | File | `{layer['group']}/{e['file']}`, {e['bytes'] / 1e6:,.1f} MB, {e['row_groups']:,} row groups |
 {tiles_row(layer)}| Geometry | {", ".join(layer['types'])}, lon/lat (OGC:CRS84) |
 | Extent | {shared.fmt_bbox(layer['bbox'])} |
-| Data as of | Geoconnex export of {span[0][:10]}, built {span[-1][:10]} |
+| Data as of | Geoconnex files of {span[0][:10]}, built {span[-1][:10]} |
 | License | CC0 1.0 |
 
 ## Access
@@ -799,9 +799,9 @@ Geoconnex publishes its own Portolan catalog, kept in sync by its scheduler:
 
 ## Versions
 
-Only `latest/` is published. A weekly job compares the Geoconnex export and
+Only `latest/` is published. A weekly job compares the Geoconnex files and
 the rivers release with `latest/_source.json` and rebuilds when either moved.
-This build: Geoconnex export of {span[0][:10]}, built {span[-1][:10]}.
+This build: Geoconnex files of {span[0][:10]}, built {span[-1][:10]}.
 
 ## Access
 
