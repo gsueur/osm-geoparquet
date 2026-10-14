@@ -121,7 +121,7 @@ jobs:
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: counts and the index checksum
       # match them.
-      - name: Portolan catalog, published
+      - name: STAC catalog, published
         if: env.PUBLISH == 'true'
         run: |
           uv run --project scripts python scripts/datasets/nfhl_catalog.py publish \

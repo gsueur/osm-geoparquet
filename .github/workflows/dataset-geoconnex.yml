@@ -167,7 +167,7 @@ jobs:
       # After the data, so the catalog never links a file that is not there:
       # counts, sizes and checksums are read back from what was just
       # published. A catalog-only run renders it from the live files.
-      - name: Portolan catalog, published
+      - name: STAC catalog, published
         if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
         run: |
           uv run --project scripts python scripts/datasets/geoconnex_catalog.py publish --remote "$REMOTE"

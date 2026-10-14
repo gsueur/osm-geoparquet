@@ -158,7 +158,7 @@ jobs:
 
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the published manifests, checked by rashid first.
-      - name: Portolan catalog, published
+      - name: STAC catalog, published
         if: inputs.stage == 'tiles' || inputs.stage == 'catalog'
         run: |
           uv run --project scripts python scripts/datasets/clc_catalog.py publish --remote "$REMOTE"
