@@ -24,3 +24,7 @@ wheels/
 # Cloudflare Workers
 node_modules/
 .wrangler/
+
+# macOS
+.DS_Store
+._*

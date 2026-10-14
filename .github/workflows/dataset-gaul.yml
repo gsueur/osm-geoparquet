@@ -144,7 +144,7 @@ jobs:
       # rashid over the rendered tree, before anything is uploaded. The data
       # assets are remote hrefs, so this is the metadata pass plus the bytes
       # of the thumbnails; the parquet files were verified by gaul.py above.
-      - name: Portolan catalog, rendered and checked
+      - name: STAC catalog, rendered and checked
         run: |
           uv run --project scripts python scripts/datasets/gaul_catalog.py \
             build --out-dir "out/$VERSION" --dest build/catalog
@@ -183,7 +183,7 @@ jobs:
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
 
       # After the data, so the catalog never links a file that is not there.
-      - name: Portolan catalog, published
+      - name: STAC catalog, published
         if: inputs.stage != 'build'
         run: |
           uv run --project scripts python scripts/datasets/gaul_catalog.py \

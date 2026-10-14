@@ -442,7 +442,7 @@ jobs:
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: rows and sizes match them.
       # The thumbnails are committed (catalog/thumbnails/gmwid/).
-      - name: Portolan catalog, published
+      - name: STAC catalog, published
         if: env.STAGE == 'publish'
         run: |
           uv run --project scripts python scripts/datasets/infra_catalog.py publish \
