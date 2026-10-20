@@ -82,7 +82,8 @@ CATALOG = {
         "columns": {
             "name": "The building's name, where it has one (about 2,200 do).",
             "bin": "Building Identification Number (BIN), the City's identifier for the building.",
-            "height_roof_ft": "Roof height above ground, in feet. Null where unknown (0 in the source).",
+            "height_roof_ft": "Roof height above ground, in feet. Null where unknown (0 in the source) or impossible (over "
+                              "1,600 ft, taller than any roof in the city: one entry error in the source).",
             "ground_elevation_ft": "Ground elevation at the building, in feet above sea level. Null where unknown.",
             "year_built": "Year the building was constructed. Null where unknown (0 in the source).",
             "feature_code": "The source's feature code, the kind of structure (2100: building; others for garages, "

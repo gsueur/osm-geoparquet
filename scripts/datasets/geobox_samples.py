@@ -63,7 +63,10 @@ SAMPLES = {
         "terms": "https://www.nyc.gov/main/terms-of-use",
         "select": """NULLIF(trim(name), '') AS name,
                      TRY_CAST(bin AS BIGINT) AS bin,
-                     NULLIF(TRY_CAST(height_roof AS DOUBLE), 0) AS height_roof_ft,
+                     -- over 1,600 ft is taller than any roof in the city (Central Park Tower: 1,550): an entry
+                     -- error (one building has its BIN, 2,130,353, as its height), unknown like 0
+                     CASE WHEN TRY_CAST(height_roof AS DOUBLE) BETWEEN 0.01 AND 1600
+                          THEN TRY_CAST(height_roof AS DOUBLE) END AS height_roof_ft,
                      NULLIF(TRY_CAST(ground_elevation AS DOUBLE), 0) AS ground_elevation_ft,
                      NULLIF(TRY_CAST(construction_year AS INTEGER), 0) AS year_built,
                      TRY_CAST(feature_code AS INTEGER) AS feature_code""",
