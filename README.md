@@ -91,6 +91,19 @@ legislative areas come first. Portolan catalog at
 (`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
 (`census/`, deployed with wrangler like `nfhl/`).
 
+Geobox's samples (`scripts/datasets/geobox_samples.py`, no workflow: the
+sources are static, rebuilt by hand) sit under
+`https://parquetry.geomermaids.com/geobox-samples/<sample>/`: New York City's
+1.08 million building footprints (`nyc/nyc_buildings.parquet`, NYC Open Data)
+and the City of Los Angeles's 114 neighborhoods
+(`la/la_neighborhoods.parquet`, Los Angeles Times via the City's GeoHub, CC BY
+4.0), the useful columns typed, each with a PMTiles archive. Geobox's Get
+started links them and credits each from its collection in the Portolan
+catalog at `https://parquetry.geomermaids.com/geobox-samples/catalog/catalog.json`
+(`scripts/datasets/geobox_samples_catalog.py`). Publish the data with the
+census workflow's rclone commands (`--filter`, not `--include` with
+`--exclude`), then the catalog with its `publish` command.
+
 Corine Land Cover 2018 (`scripts/datasets/clc.py`, workflow
 `dataset-clc.yml`) sits under `https://parquetry.geomermaids.com/clc/2018/`
 as one Europe file (`clc_2018.parquet`) and one file per country
