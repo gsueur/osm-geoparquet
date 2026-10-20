@@ -68,14 +68,15 @@ SAMPLES = {
                      NULLIF(TRY_CAST(construction_year AS INTEGER), 0) AS year_built,
                      TRY_CAST(feature_code AS INTEGER) AS feature_code""",
         # Two bands, joined by pyramid(). Zooms 8 to 10, where a building is a pixel or less: every building as a small
-        # square, geometry only, so the whole city shows when a map opens on it. tylertoo keeps a run's finest level
+        # square with its roof height and year built, so the whole city shows when a map opens on it and can be coloured
+        # by either at every zoom (Geobox then needs no map of its own for them). tylertoo keeps a run's finest level
         # verbatim, so that band is built to zoom 11 and only 8 to 10 are kept ("use"); its zoom 11 outlines, thrown
-        # away, would break any cap, so the band has none (its squares stay under 1.5 MB a tile, measured).
+        # away, would break any cap, so the band has none (its squares reach 2 MB a tile at zoom 10, 800 KB compressed, measured).
         # Zooms 11 to 15: outlines, thinned at 11 and 12 with the tallest building winning each cell, every building
         # from 13, under a 1 MB cap (MapLibre reads it fine).
         "bands": [
-            {"zooms": (8, 11), "use": (8, 10), "properties": [], "coverage": False,
-             "options": ["--max-tile-size", "0", "--representation", "8-10:square", "--exclude-all-properties"]},
+            {"zooms": (8, 11), "use": (8, 10), "properties": ["height_roof_ft", "year_built"], "coverage": False,
+             "options": ["--max-tile-size", "0", "--representation", "8-10:square"]},
             {"zooms": (11, 15), "properties": ["name", "height_roof_ft", "year_built"], "coverage": False,
              "options": ["--max-tile-size", "1M", "--sort-key", "height_roof_ft"]},
         ],
