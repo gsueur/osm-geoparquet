@@ -93,7 +93,7 @@ jobs:
         run: |
           uv run --project workshop --with pycountry python scripts/datasets/nfhl.py update \
             --out-dir "$WORK/out" --work-dir "$WORK/work" --max "${{ inputs.max || 200 }}"
-          jq -r '"replaced \(.replaced|length), added \(.added|length), skipped \(.skipped|length), failed \(.failed|length), deferred \(.deferred)"' \
+          jq -r '"replaced \(.replaced|length), added \(.added|length), skipped \(.skipped|length), failed \(.failed|length), retry \(.retry|length), deferred \(.deferred)"' \
             "$WORK/out/run.json" | tee /dev/stderr | sed 's/^/summary=/' >> "$GITHUB_OUTPUT"
           find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
 
@@ -146,7 +146,9 @@ jobs:
 
       # Last, so a delivery that failed does not hold back the others: they
       # are published, the failed one stays as it was and is tried again
-      # by the next run, and this one goes red.
+      # by the next run, and this one goes red. A delivery FEMA would not
+      # serve (a reset, a timeout, a 5xx) is not a failure: it is listed
+      # under retry and tried again, and fails only after 3 runs in a row.
       - name: Deliveries that failed
         run: |
           jq -e '.failed | length == 0' "$WORK/out/run.json" >/dev/null && exit 0
@@ -169,7 +171,7 @@ jobs:
           [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
           # A quiet day is not news: only failures, and days that changed something.
           if [[ "$RESULT" == "success" ]]; then
-            [[ "$SUMMARY" == "replaced 0, added 0, skipped 0, failed 0, deferred 0" ]] && exit 0
+            [[ "$SUMMARY" == "replaced 0, added 0, skipped 0, failed 0, retry 0, deferred 0" ]] && exit 0
             title="NFHL OK"; tags="white_check_mark"; prio="low"
           else
             title="NFHL FAILED"; tags="warning"; prio="high"

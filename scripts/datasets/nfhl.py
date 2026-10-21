@@ -72,6 +72,10 @@ BBOX = ("{xmin: ST_XMin(geometry), ymin: ST_YMin(geometry), "
 MIN_LISTED = 2_400
 KEEP_RUNS = 120           # runs kept in changes.json
 NO_LAYER = "not in archive"   # the pipeline's error for a delivery without S_FLD_HAZ_AR
+# FEMA's portal resets connections for minutes at a time. A delivery it
+# would not serve is tried again by the next run; this many runs in a row
+# and it counts as failed.
+RETRY_RUNS = 3
 # The index columns, in order. path is relative to latest/.
 INDEX_COLUMNS = {
     "state": "VARCHAR", "county": "VARCHAR", "dfirm_id": "VARCHAR",
@@ -247,6 +251,22 @@ def write_index(con: duckdb.DuckDBPyConnection, rows: list[dict], dest: Path, cr
         FROM idx ORDER BY state, dfirm_id""", dest, crs)
     n = con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
     assert n == len(rows), f"{dest}: {n} rows, expected {len(rows)}"
+
+
+def cause(e: BaseException) -> BaseException:
+    """The error under the workshop's retries: tenacity wraps the last one."""
+    from tenacity import RetryError
+    return e.last_attempt.exception() if isinstance(e, RetryError) else e
+
+
+def unreachable(e: BaseException) -> bool:
+    """Whether e is FEMA not answering (a reset, a timeout, a 5xx), not a fault
+    in the delivery or the pipeline."""
+    import httpx
+    e = cause(e)
+    if isinstance(e, httpx.TransportError):
+        return True
+    return isinstance(e, httpx.HTTPStatusError) and e.response.status_code >= 500
 
 
 def get_json(url: str, default):
@@ -466,7 +486,19 @@ def update(args) -> None:
     skipped = get_json(f"{args.public}/{LATEST}/skipped.json", {})
     print(f"  published: {len(rows):,} deliveries, {len(skipped)} skipped", flush=True)
 
-    listed = fema.list_datasets()
+    run = {"date": today, "listed": 0, "replaced": [], "added": [], "skipped": [],
+           "failed": [], "retry": [], "deferred": 0, "not_listed": []}
+    try:
+        listed = fema.list_datasets()
+    except Exception as e:
+        if not unreachable(e):
+            raise
+        # Nothing to compare with: the published files stay as they are.
+        run["unreachable"] = f"{type(cause(e)).__name__}: {cause(e)}"[:500]
+        print(f"  FEMA unreachable, tried again next run: {run['unreachable']}", flush=True)
+        write_repository(con, out, list(rows.values()), crs, today, changes, skipped)
+        write_json(out / "run.json", run)
+        return
     if len(listed) < MIN_LISTED:
         sys.exit(f"FEMA lists {len(listed):,} county-wide deliveries, fewer than {MIN_LISTED:,}: "
                  "the portal page looks truncated; nothing changed")
@@ -488,8 +520,7 @@ def update(args) -> None:
     print(f"  FEMA lists {len(listed):,}: {len(todo)} to process, {len(deferred)} deferred, "
           f"{len(not_listed)} published but no longer listed", flush=True)
 
-    run = {"date": today, "listed": len(listed), "replaced": [], "added": [], "skipped": [],
-           "failed": [], "deferred": len(deferred), "not_listed": not_listed}
+    run.update(listed=len(listed), deferred=len(deferred), not_listed=not_listed)
     for d in todo:
         t0 = time.monotonic()
         key = {"dfirm_id": d["dfirm_id"], "state": d["state"], "county": d["county"],
@@ -511,9 +542,19 @@ def update(args) -> None:
             print(f"  skip {d['state']} {d['county']} {d['dfirm_id']}: {e}", flush=True)
             continue
         except Exception as e:  # noqa: BLE001 - one delivery must not stop the others
-            run["failed"].append({**key, "error": f"{type(e).__name__}: {e}"[:500]})
-            print(f"  FAIL {d['state']} {d['county']} {d['dfirm_id']}: {type(e).__name__}: {e}",
-                  flush=True)
+            error = f"{type(cause(e)).__name__}: {cause(e)}"[:500]
+            streak = 0
+            for past in changes.get("runs", []):
+                if d["dfirm_id"] not in {r["dfirm_id"] for r in past.get("retry", [])}:
+                    break
+                streak += 1
+            if unreachable(e) and streak + 1 < RETRY_RUNS:
+                run["retry"].append({**key, "error": error})
+                print(f"  retry {d['state']} {d['county']} {d['dfirm_id']}: FEMA unreachable, "
+                      f"tried again next run ({error})", flush=True)
+                continue
+            run["failed"].append({**key, "error": error})
+            print(f"  FAIL {d['state']} {d['county']} {d['dfirm_id']}: {error}", flush=True)
             continue
         finally:
             shutil.rmtree(pipeline, ignore_errors=True)
@@ -531,12 +572,13 @@ def update(args) -> None:
               f"{d['fema_update_date']}: {row['features']:,} pieces, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
 
-    if run["replaced"] or run["added"] or run["skipped"] or run["failed"]:
+    if run["replaced"] or run["added"] or run["skipped"] or run["failed"] or run["retry"]:
         changes = {"runs": ([run] + changes.get("runs", []))[:KEEP_RUNS]}
     write_repository(con, out, list(rows.values()), crs, today, changes, skipped)
     write_json(out / "run.json", run)
     print(f"  replaced {len(run['replaced'])}, added {len(run['added'])}, "
-          f"skipped {len(run['skipped'])}, failed {len(run['failed'])}", flush=True)
+          f"skipped {len(run['skipped'])}, failed {len(run['failed'])}, "
+          f"retry {len(run['retry'])}", flush=True)
 
 
 def main() -> None:
