@@ -181,6 +181,27 @@ const SITE_TITLE = "Great datasets, in GeoParquet";
 const SITE_SUBTITLE = "Open geospatial data, repacked cloud-native. Query straight from a URL.";
 const SKILL_URL = "https://github.com/gsueur/parquetry-skills";
 
+// Geobox, our geodata box for non-developers, opens these catalogs as they
+// are: a section on the bucket root, a line under the header elsewhere.
+const GEOBOX_URL = "https://box.geomermaids.com";
+const GEOBOX_BLOCK =
+  `<section class="geobox">` +
+  `<h2>Map them in Geobox</h2>` +
+  `<p><a href="${GEOBOX_URL}/about">Geobox</a> is our cloud geodata box, made for people ` +
+  `who don't write code. OpenStreetMap, GAUL, FEMA flood zones, Corine, the Census ` +
+  `layers and Geoconnex from this bucket are already in it: open a catalog, pick a layer, and it is on a ` +
+  `map in seconds, read in place, with no download and no space used.</p>` +
+  `<p>Put your own data next to it. Drop a Shapefile, GeoPackage, CSV or GeoTIFF, or link a ` +
+  `map service: Geobox turns it into GeoParquet, Cloud-Optimized GeoTIFF and PMTiles, ` +
+  `styles it, and makes maps you can share.</p>` +
+  `<p class="go"><a class="btn" href="${GEOBOX_URL}/demo">Try the demo, no sign-in</a> ` +
+  `<a href="${GEOBOX_URL}/about">See what it does&nbsp;&rarr;</a></p>` +
+  `</section>`;
+const GEOBOX_LINE =
+  `<p class="geobox-line">New: <a href="${GEOBOX_URL}/about">Geobox</a>, ` +
+  `these datasets and your own on a map, no code. ` +
+  `<a href="${GEOBOX_URL}/demo">Try the demo&nbsp;&rarr;</a></p>`;
+
 // On the bucket root only: the datasets are also reachable through an AI
 // agent, which turns a question into the DuckDB query over these files.
 const AGENT_BLOCK =
@@ -338,13 +359,14 @@ function renderListingHtml(prefix, folders, files, truncated) {
     `<h1><a href="/">${SITE_TITLE}</a></h1>` +
     `<p class="subtitle">${escapeHtml(dataset?.subtitle ?? SITE_SUBTITLE)}</p>` +
     `<nav class="crumbs">${crumbs.join(" / ")}</nav>` +
+    (prefix ? GEOBOX_LINE : "") +
     `</header>` +
     `<table>` +
     `<thead><tr><th>Name</th><th class="num">Size</th><th class="num">Modified (UTC)</th><th class="action"></th></tr></thead>` +
     `<tbody>${rows.join("")}</tbody>` +
     `</table>` +
     truncNote +
-    (prefix ? "" : AGENT_BLOCK) +
+    (prefix ? "" : GEOBOX_BLOCK + AGENT_BLOCK) +
     `<footer>` +
     `<a href="https://www.geomermaids.com">&copy; 2026 geomermaids.com</a> &middot; ` +
     (dataset?.attribution
@@ -355,6 +377,7 @@ function renderListingHtml(prefix, folders, files, truncated) {
       : "") +
     `<a href="https://s3.geomermaids.com">s3 api</a> &middot; ` +
     `<a href="${escapeHtml(VIEWER_BASE)}">map viewer</a> &middot; ` +
+    `<a href="${GEOBOX_URL}/about">geobox</a> &middot; ` +
     `<a href="${SKILL_URL}">AI agent skill</a>` +
     // The same folder on the S3 endpoint, so a page deep inside any dataset
     // shows its own s3:// path rather than sending the reader to the
@@ -403,6 +426,13 @@ const LISTING_CSS = `
   .agent h2 { font-size: 1rem; margin: 0 0 .5rem; }
   .agent p { margin: .5rem 0; font-family: system-ui, sans-serif; }
   .agent pre { margin: .6rem 0; padding: .6rem .8rem; overflow-x: auto; border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); }
+  .geobox { margin-top: 2rem; padding: 1rem 1.2rem; border: 1px solid color-mix(in srgb, #0a7cff 45%, transparent); border-radius: 6px; background: color-mix(in srgb, #0a7cff 6%, transparent); }
+  .geobox h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  .geobox p { margin: .5rem 0; font-family: system-ui, sans-serif; }
+  .geobox .go { margin-top: .9rem; display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; align-items: center; }
+  .geobox a.btn { padding: .35rem .8rem; border-radius: 4px; background: #0a7cff; color: #fff; font-weight: 600; }
+  .geobox a.btn:hover { background: #0866d6; text-decoration: none; }
+  .geobox-line { font-family: system-ui, sans-serif; font-size: .85rem; margin: .6rem 0 0; opacity: .85; }
   footer a { color: inherit; }
 `;
 
