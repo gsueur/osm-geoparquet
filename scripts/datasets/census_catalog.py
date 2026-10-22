@@ -313,6 +313,7 @@ def build_collection(product: str, layer: tuple, entry: dict, tiles: dict, exten
         "keywords": ["TIGER/Line", "US Census Bureau", "boundaries", *KEYWORDS[product],
                      code, "GeoParquet", "PMTiles"],
         "license": "other",
+        "attribution": ATTRIBUTION,
         "version": YEAR,
         "updated": updated,
         "providers": PROVIDERS,

@@ -96,6 +96,9 @@ def upstream_collection(theme: str, layer: dict) -> str:
     sitemap = UPSTREAM_SITEMAPS[theme] if layer["group"] == "reference" else layer["label"]
     return UPSTREAM_CATALOG.replace("catalog.json", f"{sitemap.replace(':', '-')}/collection.json")
 
+# CC0 asks for no credit; this is the one Geoconnex requests, shown by maps
+# (style sources and the collections' attribution field).
+ATTRIBUTION = "Geoconnex, Internet of Water"
 LICENSE = "CC0-1.0"
 LICENSE_LINK = {
     "rel": "license",
@@ -423,7 +426,7 @@ def style(theme: str, layer: dict) -> dict:
         "version": 8, "name": title_of(theme, layer),
         "sources": {"data": {"type": "vector",
                              "url": f"pmtiles://{DATA_URL}/{layer['group']}/{tiles['file']}",
-                             "attribution": "Geoconnex, Internet of Water"}},
+                             "attribution": ATTRIBUTION}},
         "layers": layers,
     }
 
@@ -507,6 +510,7 @@ def build_collection(theme: str, layer: dict, span: list[str], updated: str) -> 
                      "GeoParquet", *(["PMTiles"] if tiles else []), layer["group"],
                      theme.replace("_", " ")],
         "license": LICENSE,
+        "attribution": ATTRIBUTION,
         "version": span[-1][:10],
         "updated": updated,
         "providers": PROVIDERS,
