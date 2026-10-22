@@ -188,8 +188,8 @@ const GEOBOX_BLOCK =
   `<section class="geobox">` +
   `<h2>Map them in Geobox</h2>` +
   `<p><a href="${GEOBOX_URL}/about">Geobox</a> is our cloud geodata box, made for people ` +
-  `who don't write code. OpenStreetMap, GAUL, FEMA flood zones, Corine and the Census ` +
-  `layers from this bucket are already in it: open a catalog, pick a layer, and it is on a ` +
+  `who don't write code. OpenStreetMap, GAUL, FEMA flood zones, Corine, the Census ` +
+  `layers and Geoconnex from this bucket are already in it: open a catalog, pick a layer, and it is on a ` +
   `map in seconds, read in place, with no download and no space used.</p>` +
   `<p>Put your own data next to it. Drop a Shapefile, GeoPackage, CSV or GeoTIFF, or link a ` +
   `map service: Geobox turns it into GeoParquet, Cloud-Optimized GeoTIFF and PMTiles, ` +
