@@ -197,6 +197,7 @@ def build_collection(key: str, entry: dict, tiles: dict, extent: list[float], co
                         f"in Geobox ({GEOBOX_URL}). Credit: {c['producer']['name']}."),
         "keywords": [*c["keywords"], "Geobox", "GeoParquet", "PMTiles"],
         "license": c["license"],
+        "attribution": c["producer"]["name"],
         "updated": updated,
         "providers": [c["producer"], GEOMERMAIDS],
         "extent": {

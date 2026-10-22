@@ -90,6 +90,9 @@ ALTERNATE_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.0/schem
 PARQUET_TYPE = "application/vnd.apache.parquet"
 
 LICENSE = "ODbL-1.0"
+# The credit a map must show for an OSM layer (ODbL 4.3), read by Geobox from
+# the collection's top-level attribution field.
+OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 LICENSE_LINK = {
     "rel": "license",
     "href": "https://opendatacommons.org/licenses/odbl/1-0/",
@@ -416,6 +419,7 @@ def build_collection(theme: Theme, agg: dict, date: str, updated: str,
         "keywords": ["OpenStreetMap", "OSM", "GeoParquet", theme.name.replace("_", " "),
                      *(COUNTRY_NAMES.get(c, c) for c in countries)],
         "license": LICENSE,
+        "attribution": OSM_ATTRIBUTION,
         "version": date,
         "updated": updated,
         "providers": PROVIDERS,

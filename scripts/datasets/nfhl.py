@@ -58,6 +58,9 @@ STEM = "flood_hazard_areas"
 PUBLIC = "https://parquetry.geomermaids.com/nfhl"
 LATEST = "latest"
 INDEX = "counties.parquet"
+# The credit ATTRIBUTION.txt asks for; also the catalog's attribution field,
+# which maps show.
+ATTRIBUTION = "FEMA National Flood Hazard Layer"
 CRS = "EPSG:4269"          # NAD83, as FEMA delivers it
 CRS_CODE = 4269
 # 20,480 pieces are about 8 MB: a point lookup reads one group.
@@ -361,7 +364,7 @@ Security.
   Producer:     Federal Emergency Management Agency (FEMA)
   Licence:      U.S. federal government work, public domain. No restriction
                 on use or redistribution.
-  Attribution:  FEMA National Flood Hazard Layer
+  Attribution:  {ATTRIBUTION}
 
 # Not for official use
 

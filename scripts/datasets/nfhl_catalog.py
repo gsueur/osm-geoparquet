@@ -41,7 +41,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets.nfhl import INDEX, LATEST, ROW_GROUP_ROWS, STEM
+from datasets.nfhl import ATTRIBUTION, INDEX, LATEST, ROW_GROUP_ROWS, STEM
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -246,6 +246,7 @@ def build_collection(manifest: dict, columns: list[tuple[str, str]], geo: dict,
         "keywords": ["NFHL", "FEMA", "flood", "flood zones", "FIRM", "flood hazard",
                      "GeoParquet", "United States"],
         "license": LICENSE,
+        "attribution": ATTRIBUTION,
         "version": day,
         "updated": updated,
         "providers": PROVIDERS,

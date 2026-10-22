@@ -50,6 +50,7 @@ from catalog import (
     LICENSE,
     LICENSE_LINK,
     LOGO,
+    OSM_ATTRIBUTION,
     PARQUET_TYPE,
     PORTOLAN_SCHEMA,
     PUBLIC_BASE,
@@ -157,6 +158,18 @@ PROVIDERS = [
         "roles": ["processor", "host"],
     },
 ]
+
+# The credit a map must show for each layer: OSM, plus the added sources whose
+# licence requires attribution. Agence ORE: Licence Ouverte 2.0; OGIM: CC BY
+# 4.0. EIA, USPVDB, USWTDB, FCC and BSEE/BOEM are US federal works, public
+# domain, and NSTA's rows are not in these layers (infra.py).
+EXTRA_CREDITS = {"power_substation": ["Agence ORE"],
+                 **{name: ["OGIM (EDF, MethaneSAT)"] for name in infra.OGIM_LAYERS}}
+
+
+def attribution(name: str) -> str:
+    return ", ".join([OSM_ATTRIBUTION, *EXTRA_CREDITS.get(name, [])])
+
 
 # Title, description. Order and names are infra.LAYERS'.
 LAYER_DOCS = {
@@ -451,6 +464,7 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
         "keywords": ["OpenStreetMap", "OSM", "infrastructure", "GeoParquet", "worldwide",
                      infra_group(name), name.replace("_", " ")],
         "license": LICENSE,
+        "attribution": attribution(name),
         "version": interval[-1][:10],
         "updated": updated,
         "providers": PROVIDERS,

@@ -84,6 +84,8 @@ THUMBS = REPO / "catalog" / "thumbnails" / "gaul"
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 STYLE_TYPE = "application/vnd.mapbox.style+json"
 
+# The credit a map must show: style sources and the collections' attribution field.
+ATTRIBUTION = f"GAUL {VERSION} (c) FAO, CC BY 4.0"
 LICENSE = "CC-BY-4.0"
 LICENSE_LINK = {
     "rel": "license",
@@ -256,7 +258,7 @@ def styles(name: str, tiles: dict, title: str) -> dict[str, dict]:
     source = {"data": {
         "type": "vector",
         "url": f"pmtiles://{DATA_URL}/{tiles['file']}",
-        "attribution": f"GAUL {VERSION} (c) FAO, CC BY 4.0",
+        "attribution": ATTRIBUTION,
     }}
     layer = tiles["layer"]
     outline = {"id": f"{layer}-outline", "type": "line", "source": "data",
@@ -384,6 +386,7 @@ def build_collection(name: str, entry: dict, part: dict, tiles: dict,
         "keywords": ["GAUL", "FAO", "administrative boundaries", "administrative units",
                      "GeoParquet", "global", name.split("_")[0]],
         "license": LICENSE,
+        "attribution": ATTRIBUTION,
         "version": VERSION,
         "updated": updated,
         "providers": PROVIDERS,

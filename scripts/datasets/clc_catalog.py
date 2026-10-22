@@ -366,6 +366,7 @@ def build_collection(main: dict, countries: dict[str, dict], tiles: dict, h3: di
         "keywords": ["CORINE", "CLC", "land cover", "land use", "Copernicus", "EEA", "Europe",
                      "H3", "GeoParquet", "PMTiles"],
         "license": "other",
+        "attribution": ATTRIBUTION,
         "version": RELEASE,
         "updated": updated,
         "providers": PROVIDERS,
