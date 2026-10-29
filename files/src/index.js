@@ -266,6 +266,12 @@ const DATASETS = {
       "Starting with the legislative areas. census.geomermaids.com",
     attribution: "census/tiger/2026/legislative/ATTRIBUTION.txt",
   },
+  "massgis/": {
+    subtitle: "MassGIS, Massachusetts statewide vector layers: one GeoParquet file and one PMTiles " +
+      "archive per layer under <theme>/, columns unchanged, EPSG:26986. Tax parcels as polygons " +
+      "plus assessor records, joined on LOC_ID. Checked weekly.",
+    attribution: "massgis/parcels/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },

@@ -91,6 +91,22 @@ legislative areas come first. Portolan catalog at
 (`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
 (`census/`, deployed with wrangler like `nfhl/`).
 
+MassGIS, the Massachusetts Bureau of Geographic Information
+(`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
+weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
+GeoParquet file and one PMTiles archive per current statewide vector layer,
+read from MassGIS's public download bucket, grouped in 20 themes (parcels,
+buildings, boundaries, water, habitat and so on). `massgis_layers.csv` lists
+the layers built, one row each; dated copies, regional splits and indexes are
+left out. Columns are MassGIS's and the CRS stays Massachusetts State Plane
+(EPSG:26986). The statewide tax parcels come as two files joined on
+`LOC_ID`: `parcels/l3_taxpar_poly.parquet` (polygons) and
+`parcels/l3_assess.parquet` (assessor records, plain Parquet). A weekly run
+compares each layer's zip ETags with `massgis/_source.json` and rebuilds only
+the layers that moved. Portolan catalog at
+`https://parquetry.geomermaids.com/massgis/catalog/catalog.json`
+(`scripts/datasets/massgis_catalog.py`), one sub-catalog per theme.
+
 Geobox's samples (`scripts/datasets/geobox_samples.py`, no workflow: the
 sources are static, rebuilt by hand) sit under
 `https://parquetry.geomermaids.com/geobox-samples/<sample>/`: New York City's

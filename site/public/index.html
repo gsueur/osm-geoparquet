@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>geomermaids · GeoParquet</title>
 
-<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover, FEMA flood zones, Geoconnex US water features and US Census boundaries. No account, no download.">
+<meta name="description" content="Open geospatial datasets in GeoParquet 2.0, queryable straight from a URL: daily OpenStreetMap for North America, GMWID world infrastructures, FAO GAUL 2024, Corine Land Cover, FEMA flood zones, Geoconnex US water features, US Census boundaries and MassGIS. No account, no download.">
 <link rel="canonical" href="https://geoparquet.geomermaids.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#d2553a">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://geoparquet.geomermaids.com/">
 <meta property="og:title" content="geomermaids · GeoParquet: open datasets you query from a URL">
-<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover, FEMA flood zones, Geoconnex US water features and US Census boundaries in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
+<meta property="og:description" content="Daily OpenStreetMap for North America, GMWID world infrastructures, GAUL, Corine Land Cover, FEMA flood zones, Geoconnex US water features, US Census boundaries and MassGIS in GeoParquet 2.0, queryable straight from a URL with DuckDB.">
 <meta property="og:image" content="https://geoparquet.geomermaids.com/logo-384.png">
 <meta property="og:image:width" content="384">
 <meta property="og:image:height" content="384">
@@ -269,6 +269,11 @@ Or ask an AI agent: the parquetry skill turns a spatial question into the query 
     <h4><a href="https://parquetry.geomermaids.com/census/">US Census TIGER/Line</a></h4>
     <p>The Census Bureau's boundaries, one GeoParquet file per layer with its TIGER columns unchanged, starting with the districts of the November 2026 elections: the 435 congressional districts of the 120th Congress and every state legislative district, upper and lower. PMTiles beside each file.</p>
     <p class="meta"><code>census/tiger/2026/</code> · 3 layers, 240 MB · checked weekly · public domain · <a href="https://census.geomermaids.com">census.geomermaids.com</a></p>
+  </div>
+  <div class="dataset">
+    <h4><a href="https://parquetry.geomermaids.com/massgis/">MassGIS, Massachusetts</a></h4>
+    <p>The Commonwealth's statewide GIS layers, 338 of them in 20 themes: 2.2 million tax parcels with their assessor records, building footprints, address points, land cover, wetlands, habitat, open space, boundaries and more. MassGIS's columns unchanged, in Massachusetts State Plane (EPSG:26986). One GeoParquet file and one PMTiles archive per layer, rebuilt when MassGIS updates one.</p>
+    <p class="meta"><code>massgis/</code> · 338 layers, 9.4 GB · checked weekly · free, credit MassGIS</p>
   </div>
 </div>
 
