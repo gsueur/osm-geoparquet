@@ -37,6 +37,12 @@
       "attribution": "Geoconnex, Internet of Water"
     },
     {
+      "name": "Geomermaids MassGIS: Massachusetts statewide layers (parcels, buildings, boundaries, water, habitat)",
+      "url": "https://parquetry.geomermaids.com/massgis",
+      "kind": "Parquetry",
+      "attribution": "MassGIS (Bureau of Geographic Information), Commonwealth of Massachusetts"
+    },
+    {
       "name": "Overture Maps (STAC)",
       "url": "https://stac.overturemaps.org",
       "kind": "Stac",

@@ -207,34 +207,50 @@ def rewrite(src: Path, dest: Path) -> None:
     pyarrow 22 with geoarrow-pyarrow registered keeps the native Parquet
     GEOMETRY logical type, its geospatial statistics and the `geo` footer,
     as infra.py's rewrite() relies on; verify() checks all three. The
-    largest GAUL layer fits in memory, so the table is read whole.
+    file is streamed in batches, twice (the cuts, then the rows), so a
+    layer larger than memory (MassGIS land cover) goes through too.
     """
+    from collections import deque
+
     import geoarrow.pyarrow  # noqa: F401  registers the geoarrow.wkb extension type
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
-    table = pq.read_table(src)
-    wkb = pa.chunked_array([c.storage for c in table.column("geometry").chunks])
-    cuts, size = [0], 0
-    for i, n in enumerate(pc.binary_length(wkb).to_pylist()):
-        if size and size + n > GROUP_BYTES:
-            cuts.append(i)
-            size = 0
-        size += n
-    cuts.append(table.num_rows)
+    f = pq.ParquetFile(src)
+    # Each value also takes the 4-byte length Parquet writes before it,
+    # which verify() counts too: it is most of a small point's size.
+    cuts, size, i = [0], 0, 0
+    for batch in f.iter_batches(batch_size=1 << 16, columns=["geometry"]):
+        for n in pc.binary_length(batch.column(0).storage).to_pylist():
+            n += 4
+            if size and size + n > GROUP_BYTES:
+                cuts.append(i)
+                size = 0
+            size += n
+            i += 1
+    cuts.append(f.metadata.num_rows)
 
-    leaves = pq.ParquetFile(src).metadata.schema
+    leaves = f.metadata.schema
     strings = [leaves.column(k).path for k in range(len(leaves))
                if leaves.column(k).physical_type == "BYTE_ARRAY"
                and leaves.column(k).path != "geometry"]
     floats = [leaves.column(k).path for k in range(len(leaves))
               if leaves.column(k).physical_type in ("FLOAT", "DOUBLE")]
-    with pq.ParquetWriter(dest, table.schema, compression="zstd", compression_level=19,
+    schema = f.schema_arrow
+    groups = deque(b - a for a, b in zip(cuts, cuts[1:]))
+    with pq.ParquetWriter(dest, schema, compression="zstd", compression_level=19,
                           use_dictionary=strings, use_byte_stream_split=floats,
                           write_statistics=True, data_page_size=1 << 20) as w:
-        for a, b in zip(cuts, cuts[1:]):
-            w.write_table(table.slice(a, b - a), row_group_size=b - a)
+        pending, have = [], 0
+        for batch in f.iter_batches(batch_size=1 << 16):
+            pending.append(batch)
+            have += batch.num_rows
+            while groups and have >= groups[0]:
+                n = groups.popleft()
+                table = pa.Table.from_batches(pending, schema=schema)
+                w.write_table(table.slice(0, n), row_group_size=n)
+                pending, have = table.slice(n).to_batches(), have - n
 
 
 # PMTiles per layer: (min zoom, max zoom, properties kept in the tiles, None
