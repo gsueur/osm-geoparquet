@@ -32,7 +32,11 @@ size cap, else the layer's naming columns, else from a later minimum zoom:
 then with larger tiles (2 and 4 MB): tile_layer() steps down that ladder
 and the manifest records where it stopped. A layer too dense to try from
 zoom 0 starts at the CSV's min_zoom: land cover (22.8 million polygons) and
-the tax parcels, from zoom 12.
+the tax parcels, from zoom 12. Below the first zoom of their tiles, the
+OVERVIEWS layers get an overview in the same archive (H3 cells with the
+dominant class or a count per km2, or the major roads), so a map zoomed out
+on the state still shows them; the `overviews` command adds it to layers
+already published.
 
 A build reads the published manifests and _source.json, and rebuilds only
 the layers whose zip changed upstream (or the ones named with --layer).
@@ -41,6 +45,7 @@ Usage:
   python3 scripts/datasets/massgis.py upstream
   uv run --project scripts --with matplotlib python scripts/datasets/massgis.py build --src-dir /Volumes/T9/massgis/src \\
       --work-dir /Volumes/T9/massgis/tmp --out-dir /Volumes/T9/massgis/out
+  uv run --project scripts python scripts/datasets/massgis.py overviews --work-dir work --out-dir out
 """
 
 from __future__ import annotations
@@ -406,6 +411,16 @@ def write_layer(con, dest: Path, crs: str | None) -> dict:
             "bbox": [xmin, ymin, xmax, ymax], "sha256": sha256(dest)}
 
 
+def lonlat_copy(con, parquet: Path, crs: str) -> Path:
+    """The layer in lon/lat beside it, for tylertoo and H3."""
+    lonlat = parquet.with_suffix(".lonlat.parquet")
+    con.execute(f"""COPY (SELECT * EXCLUDE (geometry, bbox),
+                                 ST_Transform(geometry, '{crs}', 'OGC:CRS84', always_xy := true)
+                                     ::GEOMETRY('OGC:CRS84') AS geometry
+                          FROM read_parquet('{parquet}')) TO '{lonlat}' (FORMAT PARQUET)""")
+    return lonlat
+
+
 def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
                start: int = 0) -> dict:
     """PMTiles from a lon/lat copy, down the ladder: every attribute, then
@@ -414,12 +429,11 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
     a tile goes over the size cap; that failure moves to the next step."""
     cols = [c for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{parquet}')").fetchall()
             if c not in ("geometry", "bbox") and not t.startswith(("BLOB", "STRUCT", "GEOMETRY"))]
-    labels = [c for c in cols if LABEL.search(c)][:4]
-    lonlat = parquet.with_suffix(".lonlat.parquet")
-    con.execute(f"""COPY (SELECT * EXCLUDE (geometry, bbox),
-                                 ST_Transform(geometry, '{crs}', 'OGC:CRS84', always_xy := true)
-                                     ::GEOMETRY('OGC:CRS84') AS geometry
-                          FROM read_parquet('{parquet}')) TO '{lonlat}' (FORMAT PARQUET)""")
+    # An overview's class column first, so the polygons can be coloured
+    # like their cells.
+    keep = [OVERVIEWS.get(layer_id, {}).get("class")]
+    labels = ([c for c in keep if c in cols] + [c for c in cols if LABEL.search(c) and c not in keep])[:4]
+    lonlat = lonlat_copy(con, parquet, crs)
     coverage = all(t.endswith("Polygon") for t in types)
     dest = parquet.with_suffix(".pmtiles")
     steps = ([(cols, start, "500K")] + [(labels, z, "500K") for z in MIN_ZOOMS if z >= start]
@@ -427,18 +441,190 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
     try:
         for props, min_zoom, cap in steps:
             try:
-                return {**pmtiles.tile(lonlat, dest, layer=layer_id, min_zoom=min_zoom,
-                                       max_zoom=MAX_ZOOM, properties=props, coverage=coverage,
-                                       extra=["--max-tile-size", cap]),
-                        "max_tile_size": cap,
-                        "all_properties": props is cols}
+                entry = {**pmtiles.tile(lonlat, dest, layer=layer_id, min_zoom=min_zoom,
+                                        max_zoom=MAX_ZOOM, properties=props, coverage=coverage,
+                                        extra=["--max-tile-size", cap]),
+                         "max_tile_size": cap,
+                         "all_properties": props is cols}
             except SystemExit as e:
                 print(f"    tiles {layer_id}: {len(props)} properties from z{min_zoom}, "
                       f"cap {cap}: {e}", flush=True)
+                continue
+            return overview(con, lonlat, layer_id, types, entry, dest)
         sys.exit(f"{layer_id}: no tile setting fits the size cap")
     finally:
         lonlat.unlink(missing_ok=True)
 
+
+
+# ---------- overviews ----------
+
+# A layer whose tiles start at zoom 12 vanishes from a map zoomed out past a
+# town. Below that zoom it gets an overview, joined into the same archive by
+# pmtiles.pyramid() as Corine's is (clc_tiles.py): H3 cells with the
+# dominant class, or the count per km2, or for the roads the major ones.
+# A cell is 2 to 3 pixels wide across its band at 42 degrees north;
+# Massachusetts is a few pixels wide below zoom 6, where the overview starts.
+OVERVIEW_BANDS = [(6, 6, 6), (7, 8, 7), (9, 9, 8), (10, 11, 9)]  # (min zoom, max zoom, H3 resolution)
+# Polygons are sampled at the centre of every resolution 11 cell (about
+# 0.2 ha), 49 to a resolution 9 cell; points and polygons counted at the
+# finest band resolution.
+SAMPLE_RES = 11
+CELLS_LAYER = "cells"
+OVERVIEWS = {
+    "lclu2016": {"class": "COVERNAME"},
+    "vcforest_poly": {"class": "GRID_CODE"},
+    "primeforest_poly": {"class": "PRIME"},
+    "soils_mupolygon_top20": {"class": "HYDROLGRP"},
+    "soils_poly_primefarmland": {"class": "FARMLNDCL"},
+    "surfgeo24k_t_ay_poly": {"class": "AQFRYLD"},
+    "l3_taxpar_poly": {"count": None},
+    "census2020blocks_poly": {"count": "POP20"},
+    "bedrock_data_points": {"count": None},
+    # NG911 road classes 1 to 3: limited access highways, numbered routes,
+    # major roads (52,000 of 452,000 segments).
+    "massgis_roads": {"where": "ROAD_CLASS IN ('1', '2', '3')",
+                      "properties": ["ROAD_CLASS", "ST_NAME"]},
+}
+# Class colours, the most common class first; past ten, OTHER.
+PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1",
+           "#ff9da7", "#9c755f", "#bab0ac"]
+OTHER = "#d9d9d9"
+# Land cover by name, as land cover maps colour it (first match wins).
+LAND_COVER = [("wetland", "#5fa89a"), ("impervious", "#8c8c8c"), ("developed", "#e3a59a"),
+              ("evergreen", "#1e6b3a"), ("forest", "#68a84f"), ("water", "#4a86c5"),
+              ("aquatic", "#4a86c5"), ("grass", "#d8d27a"), ("pasture", "#e6dc6e"),
+              ("cultivated", "#b8864b"), ("scrub", "#b5c97a"), ("shore", "#efe3b0"),
+              ("bare", "#d9c9a8")]
+# Density, light to dark, cut at the sextiles of the finest band.
+RAMP = ["#fff5eb", "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801", "#8c2d04"]
+
+
+def class_colors(column: str, counts: list[tuple]) -> list[list]:
+    """[value, colour] per class, the most sampled first."""
+    if column == "COVERNAME":
+        return [[v, next((c for k, c in LAND_COVER if k in str(v).lower()), OTHER)]
+                for v, _ in counts]
+    return [[v, PALETTE[i] if i < len(PALETTE) else OTHER] for i, (v, _) in enumerate(counts)]
+
+
+def class_cells(con, lonlat: Path, column: str, resolutions: list[int], dest: Path) -> dict:
+    """Every band cell's dominant class (named like the column), its share
+    and how much of the cell the layer covers, from the resolution 11 cells
+    whose centre falls in a polygon (any one, where polygons overlap)."""
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE samples AS
+        SELECT cell, any_value(cls) AS cls FROM (
+            SELECT unnest(h3_polygon_wkb_to_cells(ST_AsWKB(part), {SAMPLE_RES})) AS cell, cls
+            FROM (SELECT unnest(ST_Dump(geometry)).geom AS part, "{column}" AS cls
+                  FROM read_parquet('{lonlat}') WHERE "{column}" IS NOT NULL))
+        GROUP BY cell""")
+    counts = con.execute("SELECT cls, count(*) FROM samples GROUP BY 1 ORDER BY 2 DESC").fetchall()
+    con.execute(f"""COPY (
+        WITH p AS (SELECT r AS h3_res, h3_cell_to_parent(cell, r) AS parent, cls
+                   FROM samples, (SELECT unnest({resolutions}) AS r)),
+             c AS (SELECT h3_res, parent, cls, count(*) AS n FROM p GROUP BY ALL),
+             t AS (SELECT h3_res, parent, sum(n) AS total, arg_max(cls, n) AS dominant,
+                          max(n) AS top FROM c GROUP BY ALL)
+        SELECT h3_h3_to_string(parent) AS h3, h3_res, dominant AS "{column}",
+               round(100.0 * top / total)::UTINYINT AS dominant_pct,
+               least(100, round(100.0 * total / pow(7, {SAMPLE_RES} - h3_res)))::UTINYINT
+                   AS coverage_pct,
+               ST_GeomFromWKB(h3_cell_to_boundary_wkb(parent)) AS geometry
+        FROM t ORDER BY h3_res, parent) TO '{dest}' (FORMAT PARQUET)""")
+    con.execute("DROP TABLE samples")
+    return {"kind": "class", "column": column, "classes": class_colors(column, counts),
+            "other": OTHER, "properties": ["h3", column, "dominant_pct", "coverage_pct"]}
+
+
+def count_cells(con, lonlat: Path, total: str | None, points: bool, resolutions: list[int],
+                dest: Path) -> dict:
+    """Every band cell's feature count (each feature at a point on its
+    surface), the sum of `total` when given, and per km2 of that."""
+    at = "geometry" if points else "TRY(ST_PointOnSurface(geometry))"
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE samples AS
+        SELECT h3_latlng_to_cell(ST_Y(p), ST_X(p), {max(resolutions)}) AS cell, v FROM (
+            SELECT {at} AS p, {f'"{total}"' if total else 1} AS v FROM read_parquet('{lonlat}'))
+        WHERE p IS NOT NULL""")
+    sums = f', sum(v) AS "{total}"' if total else ""
+    con.execute(f"""COPY (
+        WITH t AS (SELECT r AS h3_res, h3_cell_to_parent(cell, r) AS parent, count(*) AS n {sums}
+                   FROM samples, (SELECT unnest({resolutions}) AS r) GROUP BY ALL)
+        SELECT h3_h3_to_string(parent) AS h3, h3_res, n {f', "{total}"' if total else ""},
+               round({f'"{total}"' if total else "n"} / h3_cell_area(parent, 'km^2'), 1) AS per_km2,
+               ST_GeomFromWKB(h3_cell_to_boundary_wkb(parent)) AS geometry
+        FROM t ORDER BY h3_res, parent) TO '{dest}' (FORMAT PARQUET)""")
+    con.execute("DROP TABLE samples")
+    q = con.execute(f"""SELECT quantile_cont(per_km2, [1/7, 2/7, 3/7, 4/7, 5/7, 6/7])
+                        FROM read_parquet('{dest}') WHERE h3_res = {max(resolutions)}""").fetchone()[0]
+    breaks = sorted({float(f"{b:.2g}") for b in q if b > 0})
+    return {"kind": "count", "column": total, "density": "per_km2", "breaks": breaks,
+            "ramp": RAMP[:len(breaks) + 1],
+            "properties": ["h3", "n", *([total] if total else []), "per_km2"]}
+
+
+def overview(con, lonlat: Path, layer_id: str, types: list[str], detail: dict,
+             archive: Path) -> dict:
+    """The layer's archive with the overview bands below its tiles' first
+    zoom, for the OVERVIEWS layers; else the archive as it is."""
+    spec = OVERVIEWS.get(layer_id)
+    hand = detail["min_zoom"]
+    bands = [(lo, min(hi, hand - 1), res) for lo, hi, res in OVERVIEW_BANDS if lo < hand]
+    if not spec or not bands:
+        return detail
+    con.execute("INSTALL h3 FROM community; LOAD h3")
+    work = archive.parent
+    archives = []
+    if "where" in spec:
+        lo, hi = bands[0][0], bands[-1][1]
+        major = work / f"{layer_id}.major.parquet"
+        con.execute(f"COPY (SELECT * FROM read_parquet('{lonlat}') WHERE {spec['where']}) "
+                    f"TO '{major}' (FORMAT PARQUET)")
+        band = work / f"{layer_id}.z{lo}-{hi}.pmtiles"
+        try:
+            pmtiles.tile(major, band, layer=layer_id, min_zoom=lo, max_zoom=hi,
+                         properties=spec["properties"], coverage=False)
+        finally:
+            major.unlink(missing_ok=True)
+        archives.append((lo, hi, band, layer_id))
+        info = {"kind": "major", "filter": spec["where"], "properties": spec["properties"],
+                "layer": layer_id}
+    else:
+        cells = work / f"{layer_id}.cells.parquet"
+        resolutions = [res for *_, res in bands]
+        if "class" in spec:
+            info = class_cells(con, lonlat, spec["class"], resolutions, cells)
+        else:
+            info = count_cells(con, lonlat, spec["count"], types == ["Point"], resolutions, cells)
+        info["layer"] = CELLS_LAYER
+        try:
+            for lo, hi, res in bands:
+                src = work / f"{layer_id}.r{res}.parquet"
+                con.execute(f"COPY (SELECT * EXCLUDE (h3_res) FROM read_parquet('{cells}') "
+                            f"WHERE h3_res = {res}) TO '{src}' (FORMAT PARQUET)")
+                band = work / f"{layer_id}.z{lo}-{hi}.pmtiles"
+                try:
+                    # Hexagons are drawn as they are: simplifying would only bend them.
+                    pmtiles.tile(src, band, layer=CELLS_LAYER, min_zoom=lo, max_zoom=hi,
+                                 properties=info["properties"], verbatim=True)
+                finally:
+                    src.unlink(missing_ok=True)
+                archives.append((lo, hi, band, CELLS_LAYER))
+        finally:
+            cells.unlink(missing_ok=True)
+    joined = archive.with_suffix(".joined.pmtiles")
+    try:
+        entry = pmtiles.pyramid([*archives, (hand, detail["max_zoom"], archive, layer_id)], joined)
+    finally:
+        for _, _, band, _ in archives:
+            band.unlink(missing_ok=True)
+    joined.replace(archive)
+    entry["file"] = archive.name
+    info["handover"] = hand
+    if "where" in spec:
+        info["bands"] = [{"min_zoom": bands[0][0], "max_zoom": bands[-1][1]}]
+    else:
+        info["bands"] = [{"min_zoom": lo, "max_zoom": hi, "h3_res": res} for lo, hi, res in bands]
+    return {**detail, **entry, "overview": info}
 
 def zip_metadata(path: Path, member: str) -> dict:
     """Title, abstract and use constraints from the shapefile's .shp.xml
@@ -756,6 +942,64 @@ def build(src: Path, work: Path, out: Path, *, public: str, only: list[str] | No
         print(f"  {len(failed)} layers failed (failed.json): {', '.join(failed)}", flush=True)
 
 
+def add_overviews(work: Path, out: Path, *, public: str, only: list[str] | None,
+                  force: bool) -> None:
+    """Give published layers their overview from their published files, no
+    MassGIS download: <out>/<theme>/<layer>.pmtiles and the theme's
+    _manifest.json, to upload in that order. A layer whose tiles lack its
+    class column is tiled again first."""
+    work.mkdir(parents=True, exist_ok=True)
+    themes = {r["id"]: r["theme"] for r in layers()}
+    con = duckdb.connect()
+    con.execute(f"INSTALL spatial; LOAD spatial; SET temp_directory = '{work}'; "
+                "SET memory_limit = '6GB'")
+    manifests = {}
+    for layer_id in only or OVERVIEWS:
+        theme = themes[layer_id]
+        if theme not in manifests:
+            # This out dir's, where an earlier run left one: it holds that
+            # run's layers.
+            local = out / theme / "_manifest.json"
+            manifests[theme] = get_json(str(local) if local.is_file()
+                                        else f"{public}/{theme}/_manifest.json", None)
+        manifest = manifests[theme]
+        e = next(f for f in manifest["files"] if f["name"] == layer_id)
+        tiles = e["pmtiles"]
+        if tiles.get("overview") and not force:
+            print(f"  {layer_id}: has its overview", flush=True)
+            continue
+        t0 = time.monotonic()
+        folder = out / theme
+        folder.mkdir(parents=True, exist_ok=True)
+        parquet, archive = work / e["file"], folder / tiles["file"]
+        for f in (parquet, archive):
+            fetch_public(f"{public}/{theme}/{f.name}", f)
+        column = OVERVIEWS[layer_id].get("class")
+        if column and not tiles.get("all_properties") and column not in tiles["properties"]:
+            tiles = tile_layer(con, parquet, layer_id, e["crs"], e["geometry_types"],
+                               tiles["min_zoom"])
+            tiles["file"] = archive.name
+            archive.unlink()
+            (work / tiles["file"]).replace(archive)
+        else:
+            lonlat = lonlat_copy(con, parquet, e["crs"])
+            try:
+                tiles = overview(con, lonlat, layer_id, e["geometry_types"], tiles, archive)
+            finally:
+                lonlat.unlink(missing_ok=True)
+        parquet.unlink()
+        e["pmtiles"] = tiles
+        manifest["pmtiles"] = [{"name": f["name"], **f["pmtiles"]}
+                               for f in manifest["files"] if f.get("pmtiles")]
+        (folder / "_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print(f"  {theme}/{layer_id}: {tiles['bytes'] / 1e6:.1f} MB, z{tiles['min_zoom']} to "
+              f"z{tiles['max_zoom']}, {time.monotonic() - t0:.0f} s", flush=True)
+
+
+def fetch_public(url: str, dest: Path) -> None:
+    with urllib.request.urlopen(url, timeout=300) as r, dest.open("wb") as f:
+        shutil.copyfileobj(r, f, 1 << 20)
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -768,7 +1012,17 @@ def main() -> None:
     b.add_argument("--layer", action="append", help="build this layer (repeatable)")
     b.add_argument("--force", action="store_true", help="build every layer")
     b.add_argument("--no-tiles", action="store_true", help="GeoParquet only (a test run)")
+    o = sub.add_parser("overviews", help="add the overviews to published layers")
+    o.add_argument("--work-dir", type=Path, default=Path("work"))
+    o.add_argument("--out-dir", type=Path, required=True, help="the massgis/ prefix")
+    o.add_argument("--public", default=PUBLIC)
+    o.add_argument("--layer", action="append", help="this layer only (repeatable)")
+    o.add_argument("--force", action="store_true", help="also layers that have one")
     args = p.parse_args()
+    if args.cmd == "overviews":
+        add_overviews(args.work_dir, args.out_dir, public=args.public, only=args.layer,
+                      force=args.force)
+        return
     if args.cmd == "upstream":
         print(json.dumps(upstream(), indent=2))
         return

@@ -58,7 +58,7 @@ from catalog import (
 from datasets.gaul import GROUP_BYTES
 from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.massgis import BUCKET as MASSGIS_BUCKET
-from datasets.massgis import COLORS, PAGE, THEMES, layers
+from datasets.massgis import CELLS_LAYER, COLORS, PAGE, THEMES, layers
 from datasets.pmtiles import PMTILES_TYPE
 
 DATASET_PREFIX = "massgis"
@@ -160,20 +160,38 @@ def thumbnail_file(out_dir: Path | None, theme: str, entry: dict, dest: Path) ->
 # ---------- styles ----------
 
 def style(theme: str, entry: dict) -> dict:
-    """One MapLibre layer per kind of geometry the file holds."""
+    """One MapLibre layer per kind of geometry the file holds, after the
+    overview's cells when it has some (massgis.py, OVERVIEWS): coloured by
+    dominant class, more opaque the more of the cell the layer covers, or
+    by count per km2. The polygons of a class overview take its colours."""
     tiles = entry["pmtiles"]
     color = COLORS[theme]
     types = set(entry["geometry_types"])
+    ov = tiles.get("overview") or {}
+    by_class = (["match", ["get", ov["column"]], *(x for pair in ov["classes"] for x in pair),
+                 ov["other"]] if ov.get("kind") == "class" else None)
 
     def of(kinds: list[str]) -> list:
         return ["match", ["geometry-type"], kinds, True, False]
 
     base = {"source": "data", "source-layer": tiles["layer"]}
     out = []
+    if ov.get("layer") == CELLS_LAYER:
+        cells = {"source": "data", "source-layer": CELLS_LAYER, "maxzoom": ov["handover"]}
+        if by_class:
+            paint = {"fill-color": by_class,
+                     "fill-opacity": ["interpolate", ["linear"], ["get", "coverage_pct"],
+                                      0, 0.15, 100, 0.85]}
+        else:
+            paint = {"fill-color": ["step", ["get", ov["density"]], ov["ramp"][0],
+                                    *(x for b, c in zip(ov["breaks"], ov["ramp"][1:]) for x in (b, c))],
+                     "fill-opacity": 0.8}
+        out.append({"id": f"{entry['name']}-cells", "type": "fill", **cells, "paint": paint})
+        base["minzoom"] = ov["handover"]
     if types & set(POLYGON_TYPES):
         out += [
             {"id": f"{entry['name']}-fill", "type": "fill", **base, "filter": of(POLYGON_TYPES),
-             "paint": {"fill-color": color, "fill-opacity": 0.2}},
+             "paint": {"fill-color": by_class or color, "fill-opacity": 0.6 if by_class else 0.2}},
             {"id": f"{entry['name']}-outline", "type": "line", **base,
              "filter": of(POLYGON_TYPES),
              "paint": {"line-color": color,
@@ -246,7 +264,19 @@ def build_collection(theme: str, entry: dict, extent: list[float],
     if tiles:
         tiles_path = f"{DATASET_PREFIX}/{theme}/{tiles['file']}"
         props = ("every attribute" if tiles.get("all_properties") else
-                 "properties " + ", ".join(tiles["properties"]))
+                 "properties " + ", ".join(tiles["properties"]) if tiles["properties"] else
+                 "no attributes")
+        ov = tiles.get("overview") or {}
+        if ov.get("layer") == CELLS_LAYER:
+            what = (f"the dominant {ov['column']}" if ov["kind"] == "class" else
+                    f"the {'sum of ' + ov['column'] if ov['column'] else 'feature count'} "
+                    f"per km2 ({ov['density']})")
+            props += (f". Below zoom {ov['handover']}, layer `{CELLS_LAYER}` instead: H3 cells "
+                      f"(resolutions {', '.join(str(b['h3_res']) for b in ov['bands'])}) with "
+                      f"{what}")
+        elif ov:
+            props += (f". Below zoom {ov['handover']}, the major features only "
+                      f"({ov['filter']}), properties {', '.join(ov['properties'])}")
         assets["pmtiles"] = {
             "href": f"{PUBLIC_BASE}/{tiles_path}",
             "type": PMTILES_TYPE,
@@ -264,7 +294,9 @@ def build_collection(theme: str, entry: dict, extent: list[float],
                            "title": "Default style", "roles": ["style", "default"]}
         links.append({"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{tiles_path}",
                       "type": PMTILES_TYPE, "title": f"{title}, vector tiles",
-                      "pmtiles:layers": [tiles["layer"]]})
+                      "pmtiles:layers": [*([CELLS_LAYER] if (tiles.get("overview") or {})
+                                            .get("layer") == CELLS_LAYER else []),
+                                         tiles["layer"]]})
     assets["thumbnail"] = {"href": "./thumbnail.png", "type": "image/png",
                            "title": f"{title}, overview", "roles": ["thumbnail"]}
     return {

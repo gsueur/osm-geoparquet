@@ -102,7 +102,10 @@ left out. Columns are MassGIS's and the CRS stays Massachusetts State Plane
 `LOC_ID`: `parcels/l3_taxpar_poly.parquet` (polygons) and
 `parcels/l3_assess.parquet` (assessor records, plain Parquet). A weekly run
 compares each layer's zip ETags with `massgis/_source.json` and rebuilds only
-the layers that moved. Portolan catalog at
+the layers that moved. The densest layers tile from zoom 12; below it, their
+archive holds an overview instead (H3 cells with the dominant class or a
+count per km2, or the major roads only, `OVERVIEWS` in `massgis.py`), so a map
+of the whole state still shows them. Portolan catalog at
 `https://parquetry.geomermaids.com/massgis/catalog/catalog.json`
 (`scripts/datasets/massgis_catalog.py`), one sub-catalog per theme.
 
