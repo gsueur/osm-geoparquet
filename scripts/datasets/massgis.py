@@ -455,7 +455,7 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
                                         max_zoom=MAX_ZOOM, properties=props, coverage=coverage,
                                         extra=["--max-tile-size", cap, *(EVERY_SEGMENT if every_segment else [])]),
                          "max_tile_size": cap,
-                         "all_properties": props == cols}
+                         "all_properties": props is cols}
             except SystemExit as e:
                 print(f"    tiles {layer_id}: {len(props)} properties from z{min_zoom}, "
                       f"cap {cap}: {e}", flush=True)
