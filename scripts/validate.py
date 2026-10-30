@@ -358,7 +358,7 @@ def check_remote(base_url: str, sample: int) -> Suite:
         s.fail(f"{bad}/{checked} sampled URLs failed")
 
     # Cache-Control headers set by publish.py
-    _check_cache_control(s, base_url)
+    _check_cache_control(s, base_url, snapshots)
 
     # Run the landing page's DuckDB examples
     _check_landing_page_queries(s, base_url)
@@ -367,13 +367,16 @@ def check_remote(base_url: str, sample: int) -> Suite:
     return s
 
 
-def _check_cache_control(s: Suite, base_url: str) -> None:
+def _check_cache_control(s: Suite, base_url: str, snapshots: list[dict]) -> None:
     # If a new rclone version ever silently stops forwarding the header on
     # server-side copy, these checks catch it (the `latest/` files would
-    # inherit `no-store` from staging and miss the edge cache).
+    # inherit `no-store` from staging and miss the edge cache), and on the
+    # newest monthly snapshot, whose bytes never change.
     sample = "country=US/state=US-NY/buildings.parquet"
+    dated = [x["path"] for x in snapshots if x["path"] != "latest/"][:1]
     cases = [
         # url, must_contain, must_not_contain
+        *((f"{base_url}/{path}{sample}", "immutable", None) for path in dated),
         (f"{base_url}/latest/{sample}", "stale-while-revalidate", "immutable"),
         (f"{base_url}/snapshots.json", "max-age=300", "immutable"),
         (f"{base_url}/ATTRIBUTION.txt", "max-age=300", "immutable"),

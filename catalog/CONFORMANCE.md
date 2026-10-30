@@ -2,7 +2,7 @@
 
 The catalog is published at
 `https://parquetry.geomermaids.com/osm/catalog/catalog.json`, and its globs read
-`latest/`, the only version of the data. It targets
+`latest/`. It targets
 [portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and is
 validated with rashid 0.1.8, pinned in `scripts/pyproject.toml`. Where rashid
 and the spec disagree, the spec decides; file the disagreement against rashid

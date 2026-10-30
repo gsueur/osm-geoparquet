@@ -4,8 +4,8 @@
 # each clipping its regions with the admin polygons, building all themes and
 # uploading its part of the build to a staging folder on R2. `finalize` then
 # verifies the build is complete before syncing latest/, ATTRIBUTION.txt,
-# snapshots.json and the Portolan catalog (catalog/), and clears staging.
-# latest/ is the only version kept. All of it under `osm/`: the bucket holds
+# snapshots.json and the Portolan catalog (catalog/). After validation, the
+# first build of each month is kept as a snapshot and staging is cleared. All of it under `osm/`: the bucket holds
 # several datasets, each self-contained under its own prefix.
 #
 # A failed region never goes live: finalize only runs if every build job
@@ -218,7 +218,7 @@ jobs:
       - name: Remote validation
         run: uv run --project scripts python scripts/validate.py --no-local
 
-      - name: Clear staging
+      - name: Keep the month's snapshot, clear staging
         run: uv run --project scripts python scripts/prune.py --execute --remote "$REMOTE"
 
   notify:
