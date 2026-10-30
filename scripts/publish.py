@@ -518,9 +518,15 @@ def finalize(args, date: str, dest: str, total_bytes: int) -> None:
     # through. nightly.sh prepends ~/.local/bin to PATH so the locally
     # installed newer rclone takes precedence over /usr/bin/rclone.
     # validate.py asserts the resulting Cache-Control as a regression net.
+    #
+    # --ignore-times: a file rebuilt byte for byte (Geofabrik had not refreshed
+    # its extract) would otherwise only get its modtime updated, which rewrites
+    # the object without Cache-Control and skips the override. Bit us on
+    # 2026-10-30. It also restores the header on any file that lost it.
     rclone_with_progress(
         [
             "rclone", "sync",
+            "--ignore-times",
             "--metadata",
             "--metadata-set",
             "cache-control=public, max-age=300, s-maxage=86400, stale-while-revalidate=86400",
