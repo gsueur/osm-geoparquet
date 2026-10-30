@@ -290,6 +290,8 @@ hydro25k_arc,water,shapefiles/state/hydro25k.zip,HYDRO25K_ARC.shp,MassDEP Hydrog
 hydro25k_poly,water,shapefiles/state/hydro25k.zip,HYDRO25K_POLY.shp,"MassDEP Hydrography (1:25,000) (Polygons)",
 hydronet_arc,water,shapefiles/state/hydronet.zip,HYDRONET_ARC.shp,Networked Hydro Centerlines,
 hydronet_rte_sarisrt,water,shapefiles/state/hydronet.zip,HYDRONET_RTE_SARISRT.shp,Networked Hydro Centerline Routes,
+il_2022_arc,water,shapefiles/state/il2022_shp.zip,IL_2022_ARC.shp,MassDEP 2022 Integrated List of Waters (Arcs),
+il_2022_poly,water,shapefiles/state/il2022_shp.zip,IL_2022_POLY.shp,MassDEP 2022 Integrated List of Waters (Polygons),
 il_dwmwpp_watersheds_poly,water,shapefiles/state/dwmwpp_water_quality_sta.zip,IL_DWMWPP_WATERSHEDS_POLY.shp,MassDEP DWM Watershed Delineations for use with the MassDEP Integrated,
 inferred_contemp,water,shapefiles/state/Tidelands_Shapefiles.zip,Tidelands_Shapefiles/Inferred_Contemp.shp,Inferred Contemporary High Water,
 inferred_historic,water,shapefiles/state/Tidelands_Shapefiles.zip,Tidelands_Shapefiles/Inferred_Historic.shp,Inferred Historic High Water,
