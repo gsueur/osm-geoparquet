@@ -1,11 +1,9 @@
 # Portolan conformance
 
-Two catalogs are published: the live one at
-`https://parquetry.geomermaids.com/osm/catalog/catalog.json`, whose globs read
-`latest/`, and a pinned copy under `catalog/<YYYY-MM-DD>/` for every snapshot
-retention keeps. Both are rendered by the same generator and validated the
-same way, and the gates below cover both. They target
-[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and are
+The catalog is published at
+`https://parquetry.geomermaids.com/osm/catalog/catalog.json`, and its globs read
+`latest/`, the only version of the data. It targets
+[portolan-spec](https://github.com/portolan-sdi/portolan-spec) v0.2.0 and is
 validated with rashid 0.1.8, pinned in `scripts/pyproject.toml`. Where rashid
 and the spec disagree, the spec decides; file the disagreement against rashid
 with the `PORTO` id and record it here.
@@ -18,20 +16,17 @@ the published JSON and Markdown are never edited in place.
 
 | Gate | Runs | Covers |
 |---|---|---|
-| `catalog.py selftest` | `catalog.yml`, every PR and push touching the catalog | Profile schema, STAC structure, links, providers, license, mirror rules, thumbnail bytes. The fixture catalog must pass in both forms, live and pinned; eight planted violations must each fail. |
+| `catalog.py selftest` | `catalog.yml`, every PR and push touching the catalog | Profile schema, STAC structure, links, providers, license, mirror rules, thumbnail bytes. The fixture catalog must pass; eight planted violations must each fail. |
 | `catalog.py check-data` | `nightly.yml`, every build job, before upload | rashid data pass (`PTL-DAT-*`) over that job's partitions: 150,000-row cap, spatial statistics, GeoParquet version, one schema per theme. |
 | `catalog.py` via `publish.py` finalize | `nightly.yml`, finalize, before upload | Same metadata pass on the real catalog. A failure stops the catalog upload and fails the run. |
 
-The published glob is `s3://parquetry/osm/latest/...` or `s3://parquetry/osm/<date>/...`,
-which rashid cannot expand from a local tree, so the data rules would never
+The published glob is `s3://parquetry/osm/latest/...`, which rashid cannot expand from a local tree, so the data rules would never
 reach the partitions in a metadata run. `check-data` renders a throwaway
 catalog whose globs point at the job's local files instead.
 
-A note on what the live catalog claims: its row counts, extents and file
-counts are measured from the snapshot it was generated from, while its globs
-read `latest/`, which the next night replaces. The two agree until the next
-build finishes. A pinned catalog has no such gap, which is why documentation
-sends anyone who needs reproducibility to one.
+A note on what the catalog claims: its row counts, extents and file counts are
+measured from the build it was generated from, while its globs read `latest/`,
+which the next night replaces. The two agree until the next build finishes.
 
 ## Findings accepted as they stand
 
@@ -41,7 +36,7 @@ expected on every run:
 | Rule | Severity | Why |
 |---|---|---|
 | `PTL-PRO-002` | info | No `canonical` link. OpenStreetMap publishes no STAC catalog to point at; the `via` link names the source. |
-| `PTL-AST-003` | warning | The live catalog's data assets carry `file:size` but no `file:checksum`. Their hrefs point at `latest/`, which the next build replaces, and a checksum that does not match the bytes is a conformance failure, so the spec says to omit it. Pinned catalogs address an immutable snapshot and do carry checksums; they validate with no warnings. |
+| `PTL-AST-003` | warning | The data assets carry `file:size` but no `file:checksum`. Their hrefs point at `latest/`, which the next build replaces, and a checksum that does not match the bytes is a conformance failure, so the spec says to omit it. |
 
 Until 2026-09-21 this list also held `PTL-DAT-006` and `PTL-DAT-007`: the
 `bbox` column was not declared as a GeoParquet `covering`, so rashid could not

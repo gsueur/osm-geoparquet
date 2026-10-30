@@ -89,13 +89,13 @@ def draw(ax, geoms, color: str, tolerance: float) -> None:
         ax.scatter(xy[:, 0], xy[:, 1], s=1.2, c=color, linewidths=0, alpha=0.8)
 
 
-def render(con, theme: str, region: str, date: str, outline) -> Path:
+def render(con, theme: str, region: str, outline) -> Path:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     country = region.split("-")[0]
-    url = f"{BASE}/{date}/country={country}/state={region}/{theme}.parquet"
+    url = f"{BASE}/latest/country={country}/state={region}/{theme}.parquet"
     rows = con.execute(
         f"SELECT ST_AsWKB(geometry) FROM read_parquet('{url}', hive_partitioning = false)"
     ).fetchall()
@@ -130,7 +130,6 @@ def render(con, theme: str, region: str, date: str, outline) -> Path:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--region", default="US-RI", help="ISO 3166-2 region to preview")
-    p.add_argument("--date", default="latest", help="snapshot date or 'latest'")
     p.add_argument("--themes", nargs="*", help="subset (default: all)")
     p.add_argument("--admin-geojson", type=Path, default=REPO / "data" / "admin_regions.geojson",
                    help="region outline for context; skipped when absent")
@@ -142,7 +141,7 @@ def main() -> None:
     for t in THEMES:
         if args.themes and t.name not in args.themes:
             continue
-        render(con, t.name, args.region, args.date, outline)
+        render(con, t.name, args.region, outline)
 
 
 if __name__ == "__main__":
