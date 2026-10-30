@@ -237,7 +237,7 @@ Or ask an AI agent: the parquetry skill turns a spatial question into the query 
 <div class="datasets">
   <div class="dataset">
     <h4><a href="#osm">OpenStreetMap, North America</a></h4>
-    <p>The US, Canada and Mexico: 98 states and provinces, 16 themes each (buildings, roads, POIs, water...). Rebuilt daily, dated snapshots kept.</p>
+    <p>The US, Canada and Mexico: 98 states and provinces, 16 themes each (buildings, roads, POIs, water...). Rebuilt daily.</p>
     <p class="meta"><code>osm/</code> · 27 GB per day · ODbL</p>
   </div>
   <div class="dataset">
@@ -363,7 +363,7 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 
 <div class="stats">
   <div class="stat"><strong id="stat-features">…</strong><span>files published</span></div>
-  <div class="stat"><strong id="stat-size">…</strong><span>latest snapshot</span></div>
+  <div class="stat"><strong id="stat-size">…</strong><span>latest build</span></div>
   <div class="stat"><strong id="stat-date">…</strong><span>last refresh</span></div>
 </div>
 
@@ -393,12 +393,12 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 </tbody>
 </table>
 
-<h3>URLs and snapshots</h3>
-<pre><code>https://parquetry.geomermaids.com/osm/&lt;YYYY-MM-DD | latest&gt;/country=&lt;CC&gt;/state=&lt;ISO 3166-2&gt;/&lt;theme&gt;.parquet
+<h3>URLs</h3>
+<pre><code>https://parquetry.geomermaids.com/osm/latest/country=&lt;CC&gt;/state=&lt;ISO 3166-2&gt;/&lt;theme&gt;.parquet
 
 # e.g. every building in New York State, today
 https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.parquet</code></pre>
-<p>Dated snapshots never change, so a pinned date gives the same answer next year. We keep every day for 14 days, then the first of each month for a year, then December 31 of each year for good. <a href="https://parquetry.geomermaids.com/osm/snapshots.json"><code>snapshots.json</code></a> lists what is available. Need a date kept? <a href="#custom">Ask us</a>.</p>
+<p><code>latest/</code> is the only version: each nightly build replaces it, and no dated copies are kept. <a href="https://parquetry.geomermaids.com/osm/snapshots.json"><code>snapshots.json</code></a> gives the date of the current build. Need a frozen copy? <a href="#custom">Ask us</a>.</p>
 
 <h3>Inside each file</h3>
 <ul>
@@ -410,7 +410,7 @@ https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.pa
 <p>Built with <a href="https://osmcode.org/osmium-tool/">osmium-tool</a> and DuckDB, and validated every night before it is published; the files pass <a href="https://geoparquet.io/"><code>gpio check</code></a>. The pipeline is open source (MIT): <a href="https://github.com/gsueur/osm-geoparquet">github.com/gsueur/osm-geoparquet</a>.</p>
 
 <h3 id="catalog">STAC catalog</h3>
-<p>A <a href="https://github.com/portolan-sdi/portolan-spec">Portolan</a> (STAC) catalog describes each theme: columns, extents, row counts, and a glob that reads every region at once. <a href="https://parquetry.geomermaids.com/osm/catalog/catalog.json"><code>osm/catalog/catalog.json</code></a> follows <code>latest/</code>; <code>osm/catalog/&lt;date&gt;/catalog.json</code> pins a kept snapshot. It is listed in the <a href="https://www.portolan-sdi.org">Portolan registry</a> and opens in the <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/osm/catalog/catalog.json">STAC browser</a>. GAUL has its own: <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/gaul/catalog/catalog.json"><code>gaul/catalog/catalog.json</code></a>.</p>
+<p>A <a href="https://github.com/portolan-sdi/portolan-spec">Portolan</a> (STAC) catalog describes each theme: columns, extents, row counts, and a glob that reads every region at once. <a href="https://parquetry.geomermaids.com/osm/catalog/catalog.json"><code>osm/catalog/catalog.json</code></a> follows <code>latest/</code>. It is listed in the <a href="https://www.portolan-sdi.org">Portolan registry</a> and opens in the <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/osm/catalog/catalog.json">STAC browser</a>. GAUL has its own: <a href="https://browser.portolan-sdi.org/#/external/parquetry.geomermaids.com/gaul/catalog/catalog.json"><code>gaul/catalog/catalog.json</code></a>.</p>
 
 <h3>How it compares</h3>
 <p>Geofabrik is our upstream: their daily regional extracts, in PBF, Shapefile and GeoPackage, are what we start from. <a href="https://overturemaps.org/">Overture Maps</a> publishes worldwide GeoParquet every month, merging OSM with other sources under its own schema. We keep OSM's own tags, publish daily, and split by state so one URL is one manageable file.</p>

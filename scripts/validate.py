@@ -10,7 +10,7 @@ Local checks (run against `out/`):
   - Row count in each parquet matches the manifest's claim
 
 Remote checks (run against the live R2 bucket over HTTPS):
-  - snapshots.json reachable, parses, includes today (or a given date)
+  - snapshots.json reachable and parses
   - ATTRIBUTION.txt reachable
   - Random sample of state+theme URLs HEAD to 200 OK with Content-Length
   - The landing page's DuckDB examples run end-to-end, with plausible
@@ -141,7 +141,7 @@ def check_local(out_dir: Path, geojson: Path, only: set[str] | None = None,
                 themes: set[str] | None = None) -> Suite:
     """`themes` narrows what a complete manifest is, for a build job that runs
     a theme subset (the parent-extract boundaries job, and the per-region jobs
-    of a country whose boundaries it builds). The published snapshot is still
+    of a country whose boundaries it builds). The published build is still
     held to all of them by publish.py's gate."""
     expected_themes = themes or set(EXPECTED_THEMES)
     s = Suite(f"Local checks — {out_dir}/")
@@ -358,7 +358,7 @@ def check_remote(base_url: str, sample: int) -> Suite:
         s.fail(f"{bad}/{checked} sampled URLs failed")
 
     # Cache-Control headers set by publish.py
-    _check_cache_control(s, base_url, latest["date"])
+    _check_cache_control(s, base_url)
 
     # Run the landing page's DuckDB examples
     _check_landing_page_queries(s, base_url)
@@ -367,15 +367,13 @@ def check_remote(base_url: str, sample: int) -> Suite:
     return s
 
 
-def _check_cache_control(s: Suite, base_url: str, latest_date: str) -> None:
-    # publish.py sets three distinct policies. If a new rclone version
-    # ever silently stops forwarding --header-upload on server-side copy,
-    # these checks catch it (the `latest/` files would inherit `immutable`
-    # from the dated snapshot and get pinned forever at the edge).
+def _check_cache_control(s: Suite, base_url: str) -> None:
+    # If a new rclone version ever silently stops forwarding the header on
+    # server-side copy, these checks catch it (the `latest/` files would
+    # inherit `no-store` from staging and miss the edge cache).
     sample = "country=US/state=US-NY/buildings.parquet"
     cases = [
         # url, must_contain, must_not_contain
-        (f"{base_url}/{latest_date}/{sample}", "immutable", None),
         (f"{base_url}/latest/{sample}", "stale-while-revalidate", "immutable"),
         (f"{base_url}/snapshots.json", "max-age=300", "immutable"),
         (f"{base_url}/ATTRIBUTION.txt", "max-age=300", "immutable"),

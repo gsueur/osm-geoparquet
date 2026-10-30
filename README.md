@@ -6,18 +6,18 @@ Status: exploratory MVP.
 
 ## Query the hosted data
 
-Snapshots are published at `https://parquetry.geomermaids.com/osm/<YYYY-MM-DD>/country=<CC>/state=<ISO>/<theme>.parquet`. No download required — query straight from DuckDB:
+The data is published at `https://parquetry.geomermaids.com/osm/latest/country=<CC>/state=<ISO>/<theme>.parquet`. No download required — query straight from DuckDB:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 INSTALL spatial; LOAD spatial;
 
 SELECT building, COUNT(*)
-FROM read_parquet('https://parquetry.geomermaids.com/osm/2026-04-19/country=US/state=US-RI/buildings.parquet')
+FROM read_parquet('https://parquetry.geomermaids.com/osm/latest/country=US/state=US-RI/buildings.parquet')
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
-Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/osm/snapshots.json` for the list of available snapshots.
+Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/osm/snapshots.json` for the date of the current build. `latest/` is the only version: each nightly build replaces it, and no dated copies are kept.
 
 Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See `https://parquetry.geomermaids.com/osm/ATTRIBUTION.txt` for redistribution terms.
 
@@ -27,33 +27,28 @@ The bucket holds several datasets, each self-contained under its own prefix (`os
 
 The data is described by a [Portolan](https://github.com/portolan-sdi/portolan-spec) (STAC) catalog: one partitioned collection per theme, with column docs, extents, row counts, and a `partition:glob` that reads every region at once through the anonymous S3 endpoint `s3.geomermaids.com`. It is metadata only and copies no data.
 
-- `https://parquetry.geomermaids.com/osm/catalog/catalog.json` is the live catalog. It reads `latest/`, so it always describes current data, and it is rebuilt nightly.
-- `https://parquetry.geomermaids.com/osm/catalog/<YYYY-MM-DD>/catalog.json` pins one snapshot. These are published only for the snapshots retention keeps (the first of each month, plus Dec 31), never rewritten, and deleted with their snapshot. Use one when a result has to be reproducible.
+`https://parquetry.geomermaids.com/osm/catalog/catalog.json` reads `latest/`, so it always describes current data, and it is rebuilt nightly.
 
 Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd.apache.parquet`) as well as through `partition:glob`, so STAC clients can reach the files directly.
 
-`publish.py` finalize regenerates both from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
+`publish.py` finalize regenerates it from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
 
 ### Schema 0.5.0
 
 - A closed way in `power` or `aeroways` is one row. Until 0.4.0 `osmium export` wrote it twice, as a LineString and as the polygon built from it, so every substation, solar panel, hangar and apron was counted twice (a fifth of the rows of both themes in Texas). It is now the polygon, or the line when the tags are linear (`power=line/minor_line/cable`, runways, taxiways).
 - `power.voltage` is the highest value of the OSM `voltage` tag, which lists one voltage per circuit (`345000;138000`). A plain integer cast made every such value NULL. The new `power.voltages` column (`INT[]`) keeps all of them in tag order.
 
-Queries that mix older and newer snapshots in one glob need `union_by_name = true`, and counts over older snapshots include the duplicates.
-
 ### Schema 0.4.0
 
 - The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`, with `GEOPARQUET_VERSION 'NONE'` so that DuckDB does not add a second `geo` block of its own beside it. That setting governs the metadata only: the geometry column keeps the native `GEOMETRY` logical type and its per-column geo statistics, and file size, row groups and bloom filters are unchanged.
-- Each `_manifest.json` records every file's size and sha256, which the catalog publishes as `file:size` and (on pinned catalogs) `file:checksum`.
+- Each `_manifest.json` records every file's size and sha256, which the catalog publishes as `file:size`.
 
 ### Schema 0.3.0 (breaking)
 
-Snapshots whose `_manifest.json` says `"schema_version": "0.3.0"` changed two things:
+Schema 0.3.0 changed two things:
 
 - The per-file `state` column is now `state_name`. It collided with the `state=<ISO>` path key, and DuckDB's Hive auto-detection silently replaced the region name with the ISO code on globbed reads.
 - `osm_id` and `osm_type` are populated. Before, `osm_id` was always NULL and `osm_type` always `'Feature'`.
-
-Queries that mix older and newer snapshots in one glob need `union_by_name = true`.
 
 ## Other datasets in the bucket
 
@@ -211,18 +206,17 @@ See `scripts/pipeline.py --help` for all flags.
 
 ## Publishing
 
-`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) as a dated immutable snapshot, and maintains a `snapshots.json` index + `ATTRIBUTION.txt` at the dataset prefix. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>[/<prefix>]`).
+`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) by replacing `latest/`, and maintains a one-entry `snapshots.json` (date, objects, bytes) + `ATTRIBUTION.txt` at the dataset prefix. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>[/<prefix>]`).
 
 ```bash
-python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/osm/<today>/
+python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/osm/latest/
 python3 scripts/publish.py --dry-run     # preview
-python3 scripts/publish.py --date 2026-04-18   # backfill a specific date
 ```
 
-Publishing is split in two stages so several machines can build parts of the same snapshot:
+Publishing is split in two stages so several machines can build parts of the same build:
 
-- `--stage upload` copies `out/` into `<remote>/<date>/`. Additive: each caller uploads its own regions.
-- `--stage finalize` checks the dated prefix is complete (every region in `data/admin_regions.geojson` has a manifest listing all 16 themes with no failures, and every claimed parquet exists), then syncs `latest/`, writes `ATTRIBUTION.txt` and rebuilds `snapshots.json`. Nothing goes live until this passes.
+- `--stage upload` copies `out/` into `<remote>/_staging/<date>/`. Additive: each caller uploads its own regions.
+- `--stage finalize` checks the staging folder is complete (every region in `data/admin_regions.geojson` has a manifest listing all 16 themes with no failures, and every claimed parquet exists), then syncs `latest/`, writes `ATTRIBUTION.txt` and writes `snapshots.json`. It refuses a date older than the published one. Nothing goes live until this passes.
 
 The default (`--stage all`) does both, which is what a single-machine run wants.
 
@@ -232,7 +226,7 @@ The default (`--stage all`) does both, which is what a single-machine run wants.
 
 1. `plan` reads `data/admin_regions.geojson` and resolves every region to the most specific Geofabrik extract via Geofabrik's index (`scripts/plan.py`). Today that is one job per US state / Canadian province and one job for Mexico's 32 states, plus one `us-boundaries` job: a per-state Geofabrik extract cuts the administrative relations that touch the state edge (the state itself, border counties and towns, issue #5), so the `boundaries` theme of the fifty states and DC is built from the US country extract instead, with the boundary relations filtered out of the 12 GB download first and the clip completing boundary relations (`--complete-relations multipolygon,boundary`). Those state jobs skip the theme; Puerto Rico and the US Virgin Islands are not in Geofabrik's US file and keep building it from their own extracts. Alaska's state relation is the one that still does not assemble.
 2. `build` (matrix, up to 20 in parallel) downloads its extract, runs `pipeline.py` with the admin polygon so the clip semantics are unchanged, validates locally, and uploads its regions with `publish.py --stage upload`. The boundaries job uploads its manifests as `_manifest.boundaries.json` fragments beside the state jobs' manifests.
-3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize` folds the manifest fragments into each region's `_manifest.json`, checks completeness, syncs `latest/`, then remote validation and `prune.py --execute --purge-incomplete`.
+3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize` folds the manifest fragments into each region's `_manifest.json`, checks completeness, syncs `latest/`, then remote validation and `prune.py --execute`, which clears `_staging/`.
 4. `notify` posts a recap to ntfy.sh when `NTFY_TOPIC` is set.
 
 Setup:
@@ -241,7 +235,7 @@ Setup:
 - Repository secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT` (`https://<account-id>.r2.cloudflarestorage.com`). Optional: `NTFY_TOPIC`.
 - rclone is configured from those secrets through `RCLONE_CONFIG_PARQUETRY_*` environment variables, so no config file is stored anywhere.
 
-Manual runs (`workflow_dispatch`) accept a snapshot date, a region subset (`states: US-RI US-VT`, which skips finalize so a partial upload never goes live), and switches to disable upload or prune. Use "Re-run failed jobs" on a failed nightly: successful uploads are kept in the dated prefix, so the re-run completes it and finalize follows. A dated prefix that never completes is deleted by the next successful run's prune step.
+Manual runs (`workflow_dispatch`) accept a build date, a region subset (`states: US-RI US-VT`, which skips finalize so a partial upload never goes live), and a switch to disable upload. Use "Re-run failed jobs" on a failed nightly: successful uploads are kept in the staging folder, so the re-run completes it and finalize follows. A staging folder that never completes is deleted by the next successful run.
 
 ## Data
 

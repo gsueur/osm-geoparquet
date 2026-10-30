@@ -155,8 +155,10 @@ async function renderListing(prefix, env) {
   const labelOf = (name) =>
     name.endsWith(".parquet") ? labels[name.slice(0, -".parquet".length)] : undefined;
 
+  // _staging/ holds a build until it goes live: not something to browse.
   const folders = list.delimitedPrefixes
     .map((p) => p.slice(prefix.length))
+    .filter((f) => f !== "_staging/")
     .sort(folderCompare);
   const files = list.objects
     .filter((o) => o.key !== prefix)
