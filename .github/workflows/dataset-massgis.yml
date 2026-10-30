@@ -91,13 +91,21 @@ jobs:
           df -h /mnt; free -g
 
       # GDAL's ogr2ogr linearizes the geodatabase layers (massgis.py, linearized()).
+      # From this image, not apt: Ubuntu's 3.8.4 writes parcel geometries DuckDB
+      # cannot read (l3_misc_poly, l3_othleg_poly), 3.13.3 does not. It needs only
+      # $WORK, where the source and the output both live.
       - name: Fetch, convert, tile and verify
         if: steps.check.outputs.go == 'true'
         run: |
-          sudo apt-get install -y -qq gdal-bin >/dev/null
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/ogr2ogr" <<EOF
+          #!/usr/bin/env bash
+          exec docker run --rm -u "\$(id -u):\$(id -g)" -v "$WORK:$WORK" ghcr.io/osgeo/gdal:ubuntu-small-3.13.3 ogr2ogr "\$@"
+          EOF
+          chmod +x "$HOME/.local/bin/ogr2ogr"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           ogr2ogr --version
           uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
-          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           mkdir -p "$TMPDIR"
           /usr/bin/time -v uv run --project scripts --with matplotlib python scripts/datasets/massgis.py build \
             --src-dir "$WORK/src" --work-dir "$WORK/tmp" --out-dir "$WORK/out" \
