@@ -266,7 +266,9 @@ def linearized(dataset: str, layer: str, work: Path) -> str:
 
     Polygons of zero area are left out: a degenerate arc GDAL cannot make a
     ring of (OGRCurve::CastToLinearRing failed) comes out of FlatGeobuf as a
-    geometry DuckDB cannot read, and every such parcel has zero area."""
+    geometry DuckDB cannot read, and every such parcel has zero area. That is
+    not enough under GDAL 3.8.4, which still fails on two parcel layers: 3.13.3
+    is what this was tested with, and what the workflow runs."""
     dest = work / f"{layer}.fgb"
     dest.unlink(missing_ok=True)
     sql = (f'SELECT * FROM "{layer}" WHERE OGR_GEOM_AREA > 0 OR OGR_GEOMETRY NOT IN '
