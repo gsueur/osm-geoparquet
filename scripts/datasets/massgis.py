@@ -120,6 +120,9 @@ MIN_ZOOMS = (0, 6, 8, 10, 12)
 # the cap, so the cap is raised rather than the loss accepted; MapLibre
 # reads a few tiles of 2 to 4 MB without trouble.
 BIG_TILES = ("2M", "4M")
+# Lines the tiles keep at every zoom, however short: by default a segment under
+# 2 pixels goes, 9% to 16% of Cambridge's street length at zoom 12.
+EVERY_SEGMENT = ["--line-visibility", "0", "--line-thinning", "0"]
 # Columns that name or identify a feature, kept in the tiles when all of the
 # attributes do not fit. Matched case-insensitively, at most four.
 LABEL = re.compile(r"(^|_)(name|label|town|site|title|type|class|zone|code|id|loc_id|"
@@ -436,16 +439,21 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
     keep = [OVERVIEWS.get(layer_id, {}).get("class")]
     labels = ([c for c in keep if c in cols] + [c for c in cols if LABEL.search(c) and c not in keep])[:4]
     lonlat = lonlat_copy(con, parquet, crs)
-    coverage = all(t.endswith("Polygon") for t in types)
+    # "every_segment": no thinning either, so a map's streets have no gaps where
+    # its tiles start; only its overview's columns, for the lowest zoom they fit.
+    spec = OVERVIEWS.get(layer_id, {})
+    every_segment = spec.get("every_segment", False)
+    coverage = all(t.endswith("Polygon") for t in types) or every_segment
     dest = parquet.with_suffix(".pmtiles")
-    steps = ([(cols, start, "500K")] + [(labels, z, "500K") for z in MIN_ZOOMS if z >= start]
+    steps = ([(spec["properties"], z, "500K") for z in MIN_ZOOMS if z >= start] if every_segment
+             else [(cols, start, "500K")] + [(labels, z, "500K") for z in MIN_ZOOMS if z >= start]
              + [(labels, start, cap) for cap in BIG_TILES])
     try:
         for props, min_zoom, cap in steps:
             try:
                 entry = {**pmtiles.tile(lonlat, dest, layer=layer_id, min_zoom=min_zoom,
                                         max_zoom=MAX_ZOOM, properties=props, coverage=coverage,
-                                        extra=["--max-tile-size", cap]),
+                                        extra=["--max-tile-size", cap, *(EVERY_SEGMENT if every_segment else [])]),
                          "max_tile_size": cap,
                          "all_properties": props is cols}
             except SystemExit as e:
@@ -484,8 +492,11 @@ OVERVIEWS = {
     "census2020blocks_poly": {"count": "POP20"},
     "bedrock_data_points": {"count": None},
     # NG911 road classes 1 to 3: limited access highways, numbered routes,
-    # major roads (52,000 of 452,000 segments).
+    # major roads (52,000 of 452,000 segments). The tiles keep every segment
+    # (thinned, they showed 49% of Cambridge's street length at zoom 12) and
+    # the class, to colour a map by it at every zoom.
     "massgis_roads": {"where": "ROAD_CLASS IN ('1', '2', '3')",
+                      "class": "ROAD_CLASS", "every_segment": True,
                       "properties": ["ROAD_CLASS", "ST_NAME"]},
 }
 # Class colours, the most common class first; past ten, OTHER.
@@ -977,7 +988,8 @@ def add_overviews(work: Path, out: Path, *, public: str, only: list[str] | None,
         for f in (parquet, archive):
             fetch_public(f"{public}/{theme}/{f.name}", f)
         column = OVERVIEWS[layer_id].get("class")
-        if column and not tiles.get("all_properties") and column not in tiles["properties"]:
+        if OVERVIEWS[layer_id].get("every_segment") or (
+                column and not tiles.get("all_properties") and column not in tiles["properties"]):
             tiles = tile_layer(con, parquet, layer_id, e["crs"], e["geometry_types"],
                                tiles["min_zoom"])
             tiles["file"] = archive.name
