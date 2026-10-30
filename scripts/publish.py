@@ -2,13 +2,13 @@
 """
 Publish a pipeline out/ directory to an S3/R2 remote, replacing latest/.
 
-latest/ is the only version of the data: no dated copies are kept. A build
-collects in _staging/<YYYY-MM-DD>/ (UTC by default) until it is complete, and
-prune.py clears that folder once latest/ has been validated.
+A build collects in _staging/<YYYY-MM-DD>/ (UTC by default) until it is complete.
+Once latest/ has been validated, prune.py keeps the first build of each month as
+an immutable <YYYY-MM-DD>/ snapshot and clears staging.
 
 - Writes an ATTRIBUTION.txt at the prefix root (OSM/ODbL notice)
 - Writes a snapshots.json at the prefix root with the date, object count and
-  total bytes of latest/. The name stays: it is a public URL.
+  total bytes of latest/ (first entry) and of each monthly snapshot.
 
 Stages (--stage):
   all       upload + finalize (default; what a single-machine nightly does)
@@ -91,6 +91,11 @@ def sh(cmd: list[str], *, dry_run: bool = False) -> None:
 def sh_json(cmd: list[str]) -> list | dict:
     r = subprocess.run(cmd, check=True, capture_output=True, text=True)
     return json.loads(r.stdout)
+
+
+def list_snapshot_dirs(remote: str) -> set[str]:
+    return {e["Name"] for e in sh_json(["rclone", "lsjson", remote, "--dirs-only"])
+            if SNAPSHOT_RE.match(e["Name"])}
 
 
 # ---------- rclone progress-bar integration ----------
@@ -215,6 +220,7 @@ STAGING = "_staging"
 # Nobody reads staging, and a re-run can rewrite it. finalize sets the header
 # latest/ serves.
 STAGING_CACHE = "Cache-Control: no-store"
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 FRAGMENT_RE = re.compile(r"^_manifest\.([A-Za-z0-9_-]+)\.json$")
 
 
@@ -347,17 +353,26 @@ def published_date(remote: str) -> str | None:
 
 
 def build_snapshot_manifest(remote: str, date: str) -> dict:
-    size = sh_json(["rclone", "size", "--json", f"{remote}/latest/"])
+    """latest/ first, then the monthly snapshots, newest first."""
+    entries = [(date, "latest/")] + [(d, f"{d}/") for d in
+                                     sorted(list_snapshot_dirs(remote), reverse=True)]
+    snapshots = []
+    for d, path in entries:
+        size = sh_json(["rclone", "size", "--json", f"{remote}/{path}"])
+        snapshots.append({"date": d, "path": path,
+                          "objects": size["count"], "bytes": size["bytes"]})
     return {
         "manifest_version": "1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        "snapshots": [{
-            "date": date,
-            "path": "latest/",
-            "objects": size["count"],
-            "bytes": size["bytes"],
-        }],
+        "snapshots": snapshots,
     }
+
+
+def write_snapshot_manifest(remote: str, date: str) -> dict:
+    manifest = build_snapshot_manifest(remote, date)
+    write_remote_text(remote, "snapshots.json", json.dumps(manifest, indent=2),
+                      cache_control="public, max-age=300", dry_run=False)
+    return manifest
 
 
 def main() -> None:
@@ -544,12 +559,10 @@ def finalize(args, date: str, dest: str, total_bytes: int) -> None:
     if args.dry_run:
         print("  (skipped in --dry-run)")
     else:
-        manifest = build_snapshot_manifest(args.remote, date)
-        write_remote_text(args.remote, "snapshots.json",
-                          json.dumps(manifest, indent=2),
-                          cache_control="public, max-age=300", dry_run=False)
-        s = manifest["snapshots"][0]
-        print(f"  {s['date']}  {s['objects']:>4} files  {s['bytes']/1_000_000:>7.1f} MB")
+        manifest = write_snapshot_manifest(args.remote, date)
+        for x in manifest["snapshots"]:
+            print(f"  {x['date']}  {x['path']:<12} {x['objects']:>4} files  "
+                  f"{x['bytes']/1_000_000:>7.1f} MB")
 
 
 if __name__ == "__main__":

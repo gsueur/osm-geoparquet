@@ -237,7 +237,7 @@ Or ask an AI agent: the parquetry skill turns a spatial question into the query 
 <div class="datasets">
   <div class="dataset">
     <h4><a href="#osm">OpenStreetMap, North America</a></h4>
-    <p>The US, Canada and Mexico: 98 states and provinces, 16 themes each (buildings, roads, POIs, water...). Rebuilt daily.</p>
+    <p>The US, Canada and Mexico: 98 states and provinces, 16 themes each (buildings, roads, POIs, water...). Rebuilt daily, one snapshot a month kept.</p>
     <p class="meta"><code>osm/</code> · 27 GB per day · ODbL</p>
   </div>
   <div class="dataset">
@@ -393,12 +393,12 @@ WHERE bbox.xmin &lt;= -73.98 AND bbox.xmax &gt;= -73.99
 </tbody>
 </table>
 
-<h3>URLs</h3>
-<pre><code>https://parquetry.geomermaids.com/osm/latest/country=&lt;CC&gt;/state=&lt;ISO 3166-2&gt;/&lt;theme&gt;.parquet
+<h3>URLs and snapshots</h3>
+<pre><code>https://parquetry.geomermaids.com/osm/&lt;latest | YYYY-MM-DD&gt;/country=&lt;CC&gt;/state=&lt;ISO 3166-2&gt;/&lt;theme&gt;.parquet
 
 # e.g. every building in New York State, today
 https://parquetry.geomermaids.com/osm/latest/country=US/state=US-NY/buildings.parquet</code></pre>
-<p><code>latest/</code> is the only version: each nightly build replaces it, and no dated copies are kept. <a href="https://parquetry.geomermaids.com/osm/snapshots.json"><code>snapshots.json</code></a> gives the date of the current build. Need a frozen copy? <a href="#custom">Ask us</a>.</p>
+<p><code>latest/</code> follows the nightly build. The first build of each month is also kept for 12 months under its date, and never changes, so a pinned date gives the same answer later. <a href="https://parquetry.geomermaids.com/osm/snapshots.json"><code>snapshots.json</code></a> lists what is available. Need one kept longer? <a href="#custom">Ask us</a>.</p>
 
 <h3>Inside each file</h3>
 <ul>

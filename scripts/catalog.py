@@ -16,8 +16,8 @@ lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
 pyproject.toml.
 
 publish.py's finalize stage writes it after the completeness gate, at
-catalog/catalog.json. Its globs read latest/, the only version of the data, and
-its URL is what the registry points at. Rebuilt nightly.
+catalog/catalog.json. Its globs read latest/, and its URL is what the registry
+points at. Rebuilt nightly.
 
 Usage:
   # render from local manifests (a pipeline out/ dir or a manifest mirror)
@@ -482,7 +482,7 @@ def build_root(collections: list[dict], date: str, updated: str, countries: list
             {"rel": "issues", "href": f"{REPO_URL}/issues", "type": "text/html",
              "title": "Report a problem"},
             {"rel": "related", "href": f"{PUBLIC_DATA}/snapshots.json",
-             "type": "application/json", "title": "Date and size of the current build"},
+             "type": "application/json", "title": "The current build and the monthly snapshots"},
             {"rel": "alternate", "href": SITE_URL, "type": "text/html",
              "title": "Project site"},
         ],
@@ -518,8 +518,9 @@ GROUP BY state ORDER BY 2 DESC;
 
 DuckDB reads `country` and `state` from the path (Hive partitioning), so a
 `WHERE state = 'US-NY'` filter skips every other file without opening it.
-`latest` is the only version: each nightly build replaces it, and no dated
-copies are kept.
+`latest` is replaced by each nightly build. To pin data that does not move under
+you, replace it with a monthly snapshot date, kept for 12 months and listed in
+{PUBLIC_DATA}/snapshots.json.
 
 Every region is also a STAC asset on this collection, keyed `data-<iso>` with
 media type `application/vnd.apache.parquet`, so a STAC client can list the
@@ -611,8 +612,9 @@ Each row is one OSM element ({theme.geometry_types.replace(',', ', ')}) matching
   in each. Across the glob it repeats, so count features with
   `count(DISTINCT (osm_type, osm_id))` and deduplicate on the same pair
   before summing lengths or areas.
-- `/latest/` is the only version: the nightly build replaces it, and no dated
-  copies are kept. Build date: {PUBLIC_DATA}/snapshots.json.
+- `/latest/` follows the nightly build. The first build of each month is also
+  kept for 12 months, immutable, under `/<YYYY-MM-DD>/`. Both are listed in
+  {PUBLIC_DATA}/snapshots.json.
 - Attribution is required: "(c) OpenStreetMap contributors", ODbL 1.0.
 """
 
@@ -632,18 +634,19 @@ def root_readme(root: dict, collections: list[dict], aggs: dict, date: str) -> s
 
 ## Versions
 
-This catalog tracks `latest/`, the only version of the data, and was generated
-from the {date} build. Its row counts and extents describe that build; the files
-behind it change every night. No dated copies are kept, so to freeze a result,
-copy the files it used.
+This catalog tracks `latest/` and was generated from the {date} build. Its row
+counts and extents describe that build; the files behind it change every night.
+For work that has to be reproducible, read a monthly snapshot instead: the first
+build of each month is kept for 12 months and never changes. They are listed in
+[snapshots.json]({PUBLIC_DATA}/snapshots.json), and this catalog does not
+describe them.
 
 ## Access
 
-Files live at `{PUBLIC_DATA}/latest/country=<CC>/state=<ISO>/<theme>.parquet`
+Files live at `{PUBLIC_DATA}/<latest | YYYY-MM-DD>/country=<CC>/state=<ISO>/<theme>.parquet`
 and can be read in place with HTTP range requests. Each collection's README
 shows how to read one region over HTTPS and every region through the
-anonymous S3 endpoint `{S3_ENDPOINT}`. The date and size of the current build are in
-[snapshots.json]({PUBLIC_DATA}/snapshots.json).
+anonymous S3 endpoint `{S3_ENDPOINT}`.
 
 ## Provenance
 
@@ -671,7 +674,9 @@ region (US states, Canadian provinces and territories, Mexican states).
 
 Reads `latest/`, which the nightly build replaces, so the same query can return
 different numbers tomorrow. The counts here were taken from the {date} build.
-No dated copies are kept: to reproduce a result later, keep the files it used.
+For a result someone can reproduce, read a monthly snapshot,
+`{PUBLIC_DATA}/<YYYY-MM-DD>/...`: the first build of each month is kept for 12
+months and never changes. They are listed in {PUBLIC_DATA}/snapshots.json.
 
 ## Collections
 

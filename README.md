@@ -17,7 +17,7 @@ FROM read_parquet('https://parquetry.geomermaids.com/osm/latest/country=US/state
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
-Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/osm/snapshots.json` for the date of the current build. `latest/` is the only version: each nightly build replaces it, and no dated copies are kept.
+Column projection, bbox filtering, and row-group pruning all work via HTTP range requests against Cloudflare's edge. See `https://parquetry.geomermaids.com/osm/snapshots.json` for what is available. `latest/` follows the nightly build, and the first build of each month is also kept for 12 months under `osm/<YYYY-MM-DD>/`, immutable.
 
 Data © OpenStreetMap contributors, available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). See `https://parquetry.geomermaids.com/osm/ATTRIBUTION.txt` for redistribution terms.
 
@@ -38,6 +38,8 @@ Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd
 - A closed way in `power` or `aeroways` is one row. Until 0.4.0 `osmium export` wrote it twice, as a LineString and as the polygon built from it, so every substation, solar panel, hangar and apron was counted twice (a fifth of the rows of both themes in Texas). It is now the polygon, or the line when the tags are linear (`power=line/minor_line/cable`, runways, taxiways).
 - `power.voltage` is the highest value of the OSM `voltage` tag, which lists one voltage per circuit (`345000;138000`). A plain integer cast made every such value NULL. The new `power.voltages` column (`INT[]`) keeps all of them in tag order.
 
+Queries that mix older and newer snapshots in one glob need `union_by_name = true`, and counts over older snapshots include the duplicates.
+
 ### Schema 0.4.0
 
 - The `geo` metadata declares the `bbox` column as a GeoParquet `covering`, so spec-aware readers use it automatically. DuckDB's writer does not emit a covering (it is not part of GeoParquet 2.0 yet), so `pipeline.py` writes the whole `geo` value through `KV_METADATA`, with `GEOPARQUET_VERSION 'NONE'` so that DuckDB does not add a second `geo` block of its own beside it. That setting governs the metadata only: the geometry column keeps the native `GEOMETRY` logical type and its per-column geo statistics, and file size, row groups and bloom filters are unchanged.
@@ -49,6 +51,8 @@ Schema 0.3.0 changed two things:
 
 - The per-file `state` column is now `state_name`. It collided with the `state=<ISO>` path key, and DuckDB's Hive auto-detection silently replaced the region name with the ISO code on globbed reads.
 - `osm_id` and `osm_type` are populated. Before, `osm_id` was always NULL and `osm_type` always `'Feature'`.
+
+Queries that mix older and newer snapshots in one glob need `union_by_name = true`.
 
 ## Other datasets in the bucket
 
@@ -206,7 +210,7 @@ See `scripts/pipeline.py --help` for all flags.
 
 ## Publishing
 
-`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) by replacing `latest/`, and maintains a one-entry `snapshots.json` (date, objects, bytes) + `ATTRIBUTION.txt` at the dataset prefix. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>[/<prefix>]`).
+`scripts/publish.py` uploads a pipeline output directory to an S3-compatible remote (Cloudflare R2, MinIO, AWS S3) by replacing `latest/`, and maintains a `snapshots.json` (`latest/` first, then the monthly snapshots) + `ATTRIBUTION.txt` at the dataset prefix. Requires `rclone` configured with a remote named `parquetry` (or pass `--remote <name>:<bucket>[/<prefix>]`).
 
 ```bash
 python3 scripts/publish.py               # uploads out/ to parquetry:parquetry/osm/latest/
@@ -226,7 +230,7 @@ The default (`--stage all`) does both, which is what a single-machine run wants.
 
 1. `plan` reads `data/admin_regions.geojson` and resolves every region to the most specific Geofabrik extract via Geofabrik's index (`scripts/plan.py`). Today that is one job per US state / Canadian province and one job for Mexico's 32 states, plus one `us-boundaries` job: a per-state Geofabrik extract cuts the administrative relations that touch the state edge (the state itself, border counties and towns, issue #5), so the `boundaries` theme of the fifty states and DC is built from the US country extract instead, with the boundary relations filtered out of the 12 GB download first and the clip completing boundary relations (`--complete-relations multipolygon,boundary`). Those state jobs skip the theme; Puerto Rico and the US Virgin Islands are not in Geofabrik's US file and keep building it from their own extracts. Alaska's state relation is the one that still does not assemble.
 2. `build` (matrix, up to 20 in parallel) downloads its extract, runs `pipeline.py` with the admin polygon so the clip semantics are unchanged, validates locally, and uploads its regions with `publish.py --stage upload`. The boundaries job uploads its manifests as `_manifest.boundaries.json` fragments beside the state jobs' manifests.
-3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize` folds the manifest fragments into each region's `_manifest.json`, checks completeness, syncs `latest/`, then remote validation and `prune.py --execute`, which clears `_staging/`.
+3. `finalize` runs only if every build job succeeded: `publish.py --stage finalize` folds the manifest fragments into each region's `_manifest.json`, checks completeness, syncs `latest/`, then remote validation and `prune.py --execute`, which keeps the first build of each month as an immutable `<YYYY-MM-DD>/` snapshot, deletes snapshots past 12 months and clears `_staging/`.
 4. `notify` posts a recap to ntfy.sh when `NTFY_TOPIC` is set.
 
 Setup:
