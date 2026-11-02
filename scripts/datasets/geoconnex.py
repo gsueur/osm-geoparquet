@@ -35,8 +35,9 @@ Each reference layer comes from where its attributes are complete:
               and URI are what the files have)
 
 Providers are the other sitemaps, as they are: uri, name, description,
-mainstem_uri, geometry. The `jsonld` column, Geoconnex's source of record,
-is not republished: what it holds beyond the columns varies by provider.
+mainstem_uri, geometry, from the structured/ files. The JSON-LD,
+Geoconnex's source of record, is not republished: what it holds beyond the
+columns varies by provider.
 
 The PMTiles cover the water features: every reference layer and every
 provider but the general USGS products Geoconnex also harvests (NOT_TILED),
@@ -73,9 +74,13 @@ from datasets.infra import GEOMETRY_TYPE_NAMES
 
 # One GeoParquet file per sitemap, `ref:hu12` -> ref:hu12.parquet. The
 # single export file (metadata-geoconnex-us) was retired in October 2026.
-SUMMONED = "https://storage.googleapis.com/harvest-geoconnex-us/summoned"
+# Since November 2026 the files come in two sets: structured/ has the columns,
+# rdf/ only the JSON-LD. The files left at the top stopped updating.
+# delimiter=/ lists the folder's own files, not those of a subfolder.
+SUMMONED = "https://storage.googleapis.com/harvest-geoconnex-us/summoned/structured"
 LISTING = ("https://storage.googleapis.com/storage/v1/b/harvest-geoconnex-us/o"
-           "?prefix=summoned/&fields=items(name,size,crc32c,updated),nextPageToken")
+           "?prefix=summoned/structured/&delimiter=/"
+           "&fields=items(name,size,crc32c,updated),nextPageToken")
 UPSTREAM = "https://storage.googleapis.com/harvest-geoconnex-us/stac/catalog.json"
 API = "https://reference.geoconnex.us"
 RIVERS_REPO = "internetofwater/ref_rivers"
@@ -197,7 +202,7 @@ def sitemap_files() -> dict:
     while True:
         page, _ = get(LISTING + (f"&pageToken={token}" if token else ""))
         for item in page.get("items", []):
-            sitemap = item["name"].removeprefix("summoned/").removesuffix(".parquet")
+            sitemap = item["name"].removeprefix("summoned/structured/").removesuffix(".parquet")
             if item["name"].endswith(".parquet") and sitemap not in SKIPPED_SITEMAPS:
                 files[sitemap] = {"bytes": int(item["size"]), "crc32c": item["crc32c"],
                                   "updated": item["updated"]}

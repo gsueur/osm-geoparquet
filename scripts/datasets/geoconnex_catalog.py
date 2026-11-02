@@ -203,6 +203,10 @@ PROVIDER_DOCS = {
                               "Stream gages of the Nebraska Department of Natural Resources."),
     "iow:state_gages:wyseo": ("Wyoming state gages",
                               "Stream gages of the Wyoming State Engineer's Office."),
+    "nacc:barriers": ("Aquatic barriers",
+                      "Dams, road and stream crossings, water diversions and other structures "
+                      "that can block fish passage, from the National Aquatic Barrier Inventory "
+                      "(National Aquatic Connectivity Collaborative)."),
     "utah:water_systems": ("Utah water systems",
                            "Service areas of Utah's public water systems."),
     "wwdh:awdb_forecasts": ("NRCS water supply forecast points",
