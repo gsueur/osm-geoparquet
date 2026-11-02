@@ -172,7 +172,7 @@ river) from the `ref_rivers` release, gages, dams and the aquifer layers
 from reference.geoconnex.us, and HU02 to HU12 watersheds and public water
 systems from Geoconnex's export. `providers/` holds one file per source
 Geoconnex harvests (Water Quality Portal sites, USGS monitoring locations,
-GNIS, the geologic map, state gages...), the export's columns unchanged.
+GNIS, state gages, aquatic barriers...), their columns unchanged.
 Geoconnex publishes that export as one unsorted 3.9 GB file with row groups
 of up to 416 MB; here each file is Hilbert sorted with a bbox covering and
 row groups of at most 4 MiB, so a small bbox reads a few MB. CC0. The job
