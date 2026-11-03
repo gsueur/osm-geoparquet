@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Geobox's samples: open city datasets offered in Get started on box.geomermaids.com, as GeoParquet and PMTiles.
+Geobox's samples: open city datasets offered in Get started on geobox.cloud, as GeoParquet and PMTiles.
 
 Geobox links these files (nothing copied into a box): a newcomer clicks "Add it" and the sample is on a map at once,
 credited from its collection in geobox_samples_catalog.py. One folder per sample under the geobox-samples/ prefix:
@@ -187,7 +187,7 @@ def attribution(spec: dict, retrieved: str) -> str:
             f"Retrieved {retrieved}.\n\nWhat was changed: only the columns listed in the catalog are kept, typed "
             f"(numbers as numbers, zero heights and years as unknown); the geometry is 2D, sorted on a Hilbert curve, "
             f"with a bbox covering. The map tiles come from the same rows. Processed and hosted by Geomermaids "
-            f"(https://geoparquet.geomermaids.com/) for Geobox (https://box.geomermaids.com/).\n")
+            f"(https://geoparquet.geomermaids.com/) for Geobox (https://geobox.cloud/).\n")
 
 
 def build(work: Path, out: Path, local: dict[str, Path], only: list[str] | None = None) -> None:
