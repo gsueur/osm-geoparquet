@@ -185,7 +185,7 @@ const SKILL_URL = "https://github.com/gsueur/parquetry-skills";
 
 // Geobox, our geodata box for non-developers, opens these catalogs as they
 // are: a section on the bucket root, a line under the header elsewhere.
-const GEOBOX_URL = "https://box.geomermaids.com";
+const GEOBOX_URL = "https://geobox.cloud";
 const GEOBOX_BLOCK =
   `<section class="geobox">` +
   `<h2>Map them in Geobox</h2>` +

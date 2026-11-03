@@ -49,7 +49,7 @@ CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "geobox-samples"
 TITLE = "Geobox samples"
-GEOBOX_URL = "https://box.geomermaids.com/"
+GEOBOX_URL = "https://geobox.cloud/"
 THUMBS = REPO / "catalog" / "thumbnails" / "geobox-samples"
 GEOMERMAIDS = {
     "name": "Geomermaids",
@@ -248,7 +248,7 @@ def build_root(collections: list[dict], updated: str) -> dict:
         "stac_extensions": [PORTOLAN_SCHEMA],
         "id": CATALOG_ID,
         "title": TITLE,
-        "description": ("Open datasets offered as samples in Geobox's Get started (box.geomermaids.com), as GeoParquet "
+        "description": ("Open datasets offered as samples in Geobox's Get started (geobox.cloud), as GeoParquet "
                         "2.0 with map tiles, each credited to its producer under its own licence."),
         "updated": updated,
         "links": [
