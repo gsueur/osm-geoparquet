@@ -108,6 +108,22 @@ block group to tract to county to state, but for a gap in the published file
 (14 Suffolk County, NY tracts, listed in `acs.py`'s KNOWN_GAPS). Its collections
 are the `acs-2024` sub-catalog of the census catalog (`scripts/datasets/acs_catalog.py`).
 
+FEMA's National Risk Index (`scripts/datasets/nri.py`, workflow
+`dataset-nri.yml`, checked weekly) sits under
+`https://parquetry.geomermaids.com/nri/v1.20/`: one GeoParquet file per level
+(`tracts.parquet`, `counties.parquet`, `states.parquet`,
+`tribal_counties.parquet`), PMTiles for the tracts and counties coloured on the
+composite rating, FEMA's hazard table (`hazards.parquet`, the 18 column
+prefixes) and its field dictionary. FEMA retired the NRI application in 2025;
+the data comes from OpenFEMA, whose paths carry the version (`v120`), so the
+weekly run fails when the page lists a newer one rather than rebuilding
+silently. Columns are FEMA's; the geometry is reprojected from Web Mercator
+to lon/lat. `TRACTFIPS` and `STCOFIPS` join the TIGER/Line tract and county
+`GEOID`; the build checks rows and keys against FEMA's table CSV and counts
+the keys that differ from TIGER 2026. Portolan catalog at
+`https://parquetry.geomermaids.com/nri/catalog/catalog.json`
+(`scripts/datasets/nri_catalog.py`).
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
