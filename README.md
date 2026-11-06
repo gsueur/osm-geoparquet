@@ -102,7 +102,10 @@ Last-Modified) sit beside them under
 vacancy, race and Hispanic origin, education, commuting), each with its margin
 of error, for states, counties, places, tracts, block groups and ZCTAs.
 `<geo>.parquet` is the table keyed by TIGER's GEOID; `<geo>_geo.parquet` joins
-it to the TIGER/Line 2026 outline. Read from the table-based Summary File (no
+it to the TIGER/Line 2026 outline, and `<geo>_geo.pmtiles` holds its vector
+tiles (from the TIGER layer's first zoom, with every measure that fits, else
+a key subset; `stage=tiles` tiles the published files without a rebuild).
+Read from the table-based Summary File (no
 API key). The build checks every area against TIGER and that populations add up
 block group to tract to county to state, but for a gap in the published file
 (14 Suffolk County, NY tracts, listed in `acs.py`'s KNOWN_GAPS). Its collections
