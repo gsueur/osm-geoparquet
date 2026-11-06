@@ -28,3 +28,6 @@ node_modules/
 # macOS
 .DS_Store
 ._*
+
+# catalog.geomermaids.com: built by catalog-site/build.sh at deploy time
+catalog-site/public/

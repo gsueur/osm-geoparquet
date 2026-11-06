@@ -1,0 +1,19 @@
+// catalog.geomermaids.com: the root of the Geomermaids catalogs and
+// portolan-browser over it. Workers + Static Assets, like site/, gmwid/ and
+// nfhl/. public/ holds the built browser and the root catalog
+// (scripts/catalog_root.py); build.sh writes both and public/ is not
+// committed. The root links each dataset catalog on parquetry by absolute
+// URL, so their updates show without a redeploy.
+//
+// Deploy from the repository root:
+//   bash catalog-site/build.sh && (cd catalog-site && npx wrangler deploy)
+// The custom domain is declared below, so the first deploy creates the
+// DNS record and the certificate for catalog.geomermaids.com.
+{
+  "name": "catalog",
+  "compatibility_date": "2026-04-01",
+  "routes": [{ "pattern": "catalog.geomermaids.com", "custom_domain": true }],
+  "assets": {
+    "directory": "./public"
+  }
+}
