@@ -72,9 +72,12 @@ jobs:
           uv run --project scripts python scripts/datasets/massgis.py upstream > upstream.json
           live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
           moved=$(jq -r --argjson was "$live" \
-            'to_entries | map(select(.value.fingerprint != $was[.key].fingerprint)) | map(.key) | join(" ")' \
+            '.layers | to_entries | map(select(.value.fingerprint != $was[.key].fingerprint)) | map(.key) | join(" ")' \
             upstream.json)
+          gone=$(jq -r '.gone | keys | join(" ")' upstream.json)
           echo "moved: ${moved:-none}"
+          echo "gone upstream: ${gone:-none}"
+          echo "gone=$gone" >> "$GITHUB_OUTPUT"
           if [ "$CATALOG_ONLY" = "true" ]; then
             echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
           elif [ -z "$moved" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
@@ -173,6 +176,17 @@ jobs:
       # Last, so a layer that failed does not hold back the others: they are
       # published, the failed one stays as it was (its published fingerprint
       # is kept, so the next run tries it again), and this run goes red.
+      #
+      # A layer whose zip MassGIS removed is listed there too. When nothing
+      # moved upstream nothing is built, so it is reported here instead: the
+      # run goes red until its row is removed from massgis_layers.csv and its
+      # published files and catalog collection are deleted by hand.
+      - name: Layers gone upstream
+        if: steps.check.outputs.go != 'true' && steps.check.outputs.gone != ''
+        run: |
+          jq -r '.gone | to_entries[] | "\(.key): not in the bucket: \(.value)"' upstream.json
+          exit 1
+
       - name: Layers that failed
         if: steps.check.outputs.go == 'true'
         run: |

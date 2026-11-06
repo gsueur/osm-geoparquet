@@ -270,7 +270,6 @@ towns_poly_v_elec,utilities,shapefiles/state/pubutil.zip,pubutil/TOWNS_POLY_V_EL
 towns_poly_v_gas,utilities,shapefiles/state/pubutil.zip,pubutil/TOWNS_POLY_V_GAS.shp,"Natural Gas Providers, by Town",
 trnslna1,utilities,shapefiles/state/trnsln.zip,trnslna1.shp,,
 aqsole_poly,water,shapefiles/state/aq_sole.zip,AQSOLE_POLY.shp,EPA Designated Sole Source Aquifers,
-aqueducts_arc,water,shapefiles/state/aqueducts.zip,AQUEDUCTS_ARC.shp,Aqueducts,
 aquifers_arc,water,shapefiles/state/aquifers.zip,AQUIFERS_ARC.shp,Aquifers (Arcs),
 aquifers_poly,water,shapefiles/state/aquifers.zip,AQUIFERS_POLY.shp,Aquifers (Polygons),
 coast25k_arc,water,shapefiles/state/coast25k.zip,COAST25K_ARC.shp,"1:25,000 Coastline",

@@ -181,17 +181,22 @@ def list_bucket(prefixes: set[str]) -> dict:
     return out
 
 
-def upstream() -> dict:
+def upstream() -> tuple[dict, dict]:
     """Each layer's source zips and a fingerprint of their ETags: a layer is
-    rebuilt when its fingerprint changes."""
+    rebuilt when its fingerprint changes. Second, the layers whose zips are
+    gone from the bucket, with what is missing: MassGIS retires a layer now
+    and then, and one retired layer must not stop the others. Such a layer
+    keeps its published files until its row is removed from the CSV."""
     rows = layers()
     listing = list_bucket({r["zip"].rsplit("/", 1)[0] + "/" for r in rows})
-    out = {}
+    out, gone = {}, {}
     for r in rows:
         keys = zips(r, listing)
         missing = [k for k in keys if k not in listing]
         if missing or not keys:
-            sys.exit(f"{r['id']}: not in the bucket: {missing or r['zip']}")
+            gone[r["id"]] = missing or [r["zip"]]
+            print(f"  WARN {r['id']}: not in the bucket: {gone[r['id']]}", file=sys.stderr)
+            continue
         etags = "".join(listing[k]["etag"] for k in keys)
         out[r["id"]] = {
             "zips": keys if len(keys) < 4 else [r["zip"]],
@@ -200,7 +205,7 @@ def upstream() -> dict:
             "bytes": sum(listing[k]["bytes"] for k in keys),
             "fingerprint": hashlib.sha256(etags.encode()).hexdigest()[:16],
         }
-    return out
+    return out, gone
 
 
 def fetch(key: str, src: Path, size: int) -> Path:
@@ -863,7 +868,7 @@ def build(src: Path, work: Path, out: Path, *, public: str, only: list[str] | No
           force: bool, no_tiles: bool) -> None:
     work.mkdir(parents=True, exist_ok=True)
     rows = layers()
-    source = upstream()
+    source, gone = upstream()
     published = get_json(f"{public}/_source.json", {})
     con = duckdb.connect()
     # Land cover (22.8 million polygons) outgrows memory: past the limit
@@ -880,10 +885,10 @@ def build(src: Path, work: Path, out: Path, *, public: str, only: list[str] | No
         return e if e and e["source"]["fingerprint"] == source[r["id"]]["fingerprint"] else None
 
     if only:
-        todo = [r for r in rows if r["id"] in only]
+        todo = [r for r in rows if r["id"] in only and r["id"] not in gone]
     else:
-        todo = [r for r in rows if force or published.get(r["id"], {}).get("fingerprint")
-                != source[r["id"]]["fingerprint"]]
+        todo = [r for r in rows if r["id"] in source and (force or published.get(
+                r["id"], {}).get("fingerprint") != source[r["id"]]["fingerprint"])]
     built: dict[str, dict] = {}
     for r in list(todo):
         if not only and (e := done(r)):
@@ -891,7 +896,9 @@ def build(src: Path, work: Path, out: Path, *, public: str, only: list[str] | No
             todo.remove(r)
     print(f"  {len(rows)} layers, {len(todo)} to build"
           + (f", {len(built)} already built here" if built else ""), flush=True)
-    failed: dict[str, str] = {}
+    # A layer gone upstream is reported as failed: its published files stay,
+    # and the run goes red until its row is removed from the CSV.
+    failed = {k: f"not in the bucket: {v}" for k, v in gone.items() if not only or k in only}
     for r in todo:
         try:
             built[r["id"]] = build_layer(con, r, source[r["id"]], src, work, out, no_tiles)
@@ -1038,7 +1045,8 @@ def main() -> None:
                       force=args.force)
         return
     if args.cmd == "upstream":
-        print(json.dumps(upstream(), indent=2))
+        source, gone = upstream()
+        print(json.dumps({"layers": source, "gone": gone}, indent=2))
         return
     build(args.src_dir, args.work_dir, args.out_dir, public=args.public, only=args.layer,
           force=args.force, no_tiles=args.no_tiles)
