@@ -66,9 +66,12 @@ env:
 jobs:
   acs:
     runs-on: ubuntu-24.04
-    # About 900 MB of tables and the TIGER outlines read from parquetry; the
-    # laptop build takes a few minutes.
-    timeout-minutes: 60
+    # About 900 MB of tables and the TIGER outlines read from parquetry, then
+    # six tile archives to zoom 12. On a laptop the tables take a few minutes
+    # and the tiles about 5 more, ladder steps that go over the cap included
+    # (block groups try 3 settings before one fits); dataset-census.yml,
+    # which tiles the same outlines, allows 180.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
 

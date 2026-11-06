@@ -472,6 +472,9 @@ def tile_geo(con, parquet: Path, geo: str) -> dict:
     TIGER layer's first zoom, then TILE_KEY, then TILE_MIN, from it and
     from TILE_LATER later zooms. pmtiles.tile() fails when a tile goes over
     the size cap; that failure moves to the next step."""
+    # A missing or wrong tylertoo exits too: fail on it here, not as "no
+    # tile setting fits" after every step of the ladder.
+    pmtiles.binary()
     start = TILE_ZOOMS[geo]
     cols = [c for c, *_ in con.execute(
         f"DESCRIBE SELECT * FROM read_parquet('{parquet}')").fetchall()
