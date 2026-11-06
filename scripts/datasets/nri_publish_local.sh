@@ -55,7 +55,8 @@ fail=0
 for f in index.json _source.json v$v/_manifest.json v$v/ATTRIBUTION.txt \
          v$v/NRIDataDictionary.csv v$v/hazards.parquet v$v/tracts.parquet \
          v$v/counties.parquet v$v/states.parquet v$v/tribal_counties.parquet \
-         v$v/tracts.pmtiles v$v/counties.pmtiles; do
+         v$v/tracts.pmtiles v$v/counties.pmtiles v$v/states.pmtiles \
+         v$v/tribal_counties.pmtiles; do
   code=$(curl -s -o /dev/null -w '%{http_code}' -I "$public/$f")
   [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
   echo "ok  $f"

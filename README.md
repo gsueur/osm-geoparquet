@@ -114,8 +114,8 @@ built and published from a workstation with
 runners; `dataset-nri.yml` renders the catalog) sits under
 `https://parquetry.geomermaids.com/nri/v1.20/`: one GeoParquet file per level
 (`tracts.parquet`, `counties.parquet`, `states.parquet`,
-`tribal_counties.parquet`), PMTiles for the tracts and counties coloured on the
-composite rating, FEMA's hazard table (`hazards.parquet`, the 18 column
+`tribal_counties.parquet`), a PMTiles archive for each, coloured on the
+composite rating (on expected annual loss for states, which have no composite), FEMA's hazard table (`hazards.parquet`, the 18 column
 prefixes) and its field dictionary. FEMA retired the NRI application in 2025;
 the data comes from OpenFEMA, whose paths carry the version (`v120`), so the
 upstream check fails when the page lists a newer one rather than rebuilding
