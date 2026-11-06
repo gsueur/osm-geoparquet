@@ -131,10 +131,20 @@ def version_tuple(v: str) -> tuple[int, ...]:
 
 def head(url: str) -> dict:
     req = urllib.request.Request(url, method="HEAD")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return {"etag": (r.headers.get("ETag") or "").strip('"'),
-                "last_modified": r.headers.get("Last-Modified"),
-                "bytes": int(r.headers.get("Content-Length") or 0)}
+    for attempt in range(1, 6):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                length = r.headers.get("Content-Length")
+                return {"etag": (r.headers.get("ETag") or "").strip('"'),
+                        "last_modified": r.headers.get("Last-Modified"),
+                        # Unknown when the CDN sends none: fetch() then skips
+                        # the size check.
+                        "bytes": int(length) if length else None}
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == 5:
+                sys.exit(f"{url}: {e}")
+            time.sleep(5 * attempt)
+    raise AssertionError("unreachable")
 
 
 def upstream() -> dict:
@@ -146,11 +156,12 @@ def upstream() -> dict:
             "layers": out}
 
 
-def fetch(row: dict, src: Path, size: int) -> Path:
+def fetch(row: dict, src: Path, size: int | None) -> Path:
     """The zip, kept in src/<scale>/: a copy of the listed size is reused.
-    Five attempts, then the build fails."""
+    Five attempts, then the build fails. A size of None (no Content-Length)
+    is not checked; the zip's own checks in inspect_zip() still apply."""
     path = src / row["scale"] / f"{row['stem']}.zip"
-    if path.is_file() and path.stat().st_size == size:
+    if path.is_file() and size is not None and path.stat().st_size == size:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".part")
@@ -164,7 +175,7 @@ def fetch(row: dict, src: Path, size: int) -> Path:
             if attempt == 5:
                 sys.exit(f"{row['url']}: {e}")
             time.sleep(5 * attempt)
-    if tmp.stat().st_size != size:
+    if size is not None and tmp.stat().st_size != size:
         sys.exit(f"{row['url']}: got {tmp.stat().st_size} bytes, the CDN lists {size}")
     tmp.rename(path)
     return path

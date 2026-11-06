@@ -366,6 +366,14 @@ def build_root(scales: list[dict], total: int, updated: str) -> dict:
 # ---------- markdown ----------
 
 LYON = (4.8357, 45.7640)
+# A box each layer has features in, at every scale (checked on the build):
+# Provence for most, and where the 50m and 110m files have rows for the rest.
+EXAMPLE_AREAS = {
+    None: ("Provence", (3.9, 42.3, 6.9, 44.3)),
+    "lakes": ("the Great Lakes", (-92.5, 41.0, -76.0, 49.5)),
+    "admin_1_states_provinces": ("Massachusetts", (-73.5, 41.2, -69.9, 42.9)),
+    "rivers_lake_centerlines": ("the Mississippi valley", (-95.0, 35.0, -88.0, 45.0)),
+}
 
 
 def access_md(entry: dict) -> str:
@@ -387,22 +395,35 @@ SELECT * FROM (
 WHERE km <= 200
 ORDER BY POP_MAX DESC LIMIT 10;
 ```"""
+    if entry["layer"] == "graticules_10":
+        return f"""\
+```sql
+INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
+-- the whole layer: {entry['features']} lines
+SELECT * EXCLUDE (bbox) FROM read_parquet('{url}');
+```"""
+    where, (x0, y0, x1, y1) = EXAMPLE_AREAS.get(entry["layer"], EXAMPLE_AREAS[None])
     return f"""\
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
--- what is under a point (Lyon)
+-- the features that touch a box over {where}
 SELECT * EXCLUDE (geometry, bbox)
 FROM read_parquet('{url}')
-WHERE bbox.xmin <= {lon} AND bbox.xmax >= {lon}
-  AND bbox.ymin <= {lat} AND bbox.ymax >= {lat}
-  AND ST_Intersects(geometry, ST_Point({lon}, {lat}));
+WHERE bbox.xmin <= {x1} AND bbox.xmax >= {x0}
+  AND bbox.ymin <= {y1} AND bbox.ymax >= {y0}
+  AND ST_Intersects(geometry, ST_MakeEnvelope({x0}, {y0}, {x1}, {y1}));
 ```"""
 
 
-def notes_md(entry: dict) -> str:
-    notes = NOTES.get(entry["layer"], [])
+def layer_notes(entry: dict) -> list[str]:
+    """NOTES for the layer; the rivers note is about the 50m file only."""
     if entry["layer"] == "rivers_lake_centerlines" and not entry["null_geometries"]:
-        notes = []
+        return []
+    return NOTES.get(entry["layer"], [])
+
+
+def notes_md(entry: dict) -> str:
+    notes = layer_notes(entry)
     return ("\n## Notes\n\n" + "\n".join(f"- {n}" for n in notes) + "\n") if notes else ""
 
 
@@ -452,7 +473,7 @@ rows with tylertoo.
 
 
 def collection_agents(col: dict, entry: dict) -> str:
-    notes = "\n".join(f"- {n}" for n in NOTES.get(entry["layer"], []))
+    notes = "\n".join(f"- {n}" for n in layer_notes(entry))
     return f"""\
 # {col['title']}: agent guide
 
