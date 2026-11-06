@@ -5,6 +5,12 @@ The ACS sub-catalog of the census Portolan catalog (census_catalog.py):
   census/catalog/acs-2024/catalog.json                 ACS 2020-2024 5-year estimates
   census/catalog/acs-2024/acs2024-<geo>/collection.json         the measures, no geometry
   census/catalog/acs-2024/acs2024-<geo>-geo/collection.json     joined to TIGER outlines
+  census/catalog/acs-2024/acs2024-<geo>-geo/styles/default.json median household income
+
+A -geo collection whose file has tiles (the manifest's `pmtiles`) carries
+them: a `rel: pmtiles` link with `pmtiles:layers` (web-map-links), the file
+as a `visual` asset, and a MapLibre style colouring the areas by median
+household income.
 
 acs.py's _manifest.json drives it (counts, sizes, checksums, column docs,
 gates), local (--out-dir) or published. Until acs.py's files are published
@@ -23,6 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets.acs import DATA, GEOS, HANDBOOK, KNOWN_GAPS, SHELLS_URL, SOURCE_PAGE, SPAN, YEAR
 from datasets.census import YEAR as TIGER_YEAR
+from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
+from datasets.pmtiles import PMTILES_TYPE
 
 from catalog import (
     ALTERNATE_EXT, BUCKET, CONTACT_EMAIL, FILE_EXT, PARQUET_TYPE, PORTOLAN_SCHEMA, PUBLIC_BASE,
@@ -72,6 +80,12 @@ GEO_COLUMNS = {
     "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax), declared as the GeoParquet "
             "covering. Filter on it to prune row groups.",
 }
+# The map's income classes, US dollars, the same at every geography and zoom
+# so a colour means one thing: the national median household income is about
+# 80,000. Light to dark in the site's accent, as the thumbnails.
+INCOME_BREAKS = [50_000, 65_000, 80_000, 100_000, 125_000]
+RAMP = ["#fae0d8", "#f2b39f", "#e8866a", "#d2553a", "#a53b24", "#6e2414"]
+NO_DATA = "#d9d8d2"
 # A point each example query finds an area at: Boston City Hall, or a ZIP there.
 EXAMPLE = (-71.0589, 42.3601)
 
@@ -108,12 +122,45 @@ def tiger_collection(geo: str) -> str:
     return f"../../tiger-{TIGER_YEAR}-{product}/{geo}/collection.json"
 
 
+def style(tiles: dict) -> dict:
+    """Areas by median household income in INCOME_BREAKS classes, grey where
+    it is not computable (the tiles leave a NULL property out)."""
+    layer = tiles["layer"]
+    step = ["step", ["get", "median_household_income"], RAMP[0]]
+    for cut, colour in zip(INCOME_BREAKS, RAMP[1:]):
+        step += [cut, colour]
+    return {
+        "version": 8,
+        "name": f"{layer}: median household income",
+        "sources": {"data": {"type": "vector", "url": f"pmtiles://{URL}/{tiles['file']}",
+                             "attribution": ATTRIBUTION}},
+        "layers": [
+            {"id": f"{layer}-fill", "type": "fill", "source": "data", "source-layer": layer,
+             "paint": {"fill-color": ["case", ["has", "median_household_income"], step, NO_DATA],
+                       "fill-opacity": 0.75}},
+            {"id": f"{layer}-outline", "type": "line", "source": "data", "source-layer": layer,
+             "paint": {"line-color": "#ffffff",
+                       "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.2, 10, 1]}},
+        ],
+    }
+
+
+def tiles_description(tiles: dict) -> str:
+    kept = ("every column but the geometry" if tiles["all_properties"]
+            else ", ".join(tiles["properties"]))
+    return (f"PMTiles, layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to "
+            f"{tiles['max_zoom']}, {tiles['tiles']:,} tiles; properties: {kept}. "
+            f"Built with tylertoo {tiles['tylertoo']}.")
+
+
 def build_collection(entry: dict, docs: dict[str, str], columns: list[tuple[str, str]],
-                     extent: list[float], thumbs: Path, updated: str) -> dict:
+                     extent: list[float], thumbs: Path, updated: str,
+                     tiles: dict | None = None) -> dict:
     name, spatial = entry["name"], entry["geometry"]
     geo = name.removesuffix("_geo")
     title = GEOS[geo][1]
     path = f"{PREFIX}/{entry['file']}"
+    tiles_path = f"{PREFIX}/{tiles['file']}" if tiles else None
     undocumented = [c for c, _ in columns if c not in docs and c not in GEO_COLUMNS]
     if undocumented:
         sys.exit(f"{name}: no column doc for {undocumented}")
@@ -123,7 +170,8 @@ def build_collection(entry: dict, docs: dict[str, str], columns: list[tuple[str,
         "type": "Collection",
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT,
-                            *([PROJ_EXT] if spatial else [])],
+                            *([PROJ_EXT] if spatial else []),
+                            *([WEB_MAP_LINKS_EXT] if tiles else [])],
         "id": collection_id(name),
         "title": f"{title}, ACS {SPAN}" + (", with outlines" if spatial else ""),
         "description": (
@@ -170,6 +218,22 @@ def build_collection(entry: dict, docs: dict[str, str], columns: list[tuple[str,
                 "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
+            **({
+                "pmtiles": {
+                    "href": f"{PUBLIC_BASE}/{tiles_path}",
+                    "type": PMTILES_TYPE,
+                    "title": f"{title}, ACS {SPAN}, vector tiles",
+                    "description": tiles_description(tiles),
+                    "roles": ["visual"],
+                    "file:size": tiles["bytes"],
+                    "file:checksum": "1220" + tiles["sha256"],
+                    "alternate": {"s3": {"href": f"s3://{BUCKET}/{tiles_path}",
+                                         "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+                },
+                "style": {"href": "./styles/default.json", "type": STYLE_TYPE,
+                          "title": "Areas by median household income",
+                          "roles": ["style", "default"]},
+            } if tiles else {}),
             "thumbnail": {
                 "href": "./thumbnail.png",
                 "type": "image/png",
@@ -196,6 +260,9 @@ def build_collection(entry: dict, docs: dict[str, str], columns: list[tuple[str,
              else "The same measures with outlines"},
             {"rel": "alternate", "href": f"{URL}/", "type": "text/html",
              "title": "Browse the files"},
+            *([{"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{tiles_path}", "type": PMTILES_TYPE,
+                "title": f"{title}, ACS {SPAN}, vector tiles",
+                "pmtiles:layers": [tiles["layer"]]}] if tiles else []),
         ],
     }
 
@@ -226,6 +293,19 @@ ORDER BY population DESC LIMIT 10;
 ```"""
 
 
+def tiles_md(col: dict) -> str:
+    t = col["assets"].get("pmtiles")
+    if not t:
+        return ""
+    return f"""
+## Map
+
+`{t['href']}`: {t['description']} `styles/default.json` colours the areas by
+median household income (US$ {', '.join(f'{b:,}' for b in INCOME_BREAKS)}), grey
+where it is not computable.
+"""
+
+
 def collection_readme(col: dict, entry: dict) -> str:
     schema = "\n".join(f"| `{c['name']}` | `{c['type']}` | {c['description']} |"
                        for c in col["table:columns"])
@@ -246,7 +326,7 @@ def collection_readme(col: dict, entry: dict) -> str:
 
 The same file at `s3://{BUCKET}/{PREFIX}/{entry['file']}` on the anonymous S3
 endpoint `{S3_ENDPOINT}`.
-
+{tiles_md(col)}
 ## Schema
 
 | Column | Type | Description |
@@ -272,12 +352,22 @@ the United States (17 U.S.C. 105). Credit "{ATTRIBUTION}".
 """
 
 
+def map_tip(col: dict) -> str:
+    link = next((lk for lk in col["links"] if lk["rel"] == "pmtiles"), None)
+    if not link:
+        return ""
+    return (f"For a map, use the `rel: pmtiles` link (source-layer "
+            f"`{link['pmtiles:layers'][0]}`) and styles/default.json; the tiles keep only "
+            f"the properties the pmtiles asset lists, so join the rest on GEOID.")
+
+
 def collection_agents(col: dict, entry: dict) -> str:
     return f"""\
 # {col['title']}: agent guide
 
 One row per area, key `GEOID` (TIGER/Line's identifier), name `NAME`.
 {"Geometry column `geometry`, NAD83 (EPSG:4269), `bbox` covering." if entry['geometry'] else "No geometry: join the TIGER/Line layer or the `-geo` collection on GEOID."}
+{map_tip(col)}
 
 ## Access
 
@@ -373,6 +463,7 @@ def build(out_dir: Path | None, dest: Path, thumbs: Path, updated: str,
         print(f"  no {URL}/_manifest.json: the ACS sub-catalog is left out", flush=True)
         return None
     docs = {c["name"]: c["description"] for c in manifest["columns"]}
+    tiles = {t["name"]: t for t in manifest.get("pmtiles", [])}
     extents = {}
     for entry in manifest["files"]:
         if entry["geometry"]:
@@ -386,8 +477,13 @@ def build(out_dir: Path | None, dest: Path, thumbs: Path, updated: str,
             sys.exit(f"missing {thumb}: run census_catalog.py thumbnails --acs")
         source = data_source(out_dir, entry["file"])
         col = build_collection(entry, docs, footer(source),
-                               extents[entry["name"].removesuffix("_geo")], thumbs, updated)
+                               extents[entry["name"].removesuffix("_geo")], thumbs, updated,
+                               tiles.get(entry["name"]))
         d = cdir / col["id"]
+        if "style" in col["assets"]:
+            write_json(d / "styles" / "default.json", style(tiles[entry["name"]]))
+            col["assets"]["style"]["file:size"] = (d / "styles" / "default.json").stat().st_size
+            col["assets"]["style"]["file:checksum"] = multihash(d / "styles" / "default.json")
         write_json(d / "collection.json", col)
         d.joinpath("thumbnail.png").write_bytes(thumb.read_bytes())
         (d / "README.md").write_text(collection_readme(col, entry))

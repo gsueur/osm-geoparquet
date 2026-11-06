@@ -11,6 +11,7 @@ This reads 16 tables and writes, per geography:
 
   <out>/acs/2024/<geo>.parquet       the measures, one row per area, no geometry
   <out>/acs/2024/<geo>_geo.parquet   the same joined to the TIGER/Line 2026 outline
+  <out>/acs/2024/<geo>_geo.pmtiles   its vector tiles, tile layer acs_<geo>
   <out>/acs/2024/_manifest.json      rows, sizes, sha256, column docs, gates, source
   <out>/acs/2024/ATTRIBUTION.txt
   <out>/acs/2024/_source.json        each source file's Last-Modified, a fingerprint
@@ -36,6 +37,16 @@ Block groups have no B17001 and no B08013: poverty comes from B17021
 (the same universe, published down to the block group), and the mean
 travel time to work is NULL for block groups.
 
+The tiles start at the zoom the TIGER/Line layer's tiles start at (census.py
+found where no tile goes over the size cap), and keep every measure when they
+fit. When a tile goes over, they keep TILE_KEY (GEOID, NAME, the population,
+the median household income and its MOE, the poverty rate), then TILE_MIN
+(GEOID and the median household income, what the map's style needs; join
+the rest on GEOID), from the same zoom, then from later ones; the manifest
+records which. tylertoo reads lon/lat
+only: it gets a copy relabelled CRS84 (NAD83 is within 2 m of WGS84 in the
+conterminous US), the GeoParquet stays NAD83.
+
 Gates, before anything is written: every area of a geography is a TIGER
 2026 area (places excepted: places change every year, the unmatched ones
 are counted and left out of place_geo), and the populations add up block
@@ -46,6 +57,7 @@ Usage:
   python3 scripts/datasets/acs.py upstream
   python3 scripts/datasets/acs.py build --work-dir work --out-dir out/census
   python3 scripts/datasets/acs.py build ... --tiger out/census/tiger/2026   # local TIGER files
+  python3 scripts/datasets/acs.py tiles --out-dir out/census     # tile the _geo files there
 """
 
 from __future__ import annotations
@@ -63,6 +75,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets import pmtiles
 from datasets.census import BBOX, YEAR as TIGER_YEAR, check_crs, projjson, sha256, write_src
 from datasets.gaul import verify
 
@@ -88,6 +101,20 @@ GEOS = {
     "zcta520": ("860", "ZIP Code Tabulation Areas", "nationgeo/zcta520", "GEOID20", "ALAND20",
                 "AWATER20"),
 }
+# The first zoom of each geography's tiles: the TIGER/Line layer's (census.py
+# PRODUCTS), where no tile of its outlines goes over the size cap.
+TILE_ZOOMS = {"state": 0, "county": 0, "place": 6, "tract": 7, "bg": 9, "zcta520": 6}
+MAX_ZOOM = 12
+# What the tiles keep when every measure does not fit: the name, the key and
+# the measures a map is most often coloured by.
+TILE_KEY = ["GEOID", "NAME", "population", "median_household_income",
+            "median_household_income_moe", "poverty_rate"]
+# Then what the map's style needs, and the key to join the rest on: a map
+# that shows the areas from the TIGER layer's first zoom is worth more than
+# more properties from a later one.
+TILE_MIN = ["GEOID", "median_household_income"]
+# Later first zooms tried, after the geography's own.
+TILE_LATER = 2
 # The island areas TIGER covers and the ACS does not (it has Puerto Rico).
 ISLANDS = ("60", "66", "69", "78")
 # Known gaps in the published Summary File, by parent GEOID: the population
@@ -440,6 +467,68 @@ def write_geo(con, geo: str, tiger: str, dest: Path, crs: dict) -> dict:
     return entry
 
 
+def tile_geo(con, parquet: Path, geo: str) -> dict:
+    """The _geo file's PMTiles, down the ladder: every measure from the
+    TIGER layer's first zoom, then TILE_KEY, then TILE_MIN, from it and
+    from TILE_LATER later zooms. pmtiles.tile() fails when a tile goes over
+    the size cap; that failure moves to the next step."""
+    # A missing or wrong tylertoo exits too: fail on it here, not as "no
+    # tile setting fits" after every step of the ladder.
+    pmtiles.binary()
+    start = TILE_ZOOMS[geo]
+    cols = [c for c, *_ in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{parquet}')").fetchall()
+        if c not in ("geometry", "bbox")]
+    lonlat = parquet.with_suffix(".lonlat.parquet")
+    con.execute(f"""COPY (SELECT * EXCLUDE (geometry, bbox),
+                                 ST_SetCRS(geometry::GEOMETRY, 'OGC:CRS84') AS geometry
+                          FROM read_parquet('{parquet}')) TO '{lonlat}' (FORMAT PARQUET)""")
+    steps = [(cols, start)] + [(props, z) for z in range(start, start + TILE_LATER + 1)
+                               for props in (TILE_KEY, TILE_MIN)]
+    try:
+        for props, min_zoom in steps:
+            try:
+                entry = pmtiles.tile(lonlat, parquet.with_suffix(".pmtiles"), layer=f"acs_{geo}",
+                                     min_zoom=min_zoom, max_zoom=MAX_ZOOM, properties=props)
+            except SystemExit as e:
+                print(f"    tiles {geo}: {len(props)} properties from z{min_zoom}: {e}",
+                      flush=True)
+                continue
+            return {"name": parquet.stem, **entry, "all_properties": props is cols}
+        sys.exit(f"{parquet.name}: no tile setting fits the size cap")
+    finally:
+        lonlat.unlink(missing_ok=True)
+
+
+def tile_all(con, folder: Path, only: list[str] | None = None) -> list[dict]:
+    out = []
+    for geo in GEOS:
+        if only and geo not in only:
+            continue
+        t0 = time.monotonic()
+        e = tile_geo(con, folder / f"{geo}_geo.parquet", geo)
+        print(f"  {geo}: tiles z{e['min_zoom']}-{e['max_zoom']}, {e['bytes'] / 1e6:.1f} MB, "
+              f"{'every measure' if e['all_properties'] else ', '.join(e['properties'])}, "
+              f"{time.monotonic() - t0:.0f} s", flush=True)
+        out.append(e)
+    return out
+
+
+def tiles(out: Path, only: list[str] | None) -> None:
+    """Tile the _geo files already in out (a build's, or the published ones
+    copied down) and record the archives in their _manifest.json."""
+    folder = out / "acs" / YEAR
+    manifest_path = folder / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    made = {e["name"]: e for e in tile_all(con, folder, only)}
+    kept = [e for e in manifest.get("pmtiles", []) if e["name"] not in made]
+    order = [f"{g}_geo" for g in GEOS]
+    manifest["pmtiles"] = sorted(kept + list(made.values()), key=lambda e: order.index(e["name"]))
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
 def attribution(source: dict) -> str:
     return f"""\
 # Data attribution
@@ -474,8 +563,10 @@ top and bottom codes, documented per column.
 
 <geo>.parquet holds the measures alone, keyed by GEOID as TIGER/Line writes
 it. <geo>_geo.parquet joins them to the TIGER/Line {TIGER_YEAR} outline (NAD83,
-EPSG:4269), with a bbox covering and rows along a Hilbert curve. The
-estimates' sampling error is real: compare areas with their MOEs in mind.
+EPSG:4269), with a bbox covering and rows along a Hilbert curve, and
+<geo>_geo.pmtiles holds its vector tiles (tile layer acs_<geo>; the measures
+each keeps are in _manifest.json). The estimates' sampling error is real:
+compare areas with their MOEs in mind.
 
 This data is packaged and hosted by Geomermaids:
   https://geoparquet.geomermaids.com/
@@ -513,6 +604,7 @@ def build(work: Path, out: Path, tiger: str) -> None:
         print(f"  {geo}: {table['features']:,} rows, {table['bytes'] / 1e6:.1f} MB; with "
               f"outlines {geo_entry['features']:,} rows, {geo_entry['bytes'] / 1e6:.1f} MB, "
               f"{geo_entry['row_groups']} row groups, {time.monotonic() - t0:.0f} s", flush=True)
+    tile_entries = tile_all(con, folder)
     (folder / "ATTRIBUTION.txt").write_text(attribution(source))
     (folder / "_source.json").write_text(json.dumps(source, indent=2) + "\n")
     (folder / "_manifest.json").write_text(json.dumps({
@@ -527,6 +619,7 @@ def build(work: Path, out: Path, tiger: str) -> None:
         "columns": column_docs(shells),
         "gates": gates,
         "files": files_out,
+        "pmtiles": tile_entries,
     }, indent=2) + "\n")
 
 
@@ -534,13 +627,20 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("upstream", help="print each source's Last-Modified and a fingerprint")
-    b = sub.add_parser("build", help="fetch, gate and write the tables")
+    b = sub.add_parser("build", help="fetch, gate and write the tables and their tiles")
     b.add_argument("--work-dir", type=Path, default=Path("work"))
     b.add_argument("--out-dir", type=Path, required=True,
                    help="the census/ prefix, e.g. out/census")
     b.add_argument("--tiger", default=PUBLIC_TIGER,
                    help=f"the TIGER/Line {TIGER_YEAR} folder, URL or path (default: published)")
+    t = sub.add_parser("tiles", help="tile the _geo files in an out dir, update its manifest")
+    t.add_argument("--out-dir", type=Path, required=True,
+                   help="the census/ prefix holding acs/<year>/_manifest.json and the _geo files")
+    t.add_argument("--geo", action="append", choices=list(GEOS), help="only this geography")
     args = p.parse_args()
+    if args.cmd == "tiles":
+        tiles(args.out_dir, args.geo)
+        return
     if args.cmd == "upstream":
         print(json.dumps(upstream(), indent=2))
         return
