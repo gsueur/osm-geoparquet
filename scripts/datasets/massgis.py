@@ -898,7 +898,7 @@ def build(src: Path, work: Path, out: Path, *, public: str, only: list[str] | No
           + (f", {len(built)} already built here" if built else ""), flush=True)
     # A layer gone upstream is reported as failed: its published files stay,
     # and the run goes red until its row is removed from the CSV.
-    failed = {k: f"not in the bucket: {v}" for k, v in gone.items()}
+    failed = {k: f"not in the bucket: {v}" for k, v in gone.items() if not only or k in only}
     for r in todo:
         try:
             built[r["id"]] = build_layer(con, r, source[r["id"]], src, work, out, no_tiles)
