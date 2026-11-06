@@ -1,0 +1,172 @@
+# FEMA National Risk Index: parquetry:parquetry/nri/.
+#
+# One GeoParquet file per level (tracts, counties, states, tribal counties),
+# PMTiles for the tracts and counties, FEMA's hazard table and field
+# dictionary, under nri/v<version>/. scripts/datasets/nri.py documents the
+# layout and the gate.
+#
+# OpenFEMA puts the version in the file paths (.../nri/v120/...), so a new
+# release is a new path, not a changed file. A weekly run checks two things:
+#   - the pinned release's zips (Last-Modified and ETag) against the
+#     published nri/_source.json: FEMA correcting a file in place rebuilds;
+#   - the versions OpenFEMA's page links to: one newer than nri.py's VDIR
+#     fails the run, with the version to set. Taking it is a code change
+#     (VERSION, VDIR, then the dictionary may have new fields), not a
+#     silent rebuild. If the page cannot be read the run warns and goes on.
+#
+#   build    fetch, convert, gate, tile and verify, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog at /nri/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-nri
+
+on:
+  schedule:
+    - cron: "23 7 * * 4"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if no source has moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-nri
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/nri
+  PUBLIC: https://parquetry.geomermaids.com/nri
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place only on a FEMA correction: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  nri:
+    runs-on: ubuntu-24.04
+    # About 1.6 GB of zips; the laptop build takes 4 min, the tracts
+    # (85,154 polygons, 47 million vertices) most of it.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          uv run --project scripts python scripts/datasets/nri.py upstream > upstream.json
+          jq -c '{version, path, page_versions}' upstream.json
+          pinned=$(jq -r '.path' upstream.json)
+          newest=$(jq -r '.page_versions // [] | last // empty' upstream.json)
+          if [ -z "$newest" ]; then
+            echo "::warning::could not read the NRI versions from OpenFEMA's page; checking the pinned files only"
+          elif [ "${newest#v}" -gt "${pinned#v}" ]; then
+            echo "::error::OpenFEMA lists NRI $newest, nri.py builds $pinned: set VERSION and VDIR in scripts/datasets/nri.py"
+            exit 1
+          fi
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          now=$(jq -c '.files | map_values([.last_modified, .etag])' upstream.json)
+          was=$(echo "$live" | jq -c '.files // {} | map_values([.last_modified, .etag])')
+          echo "upstream $now"
+          echo "published $was"
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, convert, gate, tile and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nri.py build \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+          jq -c '.files[] | {name, features, gate}' "$WORK/out/v"*/_manifest.json
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "*.csv" \
+            --header-upload "$CACHE" --header-upload "Content-Type: text/csv; charset=utf-8"
+          rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          v=$(jq -r '.version' upstream.json)
+          for f in index.json _source.json v$v/_manifest.json v$v/ATTRIBUTION.txt \
+                   v$v/NRIDataDictionary.csv v$v/hazards.parquet v$v/tracts.parquet \
+                   v$v/counties.parquet v$v/states.parquet v$v/tribal_counties.parquet \
+                   v$v/tracts.pmtiles v$v/counties.pmtiles; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/v$v/tracts.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/nri_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/tracts/collection.json \
+                   catalog/tracts/styles/default.json catalog/counties/collection.json \
+                   catalog/states/collection.json catalog/tribal_counties/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
