@@ -24,6 +24,15 @@ git -C "$work" init -q
 git -C "$work" fetch -q --depth 1 "$BROWSER_REPO" "$BROWSER_SHA"
 git -C "$work" checkout -q FETCH_HEAD
 
+# Fixes not in the pinned commit yet, each sent upstream; drop a patch once
+# BROWSER_SHA includes it. git apply refuses a patch that no longer fits.
+#   0001: the data preview sent one range request per column chunk, all at
+#   once, and Cloudflare answered part of the burst with 503 (shown as a
+#   cross-origin error); at most 16 in flight now, table capped at 1,000 rows.
+for p in "$here"/patches/*.patch; do
+  git -C "$work" apply "$p" || { echo "build.sh: $(basename "$p") does not apply" >&2; exit 1; }
+done
+
 # The accent colour is a compile-time SCSS variable, not an option.
 sed -i.bak -E "s/^\\\$primary:[[:space:]]+#[0-9a-fA-F]+;/\$primary:   $ACCENT;/" \
   "$work/src/theme/variables.scss"
