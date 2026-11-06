@@ -271,6 +271,13 @@ def write_layer(con, gpkg: Path, layer: str, dest: Path, crs: dict) -> dict:
         SELECT *, {BBOX} FROM (
             SELECT * EXCLUDE (shape), ST_SetCRS(ST_Force2D(shape), '{CRS}') AS geometry
             FROM ST_Read('{gpkg}', layer = '{layer}'))""")
+    return write_src(con, dest, crs)
+
+
+def write_src(con, dest: Path, crs: dict) -> dict:
+    """The temp table `src` (a NAD83 `geometry` and its `bbox`) to
+    GeoParquet 2.0: Hilbert order, then row groups capped by bytes. acs.py
+    writes its tables joined to TIGER geometry through it too."""
     xmin, ymin, xmax, ymax, types, n = con.execute("""
         SELECT min(ST_XMin(geometry)), min(ST_YMin(geometry)), max(ST_XMax(geometry)),
                max(ST_YMax(geometry)), list(DISTINCT ST_GeometryType(geometry)::VARCHAR), count(*)
