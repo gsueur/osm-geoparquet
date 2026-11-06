@@ -155,7 +155,9 @@ column as Natural Earth publishes it, lon/lat. `natural_earth_layers.csv`
 lists the layers, one row each. The build checks each layer's row count and
 columns against its shapefile and refuses a zip newer than v5.1.2; the few
 invalid polygons are repaired with ST_MakeValid and counted in
-`_manifest.json`. Each scale also has one PMTiles world basemap
+`_manifest.json`. Each file has its own PMTiles archive beside it
+(`<scale>/<layer>.pmtiles`, tile layer `<layer>`, every column when the tiles
+fit the size cap, else the naming columns). Each scale also has one PMTiles world basemap
 (`<scale>/basemap.pmtiles`, every layer in one tile layer `ne`, told apart
 by `ne_layer`, clipped to the Web Mercator band) and a MapLibre style over
 it (`<scale>/basemap-style.json`). Public domain. Portolan catalog at
