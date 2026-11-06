@@ -241,7 +241,10 @@ def census_collection(code: str, layer: str, title: str, entry: dict, gate: dict
     path = f"{CENSUS_PATH}/{entry['file']}"
     tiger = gate.get("tiger")
     join = (f" Its GEOID joins census/tiger/{YEAR} `{tiger['file'].rsplit('/', 2)[-2]}/"
-            f"{code}.parquet` on `{tiger['key']}`: every row here is there"
+            f"{code}.parquet` on `{tiger['key']}`: "
+            + ("every row here is there (the build fails otherwise)"
+               if not tiger["gazetteer_not_in_tiger"] else
+               f"{tiger['gazetteer_not_in_tiger']:,} rows here are not there")
             + (f"; {tiger['tiger_not_in_gazetteer']:,} TIGER areas are not here (the Gazetteer "
                "leaves out the island areas and a few others)."
                if tiger["tiger_not_in_gazetteer"] else ".")

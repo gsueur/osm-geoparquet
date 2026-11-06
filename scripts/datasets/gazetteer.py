@@ -209,8 +209,9 @@ def census_table(con, layer: str, zip_path: Path, work: Path) -> int:
 
 
 def census_gate(con, layer: str, dest: Path, rows: int) -> dict:
-    """Rows equal the source's, GEOID unique, points in range; the GEOIDs
-    against the TIGER/Line layer on parquetry, counted both ways."""
+    """Rows equal the source's, GEOID unique, points in range, and every
+    GEOID in the TIGER/Line layer on parquetry. TIGER areas missing here are
+    counted, not fatal: the Gazetteer leaves out the island areas."""
     data = f"read_parquet('{dest}')"
     n, ids, bad = con.execute(f"""
         SELECT count(*), count(DISTINCT GEOID),
@@ -236,6 +237,9 @@ def census_gate(con, layer: str, dest: Path, rows: int) -> dict:
                         (SELECT 1 FROM {t} t WHERE t.{key} = g.GEOID)),
                    (SELECT count(*) FROM {t} t WHERE NOT EXISTS
                         (SELECT 1 FROM {data} g WHERE g.GEOID = t.{key}))""").fetchone()
+        if not_in_tiger:
+            sys.exit(f"census/{layer}: {not_in_tiger:,} GEOIDs not in census/tiger/{YEAR}/"
+                     f"{path}.parquet ({key}): the file would not join TIGER/Line")
         out["tiger"] = {"file": f"census/tiger/{YEAR}/{path}.parquet", "key": key,
                         "gazetteer_not_in_tiger": not_in_tiger,
                         "tiger_not_in_gazetteer": not_in_gaz}

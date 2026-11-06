@@ -134,6 +134,18 @@ jobs:
           rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
             --filter "+ snapshots.json" --filter "+ _source.json" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # A country GeoNames no longer lists keeps no stale file: remove the
+          # country=<CC>/ directories the new manifest does not name.
+          m="$out/geonames/latest/_manifest.json"
+          if [ -f "$m" ]; then
+            jq -r '.partitions.entries[].country' "$m" | sort > want.txt
+            rclone lsf "$REMOTE/geonames/latest/" --dirs-only \
+              | sed -n 's|^country=\(.*\)/$|\1|p' | sort > have.txt
+            for cc in $(comm -13 want.txt have.txt); do
+              echo "stale country=$cc"
+              rclone purge "$REMOTE/geonames/latest/country=$cc"
+            done
+          fi
 
       - name: Check what is live
         if: steps.check.outputs.parts != '' && env.PUBLISH == 'true'
@@ -158,7 +170,11 @@ jobs:
       - name: STAC catalog, published
         if: (steps.check.outputs.parts != '' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
         run: |
-          uv run --project scripts python scripts/datasets/gazetteer_catalog.py publish --remote "$REMOTE"
+          # From the files just built when there are some (the CDN may still
+          # serve last week's bytes for an hour); a part not rebuilt, and a
+          # catalog-only run, read the published files.
+          uv run --project scripts python scripts/datasets/gazetteer_catalog.py publish \
+            --remote "$REMOTE" ${WORK:+--out-dir "$WORK/out"}
           for f in catalog/catalog.json catalog/census-2026/catalog.json \
                    catalog/census-2026/census-2026-place/collection.json \
                    catalog/geonames/catalog.json catalog/geonames/geonames/collection.json \
