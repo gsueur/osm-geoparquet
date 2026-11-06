@@ -8,10 +8,10 @@ Render, validate and publish the Portolan catalog for Natural Earth.
 
 natural_earth.py's manifest drives it (counts, sizes, checksums, sources,
 repairs, the archives). Each collection has the layer's GeoParquet (`data`),
-the scale's PMTiles registered as formats.md asks (a `rel: pmtiles` link with
-`pmtiles:layers`, web-map-links v1.3.0, and the file as a `visual` asset),
-a MapLibre style showing the layer alone, the scale's basemap style, and a
-thumbnail. The thumbnails are committed under catalog/thumbnails/natural-earth/
+the layer's own PMTiles registered as formats.md asks (a `rel: pmtiles` link
+with `pmtiles:layers`, web-map-links v1.3.0, and the file as a `visual`
+asset), a default MapLibre style over it, the scale's basemap archive and
+its style as further assets, and a thumbnail. The thumbnails are committed under catalog/thumbnails/natural-earth/
 (the release is static) and rendered by the `thumbnails` command.
 Spec: portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
 
@@ -175,12 +175,11 @@ def lonlat_extent(con, source: str, entry: dict) -> list[float]:
 
 # ---------- styles ----------
 
-def layer_style(entry: dict, tiles: dict) -> dict:
-    """The layer alone over the scale's archive, filtered on `ne_layer`."""
+def layer_style(entry: dict) -> dict:
+    """The layer over its own archive, tile layer named after the layer."""
     layer, color = entry["layer"], COLORS[entry["layer"]]
     types = set(entry["geometry_types"])
-    src = {"source": "ne", "source-layer": TILE_LAYER,
-           "filter": ["==", ["get", LAYER_PROP], layer]}
+    src = {"source": "ne", "source-layer": entry["pmtiles"]["layer"]}
     out = []
     if types & {"Polygon", "MultiPolygon"}:
         out += [
@@ -202,7 +201,7 @@ def layer_style(entry: dict, tiles: dict) -> dict:
     return {
         "version": 8, "name": f"{entry['title']} ({entry['scale']})",
         "sources": {"ne": {"type": "vector",
-                           "url": f"pmtiles://{PUBLIC}/{tiles['path']}",
+                           "url": f"pmtiles://{PUBLIC}/{entry['pmtiles']['path']}",
                            "attribution": CREDIT}},
         "layers": out,
     }
@@ -218,6 +217,11 @@ def build_collection(entry: dict, tiles: dict, extent: list[float],
                      columns: list[tuple[str, str]], updated: str) -> dict:
     scale, title = entry["scale"], f"{entry['title']} ({entry['scale']})"
     path = f"{DATASET_PREFIX}/v{VERSION}/{entry['file']}"
+    own = entry["pmtiles"]
+    own_path = f"{DATASET_PREFIX}/v{VERSION}/{own['path']}"
+    own_props = ("every column" if own["all_properties"] else
+                 "the naming columns (" + ", ".join(f"`{c}`" for c in own["properties"]) +
+                 "): with every column, tiles went over the size cap")
     tiles_path = f"{DATASET_PREFIX}/v{VERSION}/{tiles['path']}"
     style_path = f"{DATASET_PREFIX}/v{VERSION}/{tiles['style']['file']}"
     nulls = (f" {entry['null_geometries']} row without geometry is kept." if
@@ -262,6 +266,25 @@ def build_collection(entry: dict, tiles: dict, extent: list[float],
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
             "pmtiles": {
+                "href": f"{PUBLIC_BASE}/{own_path}",
+                "type": PMTILES_TYPE,
+                "title": f"{title}, vector tiles",
+                "description": f"This layer alone in one PMTiles archive, tile layer "
+                               f"`{own['layer']}`, zoom {own['min_zoom']} to "
+                               f"{own['max_zoom']}, {own['tiles']:,} tiles, {own_props}. "
+                               f"Clipped to the Web Mercator band"
+                               + (f", which leaves out {own['outside_web_mercator']} row(s) "
+                                  f"wholly outside it" if own.get("outside_web_mercator")
+                                  else "")
+                               + f". Built with tylertoo "
+                               f"{own['tylertoo']}.",
+                "roles": ["visual"],
+                "file:size": own["bytes"],
+                "file:checksum": "1220" + own["sha256"],
+                "alternate": {"s3": {"href": f"s3://{BUCKET}/{own_path}",
+                                     "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+            },
+            "pmtiles-basemap": {
                 "href": f"{PUBLIC_BASE}/{tiles_path}",
                 "type": PMTILES_TYPE,
                 "title": f"Natural Earth {scale} basemap, vector tiles",
@@ -278,7 +301,8 @@ def build_collection(entry: dict, tiles: dict, extent: list[float],
                                      "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
             },
             "style": {"href": "./styles/default.json", "type": STYLE_TYPE,
-                      "title": "This layer alone", "roles": ["style", "default"]},
+                      "title": "This layer, over its own archive",
+                      "roles": ["style", "default"]},
             "style-basemap": {
                 "href": f"{PUBLIC_BASE}/{style_path}", "type": STYLE_TYPE,
                 "title": f"The {scale} world basemap: water, land, boundaries, rivers, places",
@@ -298,9 +322,8 @@ def build_collection(entry: dict, tiles: dict, extent: list[float],
             VIA_LINK,
             {"rel": "derived_from", "href": entry["source"]["url"], "type": "application/zip",
              "title": f"The Natural Earth zip this layer was converted from"},
-            {"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{tiles_path}", "type": PMTILES_TYPE,
-             "title": f"Natural Earth {scale} basemap, vector tiles",
-             "pmtiles:layers": [TILE_LAYER]},
+            {"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{own_path}", "type": PMTILES_TYPE,
+             "title": f"{title}, vector tiles", "pmtiles:layers": [own["layer"]]},
             {"rel": "related", "href": f"{PUBLIC}/ATTRIBUTION.txt", "type": "text/plain",
              "title": "Attribution, source and what was changed"},
         ],
@@ -315,9 +338,9 @@ def build_scale(scale: str, collections: list[dict], tiles: dict, updated: str) 
         "id": f"natural-earth-{scale}",
         "title": f"Natural Earth {VERSION}, {scale} ({SCALES[scale]})",
         "description": (
-            f"Natural Earth at {SCALES[scale]}: {len(collections)} layers, one collection each, "
-            f"and one PMTiles basemap of them all (zoom {tiles['min_zoom']} to "
-            f"{tiles['max_zoom']}). Public domain; {CREDIT}."),
+            f"Natural Earth at {SCALES[scale]}: {len(collections)} layers, one collection each "
+            f"with its own PMTiles archive, and one PMTiles basemap of them all (zoom "
+            f"{tiles['min_zoom']} to {tiles['max_zoom']}). Public domain; {CREDIT}."),
         "updated": updated,
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
@@ -343,8 +366,8 @@ def build_root(scales: list[dict], total: int, updated: str) -> dict:
             f"PMTiles: countries, states and provinces, populated places, urban areas, "
             f"airports, ports, time zones, coastline, land, ocean, rivers, lakes and "
             f"graticules at 1:10m, 1:50m and 1:110m. {total} collections in {len(scales)} "
-            f"scales, every column unchanged, lon/lat, and one PMTiles world basemap per "
-            f"scale. {CREDIT}."),
+            f"scales, every column unchanged, lon/lat, a PMTiles archive per layer and one "
+            f"PMTiles world basemap per scale. {CREDIT}."),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
@@ -439,7 +462,8 @@ def collection_readme(col: dict, entry: dict, tiles: dict) -> str:
 | File | `{entry['file']}`, {entry['bytes'] / 1e6:,.2f} MB, sha256 `{entry['sha256'][:12]}...` |
 | Rows | {entry['features']:,} |
 | Geometry | {', '.join(entry['geometry_types'])}, lon/lat (OGC:CRS84) |
-| Map tiles | `{tiles['path']}`, {tiles['bytes'] / 1e6:,.1f} MB, zoom {tiles['min_zoom']} to {tiles['max_zoom']}, filter `{LAYER_PROP}` = `{entry['layer']}` |
+| Map tiles | `{entry['pmtiles']['path']}`, {entry['pmtiles']['bytes'] / 1e6:,.2f} MB, zoom {entry['pmtiles']['min_zoom']} to {entry['pmtiles']['max_zoom']}, tile layer `{entry['pmtiles']['layer']}`, {'every column' if entry['pmtiles']['all_properties'] else 'the naming columns'} |
+| Basemap | `{tiles['path']}`, every layer of the scale, zoom {tiles['min_zoom']} to {tiles['max_zoom']}, filter `{LAYER_PROP}` = `{entry['layer']}` |
 | Source | `{entry['source']['url']}`, Natural Earth {entry['source']['ne_version']} |
 {notes_md(entry)}
 ## Access
@@ -537,8 +561,9 @@ def root_readme(root: dict, scales: list[dict], manifest: dict) -> str:
 
 {listing}
 
-Files: `{PUBLIC}/<scale>/<layer>.parquet`, and `<scale>/basemap.pmtiles` with
-its style `<scale>/basemap-style.json`. {manifest['total_features']:,} rows in all.
+Files: `{PUBLIC}/<scale>/<layer>.parquet`, its tiles `<scale>/<layer>.pmtiles`
+(tile layer `<layer>`), and `<scale>/basemap.pmtiles` with its style
+`<scale>/basemap-style.json`. {manifest['total_features']:,} rows in all.
 Which scale: 110m for a world view, 50m for a continent, 10m for a country.
 
 ## License
@@ -578,6 +603,8 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     for e in manifest["files"]:
         if e["scale"] not in tiles:
             sys.exit(f"no PMTiles for scale {e['scale']} in the manifest")
+        if not e.get("pmtiles"):
+            sys.exit(f"no PMTiles for {e['name']} in the manifest: rebuild with tiles")
         if not (THUMBS / f"{e['scale']}_{e['layer']}.png").is_file():
             sys.exit(f"missing thumbnail {THUMBS}/{e['scale']}_{e['layer']}.png: "
                      f"run the thumbnails command")
@@ -601,7 +628,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
             col = build_collection(e, tiles[scale], lonlat_extent(con, source, e),
                                    footer(con, source), updated)
             cdir = sdir / col["id"]
-            write_json(cdir / "styles" / "default.json", layer_style(e, tiles[scale]))
+            write_json(cdir / "styles" / "default.json", layer_style(e))
             shutil.copyfile(THUMBS / f"{scale}_{e['layer']}.png", cdir / "thumbnail.png")
             for key in ("style", "thumbnail"):
                 asset = col["assets"][key]

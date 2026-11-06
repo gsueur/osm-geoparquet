@@ -6,7 +6,8 @@
 # build fetches the 32 zips from naciscdn.org (62 MB), refuses a zip newer
 # than v5.1.2, checks each layer's row count and columns against its
 # shapefile, repairs the few invalid polygons, verifies every file's footer,
-# bbox and row groups, and tiles one PMTiles basemap per scale. A failure
+# bbox and row groups, and tiles one PMTiles archive per file and one
+# PMTiles basemap per scale. A failure
 # there fails the job with nothing published.
 #
 #   build    convert, tile, verify and render the catalog, upload nothing
@@ -138,6 +139,7 @@ jobs:
           for f in $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
                    $VERSION/10m/admin_0_countries.parquet $VERSION/50m/land.parquet \
                    $VERSION/110m/populated_places.parquet $VERSION/10m/basemap.pmtiles \
+                   $VERSION/10m/admin_0_countries.pmtiles $VERSION/110m/land.pmtiles \
                    $VERSION/110m/basemap-style.json \
                    catalog/catalog.json catalog/10m/catalog.json \
                    catalog/10m/ne_10m_admin_0_countries/collection.json \

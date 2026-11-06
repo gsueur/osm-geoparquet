@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Natural Earth v5.1.2 as GeoParquet, with one PMTiles world basemap per scale.
+Natural Earth v5.1.2 as GeoParquet, one PMTiles archive per file, and one
+PMTiles world basemap per scale.
 
 Natural Earth (naturalearthdata.com) is the public domain world dataset at
 three scales: 1:10m, 1:50m and 1:110m. It ships one zipped shapefile per
@@ -8,6 +9,7 @@ layer and scale on naciscdn.org. This writes each listed layer as one
 GeoParquet file:
 
   <out>/<scale>/<layer>.parquet        e.g. 10m/admin_0_countries.parquet
+  <out>/<scale>/<layer>.pmtiles        that layer alone, tile layer <layer>
   <out>/<scale>/basemap.pmtiles        every layer of the scale, one tile layer
   <out>/<scale>/basemap-style.json     a MapLibre style over it
   <out>/_manifest.json                 counts, sizes, sha256, sources, repairs
@@ -36,11 +38,16 @@ the polygonal part, and each repair is counted in the manifest. A row
 without geometry (the Loire in the 50m rivers) is kept, so the row count
 stays the shapefile's, and is left out of the tiles.
 
-The tiles: tylertoo writes one layer per archive, so each scale's archive
-holds every layer of the scale in one tile layer, `ne`, with an `ne_layer`
-property naming the file a feature comes from, and a few properties a map
-styles and labels by. A style filters on `ne_layer`. The tiles are clipped
-to the Web Mercator band (85.0511 degrees); the GeoParquet is not.
+The tiles. Each GeoParquet file has its own archive, one tile layer named
+after the layer, with every column when the tiles fit the size cap, else
+the naming columns (TILE_PROPS), else from a later minimum zoom:
+layer_tiles() steps down that ladder and the manifest records where it
+stopped. The 10m archives try zoom 0 first: alone, a layer may fit there.
+tylertoo writes one layer per archive, so each scale also has a basemap
+archive holding every layer of the scale in one tile layer, `ne`, with an
+`ne_layer` property naming the file a feature comes from, and the
+TILE_PROPS. A style over it filters on `ne_layer`. All tiles are clipped to
+the Web Mercator band (85.0511 degrees); the GeoParquet is not.
 
 Usage:
   python3 scripts/datasets/natural_earth.py upstream
@@ -294,6 +301,16 @@ TILE_PROPS = {"name": "VARCHAR", "featurecla": "VARCHAR", "scalerank": "DOUBLE",
               "min_zoom": "DOUBLE", "pop_max": "BIGINT", "adm0_a3": "VARCHAR"}
 
 
+def merc_geom(col: str = "geometry") -> str:
+    """The geometry clipped to the Web Mercator band. tylertoo drops a whole
+    feature with a vertex past 90 degrees (the ocean and the 110m land reach
+    90.0000000000006), which left the 10m archive without an ocean. The
+    tiles only; the GeoParquet keeps Natural Earth's geometry."""
+    return (f"CASE WHEN ST_YMax({col}) > {MERC_LAT} OR ST_YMin({col}) < -{MERC_LAT} "
+            f"THEN ST_Intersection({col}, ST_MakeEnvelope(-180, -{MERC_LAT}, 180, "
+            f"{MERC_LAT})) ELSE {col} END")
+
+
 def basemap_input(con, scale: str, rows: list[dict], out_dir: Path, dest: Path) -> None:
     """One GeoParquet with every layer of the scale, a `layer` column and the
     TILE_PROPS: the input of the scale's archive. Smallest layers last, so a
@@ -310,17 +327,61 @@ def basemap_input(con, scale: str, rows: list[dict], out_dir: Path, dest: Path) 
         cols = ", ".join(
             f'TRY_CAST("{have[p]}" AS {t}) AS {p}' if p in have else f"NULL::{t} AS {p}"
             for p, t in TILE_PROPS.items())
-        # Clipped to the Web Mercator band: tylertoo drops a whole feature
-        # with a vertex past 90 degrees (the ocean and the 110m land reach
-        # 90.0000000000006), which left the 10m archive without an ocean.
-        # The tiles only; the GeoParquet keeps Natural Earth's geometry.
-        geom = (f"CASE WHEN ST_YMax(geometry) > {MERC_LAT} OR ST_YMin(geometry) < -{MERC_LAT} "
-                f"THEN ST_Intersection(geometry, ST_MakeEnvelope(-180, -{MERC_LAT}, 180, "
-                f"{MERC_LAT})) ELSE geometry END")
-        parts.append(f"SELECT '{r['layer']}' AS {LAYER_PROP}, {cols}, {geom} AS geometry "
+        parts.append(f"SELECT '{r['layer']}' AS {LAYER_PROP}, {cols}, {merc_geom()} AS geometry "
                      f"FROM read_parquet('{f}') WHERE geometry IS NOT NULL")
     con.execute(f"COPY (SELECT * FROM ({' UNION ALL '.join(parts)}) WHERE NOT ST_IsEmpty(geometry)) "
                 f"TO '{dest}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+
+
+# ---------- one archive per file ----------
+
+def layer_input(con, src: Path, dest: Path) -> tuple[int, int, list[str]]:
+    """The layer's rows with geometry, every column but the bbox covering,
+    the geometry clipped to the Web Mercator band. Returns the rows kept,
+    the rows wholly outside the band (Amundsen-Scott South Pole Station in
+    the 10m and 50m populated places: Web Mercator cannot show it) and the
+    layer's own spelling of the TILE_PROPS it has."""
+    cols = [c for (c, *_) in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{src}')").fetchall()
+        if c not in ("geometry", "bbox")]
+    attrs = ", ".join(f'"{c}"' for c in cols)
+    con.execute(f"COPY (SELECT * FROM (SELECT {attrs}, {merc_geom()} AS geometry "
+                f"FROM read_parquet('{src}') WHERE geometry IS NOT NULL) "
+                f"WHERE NOT ST_IsEmpty(geometry)) TO '{dest}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    (kept,) = con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()
+    (with_geom,) = con.execute(
+        f"SELECT count(*) FROM read_parquet('{src}') WHERE geometry IS NOT NULL").fetchone()
+    have = {c.lower(): c for c in cols}
+    return kept, with_geom - kept, [have[p] for p in TILE_PROPS if p in have]
+
+
+def layer_tiles(con, row: dict, out_dir: Path, work: Path) -> dict:
+    """The layer's own archive, beside its GeoParquet. Every column if the
+    tiles fit the size cap, else the naming columns, else from one zoom
+    later, up to the scale's maximum zoom: the first rung that fits wins
+    and the manifest records it. pmtiles.tile() fails a rung whose tiles
+    went over the cap."""
+    scale, layer = row["scale"], row["layer"]
+    lo, hi = ZOOMS[scale]
+    inp = work / f"tiles-{scale}-{layer}.parquet"
+    kept, outside, naming = layer_input(con, out_dir / f"{row['id']}.parquet", inp)
+    rungs = [(0, None)] if lo > 0 else []
+    for z in range(lo, hi + 1):
+        rungs += [(z, None), (z, naming)]
+    dest = out_dir / scale / f"{layer}.pmtiles"
+    tried = []
+    for z, props in rungs:
+        try:
+            t = pmtiles.tile(inp, dest, layer=layer, min_zoom=z, max_zoom=hi, properties=props)
+        except SystemExit as e:
+            tried.append(f"z{z} {'all columns' if props is None else 'naming columns'}: {e}")
+            continue
+        inp.unlink()
+        return {**t, "path": f"{scale}/{layer}.pmtiles", "features": kept,
+                "outside_web_mercator": outside, "all_properties": props is None,
+                **({"fallbacks": tried} if tried else {})}
+    inp.unlink()
+    sys.exit(f"{row['id']}: no tile setting fits the size cap: {tried}")
 
 
 def basemap_style(scale: str, layer_names: set[str], tiles: dict) -> dict:
@@ -433,6 +494,14 @@ def build(src: Path, work: Path, out: Path, *, no_tiles: bool) -> None:
 
     tiles = []
     if not no_tiles:
+        for r, e in zip(rows, entries):
+            t = layer_tiles(con, r, out, work)
+            e["pmtiles"] = t
+            print(f"  {r['scale']}/{r['layer']}.pmtiles: z{t['min_zoom']}-{t['max_zoom']}, "
+                  f"{t['tiles']:,} tiles, {t['bytes'] / 1e6:.2f} MB"
+                  + ("" if t["all_properties"] else ", naming columns")
+                  + (f" ({len(t['fallbacks'])} rung(s) over the cap)" if "fallbacks" in t else ""),
+                  flush=True)
         for scale in SCALES:
             srows = [r for r in rows if r["scale"] == scale]
             if not srows:
