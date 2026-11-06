@@ -5,8 +5,17 @@
 # dictionary, under nri/v<version>/. scripts/datasets/nri.py documents the
 # layout and the gate.
 #
+# www.fema.gov answers GitHub's runners with an error (it serves the same
+# URLs to a workstation), so the build and the publish run on a workstation:
+# scripts/datasets/nri_publish_local.sh. NRI is released about once a year.
+# On Actions only the catalog stage is useful; it reads what is published and
+# never calls fema.gov. The build and publish stages are kept for the day
+# fema.gov serves runners again; their upstream check is what the local
+# script runs first.
+#
 # OpenFEMA puts the version in the file paths (.../nri/v120/...), so a new
-# release is a new path, not a changed file. A weekly run checks two things:
+# release is a new path, not a changed file. The upstream check looks at two
+# things:
 #   - the pinned release's zips (Last-Modified and ETag) against the
 #     published nri/_source.json: FEMA correcting a file in place rebuilds;
 #   - the versions OpenFEMA's page links to: one newer than nri.py's VDIR
@@ -15,7 +24,7 @@
 #     silent rebuild. If the page cannot be read the run warns and goes on.
 #
 #   build    fetch, convert, gate, tile and verify, upload nothing
-#   publish  the same, then upload (a scheduled run publishes), then the
+#   publish  the same, then upload, then the
 #            Portolan catalog at /nri/catalog/
 #   catalog  only the catalog, rendered from the files already published
 #
@@ -24,15 +33,13 @@
 name: dataset-nri
 
 on:
-  schedule:
-    - cron: "23 7 * * 4"
   workflow_dispatch:
     inputs:
       stage:
         description: "build writes and verifies; publish also uploads; catalog only the catalog"
         type: choice
         options: [build, publish, catalog]
-        default: build
+        default: catalog
       force:
         description: "Rebuild even if no source has moved"
         type: boolean
@@ -45,7 +52,7 @@ concurrency:
 env:
   REMOTE: parquetry:parquetry/nri
   PUBLIC: https://parquetry.geomermaids.com/nri
-  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  PUBLISH: ${{ inputs.stage == 'publish' }}
   CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
   LC_ALL: C.UTF-8
   RCLONE_CONFIG_PARQUETRY_TYPE: s3
