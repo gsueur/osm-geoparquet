@@ -1,0 +1,228 @@
+diff --git a/src/components/ParquetTable.vue b/src/components/ParquetTable.vue
+index 843daf2..3f7bb8a 100644
+--- a/src/components/ParquetTable.vue
++++ b/src/components/ParquetTable.vue
+@@ -116,7 +116,7 @@
+ 
+ <script>
+ // The most rows to put in the DOM at once. The loader caps what it decodes
+-// (MAX_ROWS, 10k), but rendering even that many at once is fatal on a wide
++// (MAX_ROWS), but rendering every loaded row at once is fatal on a wide
+ // table: 10k rows × ~140 columns is over a million table cells, which freezes
+ // the tab and grows the heap into the gigabytes long after the data itself (a
+ // few hundred MB) decoded fine. Filtering and sorting still work across
+diff --git a/src/utils/parquet.js b/src/utils/parquet.js
+index 2887260..a6e0b97 100644
+--- a/src/utils/parquet.js
++++ b/src/utils/parquet.js
+@@ -285,10 +285,77 @@ export function bboxFromWkb(buffer) {
+   }
+ }
+ 
++// hyparquet requests the column chunks it reads all at once, and when the
++// caller names the columns (as the table preview does) it fetches each chunk
++// on its own instead of one range per row group. On a wide file (hundreds of
++// columns, many row groups) that is thousands of parallel requests for a few
++// hundred bytes each; a CDN answers part of such a burst with 503 before the
++// origin, without CORS headers, and the browser reports a network or
++// cross-origin error. This wrapper keeps MAX_CONCURRENT_RANGES requests in
++// flight and merges queued ranges that follow each other in the file (gaps
++// up to MAX_RANGE_GAP, merged ranges up to MAX_MERGED_RANGE) into one fetch.
++export const MAX_CONCURRENT_RANGES = 16;
++export const MAX_RANGE_GAP = 64 * 1024;
++export const MAX_MERGED_RANGE = 8 * 1024 * 1024;
++
++export function limitConcurrency(file, {
++  max = MAX_CONCURRENT_RANGES, gap = MAX_RANGE_GAP, maxMerged = MAX_MERGED_RANGE,
++} = {}) {
++  let active = 0;
++  const queue = [];
++  const next = () => {
++    if (active >= max || queue.length === 0) {return;}
++    active++;
++    // The head, then the queued ranges right after it in file order.
++    const batch = [queue.shift()];
++    let from = batch[0].start;
++    let to = batch[0].end;
++    while (queue.length > 0) {
++      const r = queue[0];
++      if (r.start < from || r.start > to + gap || Math.max(to, r.end) - from > maxMerged) {break;}
++      batch.push(queue.shift());
++      to = Math.max(to, r.end);
++    }
++    Promise.resolve()
++      .then(() => file.slice(from, to))
++      .then(buffer => {
++        for (const r of batch) {r.resolve(buffer.slice(r.start - from, r.end - from));}
++      }, err => {
++        for (const r of batch) {r.reject(err);}
++      })
++      .finally(() => {
++        active--;
++        next();
++      });
++  };
++  // Start fetching one microtask later, once hyparquet has queued every range
++  // of its read, so that the first ones can be merged too.
++  let scheduled = false;
++  const schedule = () => {
++    if (scheduled) {return;}
++    scheduled = true;
++    queueMicrotask(() => {
++      scheduled = false;
++      for (let free = max - active; free > 0 && queue.length > 0; free--) {next();}
++    });
++  };
++  return {
++    byteLength: file.byteLength,
++    slice(start, end = file.byteLength) {
++      return new Promise((resolve, reject) => {
++        queue.push({ start, end, resolve, reject });
++        schedule();
++      });
++    },
++  };
++}
++
+ export async function loadParquetMetadata(url, { signal } = {}) {
+   // hyparquet spreads `requestInit` into both its byte-length probe and every
+   // ranged fetch, so an AbortSignal here cancels the whole download.
+-  const file = await asyncBufferFromUrl(signal ? { url, requestInit: { signal } } : { url });
++  const file = limitConcurrency(
++    await asyncBufferFromUrl(signal ? { url, requestInit: { signal } } : { url })
++  );
+   const metadata = await parquetMetadataAsync(file);
+   const schema = parquetSchema(metadata);
+   const columnNames = schema.children.map(e => e.element.name);
+diff --git a/src/utils/parquetShared.js b/src/utils/parquetShared.js
+index 23819c5..4f4ca40 100644
+--- a/src/utils/parquetShared.js
++++ b/src/utils/parquetShared.js
+@@ -9,14 +9,15 @@ export const PARQUET_MEDIA_TYPES = [
+   'application/x-parquet',
+ ];
+ 
+-// Row cap for the table preview in ParquetViewer.
+-export const MAX_ROWS = 10000;
++// Row cap for the table preview in ParquetViewer: ten pages of the table.
++// The table reads every column, so on a wide file each row costs far more
++// than on the map, which reads only the geometry and the styled fields.
++export const MAX_ROWS = 1000;
+ 
+ // Feature-count cap for rendering a GeoParquet directly on the map. Beyond
+ // this the whole-file download and main-thread decode get expensive; MapLibre
+-// handles the rendering itself fine (geojson-vt tiles client-side). Defined
+-// as MAX_ROWS so the table preview and map share one limit.
+-export const MAX_MAP_FEATURES = MAX_ROWS;
++// handles the rendering itself fine (geojson-vt tiles client-side).
++export const MAX_MAP_FEATURES = 10000;
+ 
+ // Byte cap for rendering GeoParquet directly: files this large are too
+ // expensive to download and decode on the main thread even if their row
+diff --git a/tests/unit/parquetConcurrency.spec.js b/tests/unit/parquetConcurrency.spec.js
+new file mode 100644
+index 0000000..67a42b8
+--- /dev/null
++++ b/tests/unit/parquetConcurrency.spec.js
+@@ -0,0 +1,101 @@
++import { describe, expect, it } from 'vitest';
++import { limitConcurrency, MAX_CONCURRENT_RANGES } from '../../src/utils/parquet';
++
++// A fake AsyncBuffer over bytes 0..n-1 (byte i holds i % 256) whose slices
++// resolve only when released, recording each fetch and how many are in
++// flight at once.
++function fakeFile(n = 100000) {
++  const pending = [];
++  const fetches = [];
++  const state = { active: 0, peak: 0 };
++  const file = {
++    byteLength: n,
++    slice(start, end) {
++      fetches.push([start, end]);
++      state.active++;
++      state.peak = Math.max(state.peak, state.active);
++      return new Promise(resolve => {
++        pending.push(() => {
++          state.active--;
++          resolve(Uint8Array.from({ length: end - start }, (_, i) => (start + i) % 256).buffer);
++        });
++      });
++    },
++  };
++  return { file, pending, fetches, state };
++}
++
++const tick = () => new Promise(resolve => {
++  setTimeout(resolve, 0);
++});
++
++// Release the pending fetches one by one, letting the limiter start the next.
++async function drain(pending) {
++  await tick();
++  if (pending.length === 0) {return;}
++  pending.shift()();
++  await drain(pending);
++}
++
++describe('limitConcurrency', () => {
++  it('keeps at most `max` fetches in flight and resolves every slice', async () => {
++    const { file, pending, state } = fakeFile();
++    const limited = limitConcurrency(file, { max: 3, gap: 0 });
++    expect(limited.byteLength).toBe(100000);
++    // 10 ranges 1,000 bytes apart: too far apart to merge.
++    const reads = Array.from({ length: 10 }, (_, i) => limited.slice(i * 1000, i * 1000 + 10));
++    await tick();
++    expect(state.active).toBe(3);
++    await drain(pending);
++    const buffers = await Promise.all(reads);
++    expect(buffers.map(b => new Uint8Array(b)[0])).toEqual(
++      Array.from({ length: 10 }, (_, i) => (i * 1000) % 256));
++    expect(state.peak).toBe(3);
++  });
++
++  it('merges ranges that follow each other and hands back the right bytes', async () => {
++    const { file, pending, fetches } = fakeFile();
++    const limited = limitConcurrency(file, { max: 2, gap: 100 });
++    // 0-30 contiguous, 120-130 within the 100-byte gap of 30, 5000-5010 far off.
++    const ranges = [[0, 10], [10, 20], [20, 30], [120, 130], [5000, 5010]];
++    const reads = ranges.map(([s, e]) => limited.slice(s, e));
++    await drain(pending);
++    const buffers = await Promise.all(reads);
++    expect(fetches).toEqual([[0, 130], [5000, 5010]]);
++    buffers.forEach((b, i) => {
++      const [s, e] = ranges[i];
++      expect(b.byteLength).toBe(e - s);
++      expect(new Uint8Array(b)[0]).toBe(s % 256);
++    });
++  });
++
++  it('caps a merged fetch at maxMerged', async () => {
++    const { file, pending, fetches } = fakeFile();
++    const limited = limitConcurrency(file, { max: 4, gap: 0, maxMerged: 25 });
++    const reads = [[0, 10], [10, 20], [20, 30], [30, 40]].map(([s, e]) => limited.slice(s, e));
++    await drain(pending);
++    await Promise.all(reads);
++    expect(fetches).toEqual([[0, 20], [20, 40]]);
++  });
++
++  it('rejects every slice of a failed fetch and frees its slot', async () => {
++    let calls = 0;
++    const file = {
++      byteLength: 100,
++      slice(start, end) {
++        calls++;
++        return calls === 1 ? Promise.reject(new Error('503')) : Promise.resolve(new ArrayBuffer(end - start));
++      },
++    };
++    const limited = limitConcurrency(file, { max: 1 });
++    const a = limited.slice(0, 1);
++    const b = limited.slice(1, 2);
++    await expect(a).rejects.toThrow('503');
++    await expect(b).rejects.toThrow('503');
++    await expect(limited.slice(50, 60)).resolves.toBeInstanceOf(ArrayBuffer);
++  });
++
++  it('defaults to MAX_CONCURRENT_RANGES', () => {
++    expect(MAX_CONCURRENT_RANGES).toBe(16);
++  });
++});
