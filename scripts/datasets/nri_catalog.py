@@ -182,6 +182,8 @@ NO_RATING = "#c9c8c2"
 # The column each level's map is coloured on: the states have no composite.
 RATED = {"tracts": "RISK_RATNG", "counties": "RISK_RATNG", "states": "EAL_RATNG",
          "tribal_counties": "RISK_RATNG"}
+SINGULAR = {"tracts": "census tract", "counties": "county", "states": "state or territory",
+            "tribal_counties": "tribal area within a county"}
 
 
 # ---------- measured inputs ----------
@@ -523,11 +525,16 @@ def collection_agents(col: dict, name: str) -> str:
         "states": "`STATEFIPS` = TIGER state `GEOID`",
         "tribal_counties": "`STCOFIPS` = TIGER county `GEOID`; `AIANNHCE` = TIGER AIANNH code",
     }[name]
+    rated = (f"`{RATED[name]}` is the composite risk rating, the one "
+             + ("the default style maps." if spec["tiles"] else "to map.")
+             if RATED[name] == "RISK_RATNG" else
+             f"This level has no composite risk index: `{RATED[name]}`, the expected annual "
+             f"loss rating, is the one to map.")
     return f"""\
 # {col['title']}: agent guide
 
-One row per {spec['title'].lower().rstrip('s')}, {key}, lon/lat (OGC:CRS84),
-geometry column `geometry`. {RATED[name]} is the composite rating to map.
+One row per {SINGULAR[name]}, {key}, lon/lat (OGC:CRS84),
+geometry column `geometry`. {rated}
 
 ## Access
 

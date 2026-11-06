@@ -73,6 +73,11 @@ jobs:
       - name: Anything new upstream?
         id: check
         run: |
+          # The catalog stage reads only what is published: no call to fema.gov,
+          # so neither an outage nor a new version there can fail it.
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           uv run --project scripts python scripts/datasets/nri.py upstream > upstream.json
           jq -c '{version, path, page_versions}' upstream.json
           pinned=$(jq -r '.path' upstream.json)
@@ -88,9 +93,7 @@ jobs:
           was=$(echo "$live" | jq -c '.files // {} | map_values([.last_modified, .etag])')
           echo "upstream $now"
           echo "published $was"
-          if [ "$CATALOG_ONLY" = "true" ]; then
-            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
-          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
             echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
           else
             echo "go=true" >> "$GITHUB_OUTPUT"

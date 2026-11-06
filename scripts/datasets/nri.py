@@ -155,25 +155,54 @@ def upstream() -> dict:
     return {"version": VERSION, "path": VDIR, "page_versions": versions_on_page(), "files": files}
 
 
-def fetch(url: str, dest: Path) -> Path:
-    """The zip, kept in dest: a copy of the right size is reused."""
-    size = head(url)["bytes"]
-    if dest.is_file() and dest.stat().st_size == size:
+def remove(path: Path) -> None:
+    """Delete a file or a directory tree. A missing entry is fine: on exFAT
+    the AppleDouble `._` files vanish with the file they shadow."""
+    def gone_already(func, p, exc):
+        if not isinstance(exc, FileNotFoundError):
+            raise exc
+
+    if path.is_dir():
+        shutil.rmtree(path, onexc=gone_already)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def fetch(url: str, dest: Path, stale: list[Path]) -> Path:
+    """The zip, kept in dest with the server's ETag and Last-Modified beside
+    it: a copy whose stamp still matches is reused. When the zip is fetched
+    again, what was extracted from the old one (stale) is removed, so it is
+    extracted again from the new one."""
+    meta = head(url)
+    stamp = dest.with_name(dest.name + ".source.json")
+    want = {k: meta[k] for k in ("etag", "last_modified", "bytes")}
+    if (dest.is_file() and dest.stat().st_size == meta["bytes"] and stamp.is_file()
+            and json.loads(stamp.read_text()) == want):
         return dest
+    for path in stale:
+        remove(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part")
     subprocess.run(["curl", "-fsSL", "--retry", "5", "--retry-all-errors", "-o", str(part), url],
                    check=True)
-    if part.stat().st_size != size or not zipfile.is_zipfile(part):
-        sys.exit(f"{url}: got {part.stat().st_size} bytes, the server lists {size}, "
+    if part.stat().st_size != meta["bytes"] or not zipfile.is_zipfile(part):
+        sys.exit(f"{url}: got {part.stat().st_size} bytes, the server lists {meta['bytes']}, "
                  f"or not a zip")
     part.rename(dest)
+    stamp.write_text(json.dumps(want))
     return dest
 
 
+def extracted(work: Path, stem: str) -> dict[str, Path]:
+    """What unpack() and table_csv() write for a level."""
+    return {"gdb": work / f"NRI_GDB_{stem}.gdb", "dictionary": work / stem,
+            "csv": work / f"NRI_Table_{stem}.csv"}
+
+
 def unpack(archive: Path, work: Path, stem: str) -> tuple[Path, Path]:
-    """The geodatabase and the dictionary out of a GDB zip."""
-    gdb = work / f"NRI_GDB_{stem}.gdb"
+    """The geodatabase and the dictionary out of a GDB zip (fetch() removes
+    both when the zip changes)."""
+    gdb = extracted(work, stem)["gdb"]
     with zipfile.ZipFile(archive) as z:
         if not gdb.is_dir():
             z.extractall(work, [m for m in z.namelist() if m.startswith(f"{gdb.name}/")])
@@ -182,7 +211,7 @@ def unpack(archive: Path, work: Path, stem: str) -> tuple[Path, Path]:
 
 
 def table_csv(archive: Path, work: Path, stem: str) -> Path:
-    dest = work / f"NRI_Table_{stem}.csv"
+    dest = extracted(work, stem)["csv"]
     if not dest.is_file():
         with zipfile.ZipFile(archive) as z:
             z.extract(dest.name, work)
@@ -396,8 +425,11 @@ def build(work: Path, out: Path, only: list[str] | None = None) -> None:
         if only and name not in only and name != "counties":
             continue
         spec = LEVELS[name]
-        gdb_zip = fetch(zip_url("GDB", spec["stem"]), work / f"NRI_GDB_{spec['stem']}.zip")
-        table_zip = fetch(zip_url("Table", spec["stem"]), work / f"NRI_Table_{spec['stem']}.zip")
+        out_of = extracted(work, spec["stem"])
+        gdb_zip = fetch(zip_url("GDB", spec["stem"]), work / f"NRI_GDB_{spec['stem']}.zip",
+                        stale=[out_of["gdb"], out_of["dictionary"]])
+        table_zip = fetch(zip_url("Table", spec["stem"]), work / f"NRI_Table_{spec['stem']}.zip",
+                          stale=[out_of["csv"]])
         gdb, dict_path = unpack(gdb_zip, work, spec["stem"])
         fields = dictionary(dict_path)
         dest = folder / f"{name}.parquet"
