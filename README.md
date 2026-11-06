@@ -33,6 +33,10 @@ Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd
 
 `publish.py` finalize regenerates it from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
 
+### catalog.geomermaids.com
+
+One front door for every dataset catalog: a root catalog with a child link to each dataset catalog on parquetry (by absolute URL, nothing copied), and portolan-browser over it. `scripts/catalog_root.py` renders the root (rerun it when a dataset is added); `catalog-site/build.sh` builds the browser at a pinned commit and the root into `catalog-site/public/`, which is not committed. Deploy: `bash catalog-site/build.sh && (cd catalog-site && npx wrangler deploy)`.
+
 ### Schema 0.5.0
 
 - A closed way in `power` or `aeroways` is one row. Until 0.4.0 `osmium export` wrote it twice, as a LineString and as the polygon built from it, so every substation, solar panel, hangar and apron was counted twice (a fifth of the rows of both themes in Texas). It is now the polygon, or the line when the tags are linear (`power=line/minor_line/cable`, runways, taxiways).
