@@ -5,15 +5,15 @@ FEMA's National Risk Index (NRI) as GeoParquet and PMTiles.
 FEMA retired the NRI application in 2025 and publishes the data on OpenFEMA
 (https://www.fema.gov/about/openfema/data-sets/national-risk-index-data),
 one zipped file geodatabase per level, the version in the path (v120 for
-1.20, December 2025). This writes one GeoParquet file per level, the PMTiles
-of the tracts and counties, and FEMA's hazard table:
+1.20, December 2025). This writes one GeoParquet file and one PMTiles archive
+per level, and FEMA's hazard table:
 
   <out>/v<version>/tracts.parquet           85,154 census tracts, key TRACTFIPS
   <out>/v<version>/counties.parquet         3,232 counties, key STCOFIPS
   <out>/v<version>/states.parquet           56 states and territories, key STATEFIPS
   <out>/v<version>/tribal_counties.parquet  tribal areas within counties
   <out>/v<version>/hazards.parquet          the 18 hazards: prefix, period of record
-  <out>/v<version>/tracts.pmtiles, counties.pmtiles
+  <out>/v<version>/<level>.pmtiles   tracts, counties, states, tribal_counties
   <out>/v<version>/NRIDataDictionary.csv    FEMA's field dictionary, as shipped
   <out>/v<version>/_manifest.json           rows, sizes, sha256, column aliases, gate
   <out>/v<version>/ATTRIBUTION.txt
@@ -94,11 +94,17 @@ LEVELS = {
     "states": {
         "stem": "States", "layer": "NRI_States", "key": "STATEFIPS",
         "title": "States and territories", "tiger": ("substategeo/state.parquet", "GEOID"),
-        "tiles": None,
+        # FEMA rates states on expected annual loss only (no composite, social
+        # vulnerability or resilience columns): the map colours EAL_RATNG.
+        "tiles": ((0, 10), ["STATEFIPS", "STATE", "STATEABBRV", "POPULATION", "EAL_RATNG",
+                            "EAL_SCORE", "EAL_VALT"]),
     },
     "tribal_counties": {
         "stem": "Tribal_Counties", "layer": "NRI_Tribal_Counties", "key": None,
-        "title": "Tribal areas within counties", "tiger": None, "tiles": None,
+        "title": "Tribal areas within counties", "tiger": None,
+        "tiles": ((0, 12), ["NRI_ID", "AIANNHCE", "JURS_NAME", "STATEABBRV", "COUNTY",
+                            "STCOFIPS", "RISK_RATNG", "RISK_SCORE", "EAL_RATNG", "SOVI_RATNG",
+                            "RESL_RATNG"]),
     },
 }
 # OBJECTID, the geodatabase's feature id, is not read as a column.

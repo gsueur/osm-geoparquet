@@ -7,9 +7,10 @@ Render, validate and publish the Portolan catalog for FEMA's National Risk Index
 
 nri.py's LEVELS drives it. Each collection has the level's GeoParquet
 (`data`), FEMA's hazard table and field dictionary as assets, a thumbnail
-and, for the tracts and counties, the PMTiles registered as formats.md asks
-(a `rel: pmtiles` link with `pmtiles:layers`, web-map-links v1.3.0, the
-file as a `visual` asset) with a MapLibre style on the composite rating.
+and the level's PMTiles registered as formats.md asks (a `rel: pmtiles`
+link with `pmtiles:layers`, web-map-links v1.3.0, the file as a `visual`
+asset) with a MapLibre style on the composite rating, or on expected
+annual loss for states, which FEMA rates on that alone.
 The column descriptions are FEMA's field aliases from the dictionary shipped
 with the data, with what the metric means. Counts, sizes, checksums and the
 gate come from the release's _manifest.json, local (--out-dir) or
