@@ -223,7 +223,8 @@ def rewrite(src: Path, dest: Path) -> None:
     cuts, size, i = [0], 0, 0
     for batch in f.iter_batches(batch_size=1 << 16, columns=["geometry"]):
         for n in pc.binary_length(batch.column(0).storage).to_pylist():
-            n += 4
+            # A row without geometry (Natural Earth has one) writes no value.
+            n = 0 if n is None else n + 4
             if size and size + n > GROUP_BYTES:
                 cuts.append(i)
                 size = 0
