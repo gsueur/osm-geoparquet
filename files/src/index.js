@@ -277,6 +277,12 @@ const DATASETS = {
       "plus assessor records, joined on LOC_ID. Checked weekly.",
     attribution: "massgis/parcels/ATTRIBUTION.txt",
   },
+  "natural-earth/": {
+    subtitle: "Natural Earth v5.1.2, public domain world map data at 1:10m, 1:50m and 1:110m: " +
+      "one GeoParquet file per layer under v5.1.2/<scale>/, columns unchanged, lon/lat, and " +
+      "one PMTiles world basemap per scale.",
+    attribution: "natural-earth/v5.1.2/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },

@@ -1,0 +1,155 @@
+# Build and publish Natural Earth v5.1.2 to parquetry:parquetry/natural-earth/v5.1.2/.
+#
+# Natural Earth is a static release (v5.1.2, 2022-05-13), so this runs on
+# demand, never on a schedule. scripts/datasets/natural_earth.py documents the
+# layout; scripts/datasets/natural_earth_layers.csv says which layers. The
+# build fetches the 32 zips from naciscdn.org (62 MB), refuses a zip newer
+# than v5.1.2, checks each layer's row count and columns against its
+# shapefile, repairs the few invalid polygons, verifies every file's footer,
+# bbox and row groups, and tiles one PMTiles basemap per scale. A failure
+# there fails the job with nothing published.
+#
+#   build    convert, tile, verify and render the catalog, upload nothing
+#   publish  the same, then upload the data and the catalog
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-natural-earth
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build converts and checks; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+
+concurrency:
+  group: dataset-natural-earth
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/natural-earth
+  VERSION: v5.1.2
+  PUBLIC: https://parquetry.geomermaids.com/natural-earth
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  natural-earth:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: tylertoo
+        if: inputs.stage != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: rclone
+        if: inputs.stage != 'build'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch, convert, tile and verify
+        if: inputs.stage != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/natural_earth.py build \
+            --src-dir work/src --work-dir work/tmp --out-dir "out/$VERSION"
+          du -sh "out/$VERSION"; find "out/$VERSION" -type f | sort | sed "s|out/$VERSION/||"
+
+      # The thumbnails are committed under catalog/thumbnails/natural-earth/
+      # and only re-rendered when missing (a new layer), then attached as an
+      # artifact so they can be committed.
+      - name: Thumbnails, when missing
+        if: inputs.stage != 'catalog'
+        run: |
+          missing=$(tail -n +2 scripts/datasets/natural_earth_layers.csv | while IFS=, read -r s c l t; do
+            [ -f "catalog/thumbnails/natural-earth/${s}_${l}.png" ] || echo "${s}_${l}"; done)
+          if [ -n "$missing" ]; then
+            uv run --project scripts --with matplotlib \
+              python scripts/datasets/natural_earth_catalog.py thumbnails \
+              --out-dir "out/$VERSION" --only $missing
+          fi
+          ls catalog/thumbnails/natural-earth/ | wc -l
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.stage != 'catalog'
+        with:
+          name: natural-earth-thumbnails
+          path: catalog/thumbnails/natural-earth/
+          if-no-files-found: error
+
+      # rashid over the rendered tree, before anything is uploaded.
+      - name: STAC catalog, rendered and checked
+        run: |
+          out="${{ inputs.stage != 'catalog' && format('--out-dir out/{0}', env.VERSION) || '' }}"
+          uv run --project scripts python scripts/datasets/natural_earth_catalog.py \
+            build $out --dest build/catalog
+          uv run --project scripts python scripts/datasets/natural_earth_catalog.py \
+            check build/catalog
+
+      # A static release: the data is immutable. The manifest, the
+      # attribution and the styles get the short max-age of metadata.
+      - name: Upload
+        if: inputs.stage == 'publish'
+        run: |
+          out="out/$VERSION"
+          rclone copy "$out" "$REMOTE/$VERSION" --include "*.parquet" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
+            --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/$VERSION" --include "*.pmtiles" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
+            --header-upload "Content-Type: application/vnd.pmtiles" --transfers 3
+          rclone copy "$out" "$REMOTE/$VERSION" --include "*/basemap-style.json" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300" \
+            --header-upload "Content-Type: application/json"
+          rclone copy "$out" "$REMOTE/$VERSION" --max-depth 1 \
+            --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: inputs.stage != 'build'
+        run: |
+          out="${{ inputs.stage != 'catalog' && format('--out-dir out/{0}', env.VERSION) || '' }}"
+          uv run --project scripts python scripts/datasets/natural_earth_catalog.py \
+            publish $out --remote "$REMOTE"
+
+      - name: Check what is live
+        if: inputs.stage != 'build'
+        run: |
+          set +e
+          fail=0
+          for f in $VERSION/_manifest.json $VERSION/ATTRIBUTION.txt \
+                   $VERSION/10m/admin_0_countries.parquet $VERSION/50m/land.parquet \
+                   $VERSION/110m/populated_places.parquet $VERSION/10m/basemap.pmtiles \
+                   $VERSION/110m/basemap-style.json \
+                   catalog/catalog.json catalog/10m/catalog.json \
+                   catalog/10m/ne_10m_admin_0_countries/collection.json \
+                   catalog/10m/ne_10m_admin_0_countries/styles/default.json \
+                   catalog/110m/ne_110m_land/thumbnail.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          type=$(curl -sI "$PUBLIC/$VERSION/10m/basemap.pmtiles" | tr -d '\r' |
+                 awk 'tolower($1)=="content-type:"{print $2}')
+          [ "$type" = "application/vnd.pmtiles" ] || { echo "BAD pmtiles Content-Type: $type"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$VERSION/10m/basemap.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail

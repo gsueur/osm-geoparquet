@@ -33,6 +33,10 @@ Each collection lists its regions as STAC assets (`data-<iso>`, `application/vnd
 
 `publish.py` finalize regenerates it from the region manifests (`scripts/catalog.py`) after the completeness gate. See `catalog/CONFORMANCE.md` for what is validated where.
 
+### catalog.geomermaids.com
+
+One front door for every dataset catalog: a root catalog with a child link to each dataset catalog on parquetry (by absolute URL, nothing copied), and portolan-browser over it. `scripts/catalog_root.py` renders the root (rerun it when a dataset is added); `catalog-site/build.sh` builds the browser at a pinned commit and the root into `catalog-site/public/`, which is not committed. Deploy: `bash catalog-site/build.sh && (cd catalog-site && npx wrangler deploy)`.
+
 ### Schema 0.5.0
 
 - A closed way in `power` or `aeroways` is one row. Until 0.4.0 `osmium export` wrote it twice, as a LineString and as the polygon built from it, so every substation, solar panel, hangar and apron was counted twice (a fifth of the rows of both themes in Texas). It is now the polygon, or the line when the tags are linear (`power=line/minor_line/cable`, runways, taxiways).
@@ -90,6 +94,20 @@ legislative areas come first. Portolan catalog at
 (`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
 (`census/`, deployed with wrangler like `nfhl/`).
 
+American Community Survey 5-year estimates, 2020-2024 (`scripts/datasets/acs.py`,
+workflow `dataset-acs.yml`, checked weekly against the Summary File's
+Last-Modified) sit beside them under
+`https://parquetry.geomermaids.com/census/acs/2024/`: 33 curated measures
+(population, age, households, income, poverty, home value, rent, tenure,
+vacancy, race and Hispanic origin, education, commuting), each with its margin
+of error, for states, counties, places, tracts, block groups and ZCTAs.
+`<geo>.parquet` is the table keyed by TIGER's GEOID; `<geo>_geo.parquet` joins
+it to the TIGER/Line 2026 outline. Read from the table-based Summary File (no
+API key). The build checks every area against TIGER and that populations add up
+block group to tract to county to state, but for a gap in the published file
+(14 Suffolk County, NY tracts, listed in `acs.py`'s KNOWN_GAPS). Its collections
+are the `acs-2024` sub-catalog of the census catalog (`scripts/datasets/acs_catalog.py`).
+
 FEMA's National Risk Index (`scripts/datasets/nri.py`, workflow
 `dataset-nri.yml`, checked weekly) sits under
 `https://parquetry.geomermaids.com/nri/v1.20/`: one GeoParquet file per level
@@ -124,6 +142,24 @@ count per km2, or the major roads only, `OVERVIEWS` in `massgis.py`), so a map
 of the whole state still shows them. Portolan catalog at
 `https://parquetry.geomermaids.com/massgis/catalog/catalog.json`
 (`scripts/datasets/massgis_catalog.py`), one sub-catalog per theme.
+
+Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
+`dataset-natural-earth.yml`, on demand: the release is static) sits under
+`https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,
+110m): one GeoParquet file per layer (`10m/admin_0_countries.parquet`,
+countries, states and provinces, populated places, urban areas, airports,
+ports, time zones, coastline, land, ocean, rivers, lakes, graticules), every
+column as Natural Earth publishes it, lon/lat. `natural_earth_layers.csv`
+lists the layers, one row each. The build checks each layer's row count and
+columns against its shapefile and refuses a zip newer than v5.1.2; the few
+invalid polygons are repaired with ST_MakeValid and counted in
+`_manifest.json`. Each scale also has one PMTiles world basemap
+(`<scale>/basemap.pmtiles`, every layer in one tile layer `ne`, told apart
+by `ne_layer`, clipped to the Web Mercator band) and a MapLibre style over
+it (`<scale>/basemap-style.json`). Public domain. Portolan catalog at
+`https://parquetry.geomermaids.com/natural-earth/catalog/catalog.json`
+(`scripts/datasets/natural_earth_catalog.py`), one sub-catalog per scale;
+its thumbnails are committed under `catalog/thumbnails/natural-earth/`.
 
 Geobox's samples (`scripts/datasets/geobox_samples.py`, no workflow: the
 sources are static, rebuilt by hand) sit under

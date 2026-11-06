@@ -5,6 +5,7 @@ Render, validate and publish the Portolan catalog for the US Census data.
   census/catalog/catalog.json                     root: US Census Bureau TIGER/Line
   census/catalog/tiger-2026-legislative/catalog.json   one sub-catalog per product
   census/catalog/tiger-2026-legislative/<code>/collection.json   one per layer
+  census/catalog/acs-2024/...                     the ACS estimates (acs_catalog.py)
 
 census.py's PRODUCTS drives it: a product added there gets its sub-catalog
 here. Each collection has the layer's GeoParquet (`data`, NAD83 declared
@@ -36,6 +37,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datasets import acs_catalog
 from datasets.census import (
     LAYOUTS, PLACEHOLDERS, PRODUCTS, SOURCE_PAGE, YEAR, color_index, real_areas,
 )
@@ -425,7 +427,10 @@ def build_root(products: list[dict], updated: str) -> dict:
         "description": ("The US Census Bureau's TIGER/Line national GeoPackages, republished "
                         "as GeoParquet and PMTiles: one sub-catalog per product and vintage, "
                         "one collection per layer. Columns and codes unchanged. Public domain "
-                        f"in the United States. Credit: {ATTRIBUTION}."),
+                        f"in the United States. Credit: {ATTRIBUTION}."
+                        + (" Beside them, curated American Community Survey 5-year estimates "
+                           "keyed on the same GEOIDs, as tables and joined to the outlines."
+                           if any(p["id"] == acs_catalog.CATALOG_ID for p in products) else "")),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
@@ -604,8 +609,8 @@ def root_readme(root: dict, products: list[dict]) -> str:
 
 {listing}
 
-Files: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`. On a map:
-{PAGE_URL}.
+Files: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`, and the ACS
+estimates at `{PUBLIC_DATA}/acs/<year>/<geo>.parquet`. On a map: {PAGE_URL}.
 
 ## License
 
@@ -626,7 +631,9 @@ TIGER/Line national GeoPackages as GeoParquet, one sub-catalog per product.
 
 {listing}
 
-Layout: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`, anonymous S3 at
+Layout: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`; ACS estimates at
+`{PUBLIC_DATA}/acs/<year>/<geo>.parquet` (join on GEOID) and `<geo>_geo.parquet`
+(with outlines). Anonymous S3 at
 `s3://{BUCKET}/{DATASET_PREFIX}/` on `{S3_ENDPOINT}`. NAD83 (EPSG:4269).
 Credit: {ATTRIBUTION}.
 """
@@ -673,6 +680,9 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
         (pdir / "README.md").write_text(product_readme(cat, product, collections, manifest))
         (pdir / "AGENTS.md").write_text(product_agents(cat, collections))
         products.append(cat)
+    acs = acs_catalog.build(out_dir, dest, THUMBS, updated, footer, layer_extent)
+    if acs:
+        products.append(acs)
     root = build_root(products, updated)
     write_json(dest / "catalog.json", root)
     shutil.copyfile(LOGO, dest / "logo.png")
@@ -794,6 +804,7 @@ def main() -> None:
     t = sub.add_parser("thumbnails")
     out_dir_arg(t, required=True)
     t.add_argument("--product", action="append", choices=list(PRODUCTS))
+    t.add_argument("--acs", action="store_true", help="the ACS maps instead (acs.py's files)")
     args = p.parse_args()
     if args.cmd == "build":
         print(f"wrote {args.dest}/ ({build(args.out_dir, args.dest):,} rows)")
@@ -801,6 +812,8 @@ def main() -> None:
         sys.exit(check(args.tree))
     elif args.cmd == "publish":
         publish(args.out_dir, args.remote, dry_run=args.dry_run)
+    elif args.cmd == "thumbnails" and args.acs:
+        acs_catalog.thumbnails(args.out_dir, THUMBS)
     elif args.cmd == "thumbnails":
         thumbnails(args.out_dir, args.product)
 
