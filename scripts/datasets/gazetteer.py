@@ -139,8 +139,13 @@ def head(url: str) -> dict:
     for attempt in range(1, 4):
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
+                # www2.census.gov sometimes answers a runner's HEAD without a
+                # Content-Length: the size is informational, Last-Modified
+                # decides a rebuild, so a missing length is recorded as None.
+                length = r.headers.get("Content-Length")
                 return {"url": url, "last_modified": r.headers["Last-Modified"],
-                        "bytes": int(r.headers["Content-Length"])}
+                        "etag": r.headers.get("ETag"),
+                        "bytes": int(length) if length else None}
         except OSError as e:
             if attempt == 3:
                 sys.exit(f"{url}: {e}")
