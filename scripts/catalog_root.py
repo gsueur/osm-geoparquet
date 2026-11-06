@@ -51,12 +51,17 @@ DATASETS = [
     ("gaul", "FAO's administrative units for every country: countries, first and "
              "second levels.", SITE),
     ("clc", "The EEA's pan-European land cover inventory, for Europe and per country.", SITE),
+    ("natural-earth", "Natural Earth's world basemap layers at three scales: countries, "
+                      "states, places, coastlines, rivers, lakes, ports and airports.", SITE),
     ("nfhl", "FEMA's flood zones for the United States, one file per county delivery, "
              "checked daily.", "https://nfhl.geomermaids.com/"),
     ("geoconnex", "US water reference features (rivers, dams, gages, watersheds) and "
                   "monitoring sites.", SITE),
+    ("nri", "FEMA's National Risk Index for 18 natural hazards, by census tract and "
+            "county: expected annual loss, social vulnerability and resilience.", SITE),
     ("census", "TIGER/Line geography, including the congressional and state legislative "
-               "districts.", "https://census.geomermaids.com/"),
+               "districts, and the ACS 5-year estimates on it.",
+     "https://census.geomermaids.com/"),
     ("massgis", "The statewide vector layers of the Massachusetts Bureau of Geographic "
                 "Information, checked weekly.", SITE),
 ]
@@ -91,8 +96,8 @@ def build_root(children: list[dict], updated: str) -> dict:
         "description": (
             "Every dataset Geomermaids republishes as GeoParquet: OpenStreetMap for North "
             "America and its infrastructure worldwide, administrative units, land cover, "
-            "flood zones, water features, census geography and the Massachusetts statewide "
-            "layers. One sub-catalog per dataset, each kept current by its own build and "
+            "a world basemap, flood zones, natural hazard risk, water features, census "
+            "geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
             "under its own licence."),
         "updated": updated,
         "links": [
