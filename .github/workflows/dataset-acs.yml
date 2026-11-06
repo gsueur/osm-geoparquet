@@ -74,14 +74,16 @@ jobs:
       - name: Anything new upstream?
         id: check
         run: |
+          # A catalog run reads parquetry only: census.gov need not answer.
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           uv run --project scripts python scripts/datasets/acs.py upstream > upstream.json
           jq '{fingerprint, last_modified}' upstream.json
           now=$(jq -r .fingerprint upstream.json)
           was=$(curl -fsS "$PUBLIC/acs/$YEAR/_source.json" | jq -r .fingerprint || echo none)
           echo "upstream $now, published $was"
-          if [ "$CATALOG_ONLY" = "true" ]; then
-            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
-          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
             echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
           else
             echo "go=true" >> "$GITHUB_OUTPUT"

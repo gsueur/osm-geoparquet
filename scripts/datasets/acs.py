@@ -51,6 +51,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
 import json
 import subprocess
@@ -210,15 +211,18 @@ def upstream() -> dict:
             "files": files}
 
 
-def fetch(name: str, url: str, size: int, src: Path) -> Path:
-    """The file, kept in src: a copy of the same size is reused. census.gov
-    can answer a rejected request with an HTML page and HTTP 200, so the
-    first line is checked too."""
+def fetch(name: str, url: str, size: int, last_modified: str, src: Path) -> Path:
+    """The file, kept in src: a copy is reused only with the server's size
+    and Last-Modified (curl -R sets the file's mtime to it), so a correction
+    of the same size is fetched again. census.gov can answer a rejected
+    request with an HTML page and HTTP 200, so the first line is checked."""
     path = src / url.rsplit("/", 1)[1]
-    if not (path.is_file() and path.stat().st_size == size):
+    stamp = calendar.timegm(time.strptime(last_modified, "%a, %d %b %Y %H:%M:%S GMT"))
+    if not (path.is_file() and path.stat().st_size == size
+            and int(path.stat().st_mtime) == stamp):
         src.mkdir(parents=True, exist_ok=True)
         part = path.with_suffix(".part")
-        subprocess.run(["curl", "-fsSL", "--retry", "3", "-o", str(part), url], check=True)
+        subprocess.run(["curl", "-fsSLR", "--retry", "3", "-o", str(part), url], check=True)
         part.rename(path)
     if path.stat().st_size != size:
         sys.exit(f"{url}: got {path.stat().st_size} bytes, the server lists {size}")
@@ -482,7 +486,8 @@ This data is packaged and hosted by Geomermaids:
 def build(work: Path, out: Path, tiger: str) -> None:
     src = work / "src"
     source = upstream()
-    files = {name: fetch(name, f["url"], f["bytes"], src) for name, f in source["files"].items()}
+    files = {name: fetch(name, f["url"], f["bytes"], f["last_modified"], src)
+             for name, f in source["files"].items()}
     shells = labels(files["shells"])
     work.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
