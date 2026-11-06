@@ -1,0 +1,155 @@
+# American Community Survey 5-year estimates: parquetry:parquetry/census/acs/<year>/.
+#
+# Curated measures from the ACS table-based Summary File for states,
+# counties, places, tracts, block groups and ZCTAs, as tables and joined to
+# the TIGER/Line outlines already published under census/tiger/.
+# scripts/datasets/acs.py documents the layout and the gates.
+#
+# The Summary File is a yearly release (December) that the Census Bureau
+# sometimes corrects: a weekly run compares the fingerprint of the source
+# files' Last-Modified with the published census/acs/<year>/_source.json and
+# stops when nothing moved. A new yearly release is a change to acs.py's YEAR.
+#
+#   build    fetch, gate and write, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            census Portolan catalog at /census/catalog/ (its acs-<year>/ part)
+#   catalog  only the catalog, rendered from the files already published
+#
+# Its own workflow, not dataset-census.yml: the sources and their release
+# cycles differ. Both render the same census catalog, from what is published.
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-acs
+
+on:
+  schedule:
+    - cron: "43 8 * * 3"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if no source has moved"
+        type: boolean
+        default: false
+
+# One catalog for both: never render it from the two workflows at once.
+concurrency:
+  group: dataset-census
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/census
+  PUBLIC: https://parquetry.geomermaids.com/census
+  YEAR: "2024"
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place on a Census correction: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  acs:
+    runs-on: ubuntu-24.04
+    # About 900 MB of tables and the TIGER outlines read from parquetry; the
+    # laptop build takes a few minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          uv run --project scripts python scripts/datasets/acs.py upstream > upstream.json
+          jq '{fingerprint, last_modified}' upstream.json
+          now=$(jq -r .fingerprint upstream.json)
+          was=$(curl -fsS "$PUBLIC/acs/$YEAR/_source.json" | jq -r .fingerprint || echo none)
+          echo "upstream $now, published $was"
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, gate and write
+        if: steps.check.outputs.go == 'true'
+        run: |
+          export TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/acs.py build \
+            --work-dir "$WORK" --out-dir "$WORK/out" 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+          jq .gates "$WORK/out/acs/$YEAR/_manifest.json"
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifest and the files that name it: a
+      # reader never finds a path that is not there yet. Only acs/<year>/:
+      # census/'s own index.json and _source.json belong to dataset-census.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out/acs/$YEAR"
+          rclone copy "$out" "$REMOTE/acs/$YEAR" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/acs/$YEAR" --include "_manifest.json" \
+            --include "ATTRIBUTION.txt" --include "_source.json" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in _manifest.json _source.json ATTRIBUTION.txt state.parquet county.parquet \
+                   tract.parquet tract_geo.parquet bg.parquet bg_geo.parquet zcta520_geo.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/acs/$YEAR/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-3 "$PUBLIC/acs/$YEAR/tract_geo.parquet")
+          [ "$range" = "206" ] || { echo "BAD parquet range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/census_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/acs-$YEAR/catalog.json \
+                   catalog/acs-$YEAR/acs$YEAR-tract/collection.json \
+                   catalog/acs-$YEAR/acs$YEAR-bg-geo/collection.json \
+                   catalog/tiger-2026-substategeo/tract/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done

@@ -90,6 +90,20 @@ legislative areas come first. Portolan catalog at
 (`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
 (`census/`, deployed with wrangler like `nfhl/`).
 
+American Community Survey 5-year estimates, 2020-2024 (`scripts/datasets/acs.py`,
+workflow `dataset-acs.yml`, checked weekly against the Summary File's
+Last-Modified) sit beside them under
+`https://parquetry.geomermaids.com/census/acs/2024/`: 33 curated measures
+(population, age, households, income, poverty, home value, rent, tenure,
+vacancy, race and Hispanic origin, education, commuting), each with its margin
+of error, for states, counties, places, tracts, block groups and ZCTAs.
+`<geo>.parquet` is the table keyed by TIGER's GEOID; `<geo>_geo.parquet` joins
+it to the TIGER/Line 2026 outline. Read from the table-based Summary File (no
+API key). The build checks every area against TIGER and that populations add up
+block group to tract to county to state, but for a gap in the published file
+(14 Suffolk County, NY tracts, listed in `acs.py`'s KNOWN_GAPS). Its collections
+are the `acs-2024` sub-catalog of the census catalog (`scripts/datasets/acs_catalog.py`).
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
