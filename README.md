@@ -109,6 +109,24 @@ of the whole state still shows them. Portolan catalog at
 `https://parquetry.geomermaids.com/massgis/catalog/catalog.json`
 (`scripts/datasets/massgis_catalog.py`), one sub-catalog per theme.
 
+Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
+`dataset-natural-earth.yml`, on demand: the release is static) sits under
+`https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,
+110m): one GeoParquet file per layer (`10m/admin_0_countries.parquet`,
+countries, states and provinces, populated places, urban areas, airports,
+ports, time zones, coastline, land, ocean, rivers, lakes, graticules), every
+column as Natural Earth publishes it, lon/lat. `natural_earth_layers.csv`
+lists the layers, one row each. The build checks each layer's row count and
+columns against its shapefile and refuses a zip newer than v5.1.2; the few
+invalid polygons are repaired with ST_MakeValid and counted in
+`_manifest.json`. Each scale also has one PMTiles world basemap
+(`<scale>/basemap.pmtiles`, every layer in one tile layer `ne`, told apart
+by `ne_layer`, clipped to the Web Mercator band) and a MapLibre style over
+it (`<scale>/basemap-style.json`). Public domain. Portolan catalog at
+`https://parquetry.geomermaids.com/natural-earth/catalog/catalog.json`
+(`scripts/datasets/natural_earth_catalog.py`), one sub-catalog per scale;
+its thumbnails are committed under `catalog/thumbnails/natural-earth/`.
+
 Geobox's samples (`scripts/datasets/geobox_samples.py`, no workflow: the
 sources are static, rebuilt by hand) sit under
 `https://parquetry.geomermaids.com/geobox-samples/<sample>/`: New York City's
