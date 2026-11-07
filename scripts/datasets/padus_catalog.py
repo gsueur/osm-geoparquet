@@ -76,7 +76,7 @@ RELEASE_URL = f"{PUBLIC_DATA}/{RELEASE}"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "usgs-padus"
-TITLE = f"USGS PAD-US {VERSION}"
+TITLE = f"USGS PAD-US {VERSION}: protected areas of the United States"
 THUMBS = REPO / "catalog" / "thumbnails" / "padus"
 ATTRIBUTION = f"U.S. Geological Survey, Gap Analysis Project, PAD-US {VERSION}"
 XML_TYPE = "application/xml"
@@ -180,6 +180,13 @@ def data_source(out_dir: Path | None, file: str) -> str:
     return str(local) if local and local.is_file() else f"{RELEASE_URL}/{file}"
 
 
+def state_names(out_dir: Path | None) -> dict[str, str]:
+    """State_Nm code -> name, from PAD-US's own State_Name code table, so a
+    search for "Massachusetts" finds the state's file."""
+    source = data_source(out_dir, "lookups/State_Name.parquet")
+    return dict(connect().execute(f"SELECT Code, Dom FROM read_parquet('{source}')").fetchall())
+
+
 def connect():
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
@@ -261,7 +268,8 @@ def shared_assets(manifest: dict) -> dict:
 
 
 def build_collection(name: str, entry: dict, manifest: dict, extent: list[float],
-                     columns: list[tuple[str, str]], updated: str) -> dict:
+                     columns: list[tuple[str, str]], updated: str,
+                     states: dict[str, str]) -> dict:
     spec = LAYERS[name]
     fields = manifest["fields"]
     path = f"{DATASET_PREFIX}/{RELEASE}/{entry['file']}"
@@ -313,8 +321,11 @@ def build_collection(name: str, entry: dict, manifest: dict, extent: list[float]
             assets[f"data-{s['state'].lower()}"] = {
                 "href": f"{PUBLIC_BASE}/{spath}",
                 "type": PARQUET_TYPE,
-                "title": f"Combined, State_Nm {s['state']}",
-                "description": f"{s['features']:,} rows.",
+                "title": f"{states[s['state']]} ({s['state']})",
+                "description": (f"Protected areas in {states[s['state']]}: "
+                                if s["state"] != "UNKF" else
+                                "Federal protected areas with no state recorded: ")
+                               + f"{s['features']:,} rows.",
                 "roles": ["data"],
                 "file:size": s["bytes"],
                 "file:checksum": "1220" + s["sha256"],
@@ -347,7 +358,7 @@ def build_collection(name: str, entry: dict, manifest: dict, extent: list[float]
         "stac_version": "1.1.0",
         "stac_extensions": extensions,
         "id": name,
-        "title": f"PAD-US {VERSION}: {spec['title'].lower()}",
+        "title": f"Protected areas (PAD-US {VERSION}): {spec['title'].lower()}",
         "description": (
             f"The Protected Areas Database of the United States, version {VERSION} "
             f"({RELEASED}), {spec['title'].lower()} feature class: {entry['features']:,} "
@@ -599,13 +610,14 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     manifest = read_manifest(out_dir)
     files = {f["name"]: f for f in manifest["files"]}
     tiles = {t["name"]: t for t in manifest["pmtiles"]}
+    states = state_names(out_dir)
     collections, total = [], 0
     for name in LAYERS:
         if not (THUMBS / f"{name}.png").is_file():
             sys.exit(f"missing {THUMBS / name}.png: run the thumbnails command")
         source = data_source(out_dir, files[name]["file"])
         col = build_collection(name, files[name], manifest, layer_extent(source), footer(source),
-                               updated)
+                               updated, states)
         cdir = dest / name
         if name in tiles:
             write_json(cdir / "styles" / "default.json", style(tiles[name]))
