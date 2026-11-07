@@ -189,6 +189,27 @@ National Laboratory (ORNL); FEMA Geospatial Response Office". Portolan catalog
 at `https://parquetry.geomermaids.com/structures/catalog/catalog.json`
 (`scripts/datasets/structures_catalog.py`).
 
+The USFWS National Wetlands Inventory (`scripts/datasets/nwi.py`, workflow
+`dataset-wetlands.yml`, checked weekly; FWS publishes in October and May) sits
+under `https://parquetry.geomermaids.com/wetlands/nwi/<release>/`, the release
+being FWS's "last updated" month (`2026-10`): one GeoParquet file of wetland
+and deepwater polygons per state or territory (`state=<XX>/wetlands.parquet`;
+`UM` for Palmyra and Kingman), FWS's `ATTRIBUTE` (Cowardin code),
+`WETLAND_TYPE`, `ACRES` and `NWI_ID` with the code spelled out from FWS's NWI
+Code Definitions table (`codes.parquet`), the mapping projects with their
+imagery year (`projects.parquet`) and `wetlands.pmtiles` coloured on
+`WETLAND_TYPE`. FWS's 53 state downloads overlap at the borders (47% of Rhode
+Island's polygons are also in Massachusetts' download, sometimes cut
+differently): each `NWI_ID` is kept once, in the file of the state that holds
+its interior point, from that state's own download. The geometry is
+reprojected from FWS's three Albers projections to NAD83 lon/lat (EPSG:4269).
+Alaska (an 11.8 GB zip) does not fit a runner: the workflow builds every other
+unit and `scripts/datasets/nwi_publish_ak.sh` builds Alaska into the same
+release from a workstation, then the workflow's `tiles` stage draws the map
+from every published state. Public domain; not a jurisdictional delineation.
+Portolan catalog at `https://parquetry.geomermaids.com/wetlands/catalog/catalog.json`
+(`scripts/datasets/nwi_catalog.py`).
+
 Gazetteers (`scripts/datasets/gazetteer.py`, workflow `dataset-gazetteer.yml`,
 checked weekly) sit under `https://parquetry.geomermaids.com/gazetteer/`: the
 Census Bureau's 2026 Gazetteer Files (`census/2026/<code>.parquet`, 17 files

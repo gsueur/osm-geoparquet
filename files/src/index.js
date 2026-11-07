@@ -313,6 +313,13 @@ const DATASETS = {
     subtitle: "Overture Maps is not stored here: this folder holds only our guide for querying " +
       "Overture's own files (AGENTS.md). Overture's catalog: https://stac.overturemaps.org/catalog.json",
   },
+  "wetlands/": {
+    subtitle: "USFWS National Wetlands Inventory, public domain: wetland and deepwater polygons " +
+      "as one GeoParquet file per state under nwi/<release>/state=<XX>/, FWS's columns with each " +
+      "Cowardin code spelled out, the copies repeated across state downloads removed, NAD83; " +
+      "the mapping projects, FWS's code table and a PMTiles map. Not a jurisdictional delineation.",
+    attribution: "wetlands/nwi/2026-10/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
