@@ -129,6 +129,27 @@ the keys that differ from TIGER 2026. Portolan catalog at
 `https://parquetry.geomermaids.com/nri/catalog/catalog.json`
 (`scripts/datasets/nri_catalog.py`).
 
+USGS PAD-US 4.1, the Protected Areas Database of the United States
+(`scripts/datasets/padus.py`), sits under
+`https://parquetry.geomermaids.com/padus/v4.1/`: one GeoParquet file per
+feature class (`combined.parquet`, `fee`, `designation`, `easement`, `marine`,
+`proclamation`), the Combined layer also per state
+(`combined/state=<XX>/combined.parquet`) and as `combined.pmtiles` coloured on
+the GAP status, PAD-US's code tables (`lookups/`) and USGS's FGDC metadata.
+The national geodatabase is behind a ScienceBase login: it is downloaded by
+hand once per release and built and published from a workstation with
+`scripts/datasets/padus_publish_local.sh`; `dataset-padus.yml` checks the
+release item monthly (it fails when ScienceBase lists a newer PAD-US or the
+item changes) and renders the catalog. Columns are PAD-US's, with each coded
+column decoded beside it (`<column>_Desc`); the geometry is reprojected from
+USGS's Albers to NAD83 lon/lat (EPSG:4269, like the Census layers), features
+crossing the 180th meridian are split there and invalid polygons repaired.
+Areas overlap, in the Combined layer too (a designation on fee land, a
+proclamation boundary around both): take the union of the geometries, or the
+`Fee` category for ownership, never a sum of rows. Portolan catalog at
+`https://parquetry.geomermaids.com/padus/catalog/catalog.json`
+(`scripts/datasets/padus_catalog.py`).
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
