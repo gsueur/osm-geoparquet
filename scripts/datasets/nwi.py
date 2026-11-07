@@ -539,7 +539,8 @@ def in_unit_duplicates(con, unit: str, fixed: Path, rows: int) -> dict:
                      md5(ST_AsWKB(f.geom)::BLOB) AS h,
                      row_number() OVER (PARTITION BY f.NWI_ID
                                         ORDER BY f.ACRES DESC NULLS LAST,
-                                                 ST_AsWKB(f.geom)::BLOB) AS k
+                                                 ST_AsWKB(f.geom)::BLOB, f.ATTRIBUTE,
+                                                 f.WETLAND_TYPE) AS k
               FROM read_parquet('{fixed}', file_row_number = true) f SEMI JOIN d USING (NWI_ID))
         SELECT x.r, x.NWI_ID, x.ACRES, k.ACRES,
                (x.ATTRIBUTE IS NOT DISTINCT FROM k.ATTRIBUTE

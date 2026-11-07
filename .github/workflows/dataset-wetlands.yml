@@ -151,8 +151,9 @@ jobs:
                 rclone deletefile "$scratch/$f" 2>/dev/null || true
               done
               listed=$(jq -r '.groups[][]' plan.json | sort)
-              for j in $(rclone lsf --max-depth 1 "$scratch/stage" 2>/dev/null | grep '\.json$'); do
-                u=${j%.json}
+              # Every unit with anything left: counts, index, projects or rows.
+              for u in $(rclone lsf --max-depth 1 "$scratch/stage" 2>/dev/null \
+                         | sed -E 's#/$##; s#\.(json|index\.parquet|projects\.parquet)$##' | sort -u); do
                 echo "$listed" | grep -qx "$u" && continue
                 echo "dropping $u: no longer listed"
                 rclone purge "$scratch/stage/$u" 2>/dev/null || true
@@ -210,7 +211,7 @@ jobs:
             want=$(jq -r --arg u "$u" '.units[$u].etag' "$WORK/upstream.json")
             have=$(rclone cat "$SCRATCH/stage/$u.json" 2>/dev/null \
                    | jq -r '"\(.etag) \(.stage_version // 1)"' || true)
-            if [ -n "$have" ] && [ "$have" = "$want $version" ]; then
+            if [ -n "$want" ] && [ "$want" != "null" ] && [ "$have" = "$want $version" ]; then
               echo "$u: already staged"
             else
               todo+=(--unit "$u"); units+=("$u")
