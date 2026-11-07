@@ -66,12 +66,24 @@ count, every ATTRIBUTE against the code table (an unknown code is counted
 and left undecoded, failing the build above 0.1% of rows), and that the
 state files add up to the IDs kept.
 
-Usage:
+Memory: each unit is staged in a process of its own, streamed (GDAL's
+FlatGeobuf to Parquet, the polygons never held in memory), its rows located
+on their points alone through the grid pieces of the states (pieces_file).
+Minnesota (2.7 million rows) stages in 5.4 GB peak with DuckDB at 4 GB.
+
+Usage, on one machine (a test run, or Alaska):
   python3 scripts/datasets/nwi.py upstream
   python3 scripts/datasets/nwi.py build --work-dir work --out-dir out/wetlands \\
       [--unit RI --unit CT --unit MA] [--no-tiles] [--low-disk]
   # Alaska (an 11.8 GB zip): on a workstation, scripts/datasets/nwi_publish_ak.sh
-  python3 scripts/datasets/nwi.py build --work-dir work --out-dir out/wetlands --unit AK
+
+The same steps one by one, as dataset-wetlands.yml runs them in separate jobs:
+  nwi.py plan --groups 6 --upstream-out upstream.json      the units in groups
+  nwi.py stage --upstream upstream.json --unit MN ...      per group of units
+  nwi.py choose --groups 6                                 reads <unit>.index.parquet
+  nwi.py write --upstream upstream.json --out-dir out --target MN ...   per group of states
+  nwi.py assemble --upstream upstream.json --out-dir out [--live <prefix URL>]
+  nwi.py tiles --out-dir out [--live <prefix URL>]
 """
 
 from __future__ import annotations
@@ -92,7 +104,8 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets import pmtiles  # noqa: E402
 from datasets.census import BBOX, check_crs, projjson, sha256, write_src  # noqa: E402
-from datasets.gaul import verify  # noqa: E402
+from datasets.gaul import rewrite, verify  # noqa: E402
+from datasets.infra import GEOMETRY_TYPE_NAMES  # noqa: E402
 from datasets.padus import UNWRAP, WRAP_SRS  # noqa: E402
 from extent import lon_intervals  # noqa: E402
 
@@ -239,18 +252,76 @@ def to_fgb(gdb: str, layer: str, dest: Path, columns: list[str]) -> None:
 
 # ---------- build ----------
 
-def connect(work: Path, memory: str) -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect(str(work / "build.duckdb"))
+# The states are cut into the cells of a grid this many degrees wide
+# (state_pieces): a point is tested only against the pieces of its own cell.
+GRID_DEG = 0.25
+
+
+def connect(work: Path, memory: str, threads: int | None = None) -> duckdb.DuckDBPyConnection:
+    """An in-memory DuckDB that spills to work/spill: nothing is kept in a
+    database between steps, each step reads and writes Parquet."""
+    (work / "spill").mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
     con.execute(f"INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs; "
                 f"SET temp_directory = '{work / 'spill'}'; SET memory_limit = '{memory}'; "
                 "SET preserve_insertion_order = false")
+    if threads:
+        con.execute(f"SET threads = {threads}")
     return con
 
 
-def load_states(con) -> None:
-    con.execute(f"""CREATE OR REPLACE TABLE states AS
-        SELECT STUSPS AS state, NAME AS name, ST_SetCRS(geometry::GEOMETRY, '') AS g
-        FROM read_parquet('{TIGER_STATES}')""")
+def states_file(work: Path) -> Path:
+    """TIGER/Line 2026 states (code, name, outline), fetched once per work dir."""
+    dest = work / "states.parquet"
+    if not dest.is_file():
+        work.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
+        tmp = dest.with_suffix(".part")
+        con.execute(f"""COPY (SELECT STUSPS AS state, NAME AS name, geometry
+                              FROM read_parquet('{TIGER_STATES}'))
+                        TO '{tmp}' (FORMAT PARQUET)""")
+        con.close()
+        tmp.rename(dest)
+    return dest
+
+
+def pieces_file(work: Path) -> Path:
+    """Each state cut along a GRID_DEG grid: (state, x, y, piece), the
+    piece being the state's part within cell (x, y). A point then finds its
+    state with an equality join on its cell and a test against a few small
+    pieces, where a spatial join on the whole states (TIGER/Line, up to
+    tens of thousands of vertices each) ran out of memory in DuckDB 1.5
+    (Texas, 2026-11-07). Exact: the pieces of a state tile it. Built once
+    per work dir, in a few seconds."""
+    dest = work / "state_pieces.parquet"
+    if dest.is_file():
+        return dest
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    d = GRID_DEG
+    tmp = dest.with_suffix(".part")
+    con.execute(f"""COPY (
+        WITH parts AS (SELECT state, unnest(ST_Dump(ST_SetCRS(geometry::GEOMETRY, ''))).geom AS g
+                       FROM read_parquet('{states_file(work)}')),
+        xs AS (SELECT state, g, unnest(range(floor(ST_XMin(g) / {d})::INT,
+                                             floor(ST_XMax(g) / {d})::INT + 1)) AS x FROM parts),
+        cells AS (SELECT state, g, x, unnest(range(floor(ST_YMin(g) / {d})::INT,
+                                                   floor(ST_YMax(g) / {d})::INT + 1)) AS y FROM xs),
+        env AS (SELECT state, g, x, y,
+                       ST_MakeEnvelope(x * {d}, y * {d}, (x + 1) * {d}, (y + 1) * {d}) AS e
+                FROM cells)
+        SELECT state, x, y, ST_Intersection(g, e) AS piece FROM env WHERE ST_Intersects(g, e)
+        ) TO '{tmp}' (FORMAT PARQUET)""")
+    con.close()
+    tmp.rename(dest)
+    return dest
+
+
+def load_states(con, work: Path) -> None:
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE states AS
+        SELECT state, name, ST_SetCRS(geometry::GEOMETRY, '') AS g
+        FROM read_parquet('{states_file(work)}')""")
 
 
 def state_name(con, st: str) -> str:
@@ -269,6 +340,7 @@ def load_codes(con, work: Path, folder: Path, codes: dict) -> dict:
     n, distinct = con.execute("SELECT count(*), count(DISTINCT ATTRIBUTE) FROM codes").fetchone()
     if n != distinct:
         sys.exit(f"code table: {n - distinct} repeated ATTRIBUTE codes")
+    folder.mkdir(parents=True, exist_ok=True)
     dest = folder / "codes.parquet"
     con.execute(f"COPY (SELECT * FROM codes ORDER BY ATTRIBUTE) TO '{dest}' "
                 "(FORMAT PARQUET, COMPRESSION ZSTD)")
@@ -276,42 +348,81 @@ def load_codes(con, work: Path, folder: Path, codes: dict) -> dict:
             "source": CODES_URL, "etag": codes.get("etag")}
 
 
-def stage_unit(con, unit: str, src: dict, work: Path, low_disk: bool) -> dict:
-    """One unit's wetlands to work/stage/<unit>/target=<XX>/part_0.parquet:
-    repaired, unwrapped, each row with the state of its interior point,
+def stage_unit(unit: str, src: dict, work: Path, low_disk: bool, memory: str,
+               threads: int | None) -> dict:
+    """stage_one() for a unit in a process of its own: whatever GDAL, GEOS
+    or DuckDB hold for one unit is returned to the system before the next
+    (the national run that kept one process grew to 15 GB by Minnesota).
+    A unit already staged (<unit>.json beside its folder) is skipped."""
+    done = work / "stage" / f"{unit}.json"
+    if done.is_file() and (work / "stage" / unit).is_dir():
+        return json.loads(done.read_text())
+    pieces_file(work)
+    cmd = [sys.executable, str(Path(__file__).resolve()), "stage-one", "--unit", unit,
+           "--work-dir", str(work), "--memory", memory, "--src", json.dumps(src)]
+    if threads:
+        cmd += ["--threads", str(threads)]
+    if low_disk:
+        cmd.append("--low-disk")
+    subprocess.run(cmd, check=True)
+    return json.loads(done.read_text())
+
+
+def stage_one(unit: str, src: dict, work: Path, low_disk: bool, memory: str,
+              threads: int | None) -> None:
+    """One unit's wetlands to work/stage/<unit>/target=<XX>/part_*.parquet:
+    repaired, unwrapped, each row with the state of its interior point and
     whether it is a home copy, partitioned by its target state so a state's
-    file reads only its own rows; its projects to <unit>.projects.parquet.
-    <unit>.json marks a unit done (a rerun skips it)."""
+    file reads only its own rows; <unit>.index.parquet, the columns the
+    dedup reads; its projects to <unit>.projects.parquet; <unit>.json, the
+    unit's counts, written last (a rerun skips a unit that has it).
+
+    Streamed, the polygons never held in memory: GDAL's FlatGeobuf through
+    DuckDB to <unit>.fixed.parquet (repaired, unwrapped, with each row's
+    interior point); every row located on its point alone; the polygons
+    streamed once through a join on that into the partitions."""
+    t0 = time.monotonic()
     stage = work / "stage" / unit
     done = work / "stage" / f"{unit}.json"
-    if done.is_file() and stage.is_dir():
-        return json.loads(done.read_text())
-    t0 = time.monotonic()
     shutil.rmtree(stage, ignore_errors=True)
     stage.parent.mkdir(parents=True, exist_ok=True)
     archive = fetch(zip_url(unit), work / "zips" / f"{unit}.zip", src.get("bytes"))
     gdb, layers = gdb_layers(archive)
     wet, meta = pick(layers, unit)
-    raw = work / "stage" / f"{unit}.raw.fgb"
+    raw = stage.parent / f"{unit}.raw.fgb"
     to_fgb(gdb, wet, raw, ["NWI_ID", "ATTRIBUTE", "WETLAND_TYPE", "ACRES"])
+    con = connect(work, memory, threads)
     if meta:
-        fgb = work / "stage" / f"{unit}.projects.fgb"
+        fgb = stage.parent / f"{unit}.projects.fgb"
         to_fgb(gdb, meta, fgb, [c for c in PROJECT_COLUMNS if c != "DATA_SOURCE"]
                + (["DATA_SOURCE"] if unit == "PacTrust" else []))
         con.execute(f"""COPY (SELECT * EXCLUDE (geom), ST_AsWKB(geom) AS geom FROM ST_Read('{fgb}'))
-                        TO '{work / "stage" / f"{unit}.projects.parquet"}' (FORMAT PARQUET)""")
+                        TO '{stage.parent / f"{unit}.projects.parquet"}' (FORMAT PARQUET)""")
         fgb.unlink()
     if low_disk:
         archive.unlink()
     own = UNIT_STATES.get(unit, (unit,))
     own_sql = ", ".join(f"'{s}'" for s in own)
-    con.execute(f"""CREATE OR REPLACE TEMP TABLE raw AS
-        SELECT NWI_ID, ATTRIBUTE, WETLAND_TYPE, ACRES, ST_SetCRS(geom::GEOMETRY, '') AS g,
-               NOT ST_IsValid(ST_SetCRS(geom::GEOMETRY, '')) AS invalid
-        FROM ST_Read('{raw}')""")
-    rows, ids, nulls = con.execute(
-        "SELECT count(*), count(DISTINCT NWI_ID), count(*) FILTER (WHERE NWI_ID IS NULL) "
-        "FROM raw").fetchone()
+    fixed = stage.parent / f"{unit}.fixed.parquet"
+    valid = ("CASE WHEN invalid THEN ST_Multi(ST_CollectionExtract(ST_MakeValid(g), 3)) "
+             "ELSE g END")
+    con.execute(f"""COPY (
+        SELECT NWI_ID, ATTRIBUTE, WETLAND_TYPE, ACRES, invalid, across, geom,
+               ST_PointOnSurface(geom) AS p
+        FROM (SELECT *, ST_XMin(v) < 180 AND ST_XMax(v) > 180 AS across,
+                     {UNWRAP.format(g='v')} AS geom
+              FROM (SELECT *, {valid} AS v
+                    FROM (SELECT NWI_ID, ATTRIBUTE, WETLAND_TYPE, ACRES, g,
+                                 NOT ST_IsValid(g) AS invalid
+                          FROM (SELECT *, ST_SetCRS(geom::GEOMETRY, '') AS g
+                                FROM ST_Read('{raw}')))))
+        ) TO '{fixed}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 50000)""")
+    raw.unlink()
+    rows, ids, nulls, empty, invalid, across = con.execute(f"""
+        SELECT count(*), count(DISTINCT NWI_ID), count(*) FILTER (WHERE NWI_ID IS NULL),
+               count(*) FILTER (WHERE geom IS NULL OR ST_IsEmpty(geom)),
+               count(*) FILTER (WHERE invalid), count(*) FILTER (WHERE across)
+        FROM read_parquet('{fixed}')""").fetchone()
     expected = layers[wet]
     problems = []
     if rows != expected:
@@ -320,65 +431,77 @@ def stage_unit(con, unit: str, src: dict, work: Path, low_disk: bool) -> dict:
         problems.append(f"{nulls} rows without NWI_ID")
     if ids + (1 if nulls else 0) != rows:
         problems.append(f"NWI_ID: {rows - ids} repeated within the unit")
+    if empty:
+        problems.append(f"{empty} empty geometries after repair")
     if problems:
         sys.exit(f"{unit}: gate failed: " + "; ".join(problems))
-    valid = ("CASE WHEN invalid THEN ST_Multi(ST_CollectionExtract(ST_MakeValid(g), 3)) "
-             "ELSE g END")
-    con.execute(f"""CREATE OR REPLACE TEMP TABLE fixed AS
-        SELECT NWI_ID, ATTRIBUTE, WETLAND_TYPE, ACRES, invalid,
-               ST_XMin(v) < 180 AND ST_XMax(v) > 180 AS across,
-               {UNWRAP.format(g='v')} AS geom
-        FROM (SELECT *, {valid} AS v FROM raw)""")
-    con.execute("DROP TABLE raw")
-    empty = con.execute("SELECT count(*) FROM fixed WHERE geom IS NULL OR ST_IsEmpty(geom)"
-                        ).fetchone()[0]
-    if empty:
-        sys.exit(f"{unit}: {empty} empty geometries after repair")
-    # The state of each row's interior point; a point on a border between two
-    # states takes the first code.
-    con.execute("""CREATE OR REPLACE TEMP TABLE pts AS
-        SELECT NWI_ID, ST_PointOnSurface(geom) AS p FROM fixed""")
-    con.execute("""CREATE OR REPLACE TEMP TABLE located AS
-        SELECT pts.NWI_ID, min(s.state) AS state FROM pts
-        LEFT JOIN states s ON ST_Intersects(s.g, pts.p) GROUP BY 1""")
-    con.execute(f"""CREATE OR REPLACE TEMP TABLE nearest AS
-        SELECT pts.NWI_ID, arg_min(s.state, ST_Distance(s.g, pts.p)) AS state,
-               min(ST_Distance(s.g, pts.p)) AS d
-        FROM pts JOIN located l USING (NWI_ID) JOIN states s ON s.state IN ({own_sql})
-        WHERE l.state IS NULL GROUP BY 1""")
-    um = "'UM'" if "UM" in own else "n.state"
-    con.execute(f"""CREATE OR REPLACE TEMP TABLE staged AS
+    # A fresh connection for the joins: the one that wrote and counted the
+    # fixed file keeps memory DuckDB does not hand back (the same join that
+    # fits in a new connection ran out of memory in it, Minnesota).
+    con.close()
+    con = connect(work, memory, threads)
+    load_states(con, work)
+    um = "'UM'" if "UM" in own else "m.state"
+    # Located on the points alone (NWI_ID and its interior point, a few
+    # dozen bytes a row): the state of each point from the state pieces of
+    # its grid cell (pieces_file); a point on a border between two states
+    # takes the first code. A point in no state takes the nearest of the
+    # unit's own states. The polygons are not carried through these joins:
+    # with them, Minnesota (2.7 million rows) ran out of memory.
+    pts = f"(SELECT NWI_ID, p FROM read_parquet('{fixed}'))"
+    d = GRID_DEG
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE pieces AS
+        SELECT * FROM read_parquet('{pieces_file(work)}')""")
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE hit AS
+        SELECT c.NWI_ID, min(sp.state) AS state FROM {pts} c
+        JOIN pieces sp ON sp.x = floor(ST_X(c.p) / {d})::INT
+                      AND sp.y = floor(ST_Y(c.p) / {d})::INT
+        WHERE ST_Intersects(sp.piece, c.p) GROUP BY 1""")
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE miss AS
+        SELECT c.NWI_ID, arg_min(s.state, ST_Distance(s.g, c.p)) AS state,
+               min(ST_Distance(s.g, c.p)) AS d
+        FROM {pts} c ANTI JOIN hit h ON h.NWI_ID = c.NWI_ID
+        JOIN states s ON s.state IN ({own_sql}) GROUP BY 1""")
+    con.execute(f"""CREATE OR REPLACE TEMP TABLE located AS
+        SELECT c.NWI_ID, h.state AS point_state,
+               coalesce(h.state, CASE WHEN m.d <= {NEAREST_DEGREES} THEN m.state
+                                      ELSE {um} END, 'NONE') AS target,
+               (h.state IS NULL OR h.state IN ({own_sql})) AS home
+        FROM (SELECT NWI_ID FROM read_parquet('{fixed}')) c
+        LEFT JOIN hit h USING (NWI_ID) LEFT JOIN miss m USING (NWI_ID)""")
+    con.execute("DROP TABLE hit; DROP TABLE miss; DROP TABLE pieces")
+    # Then the polygons, streamed once through a join on that small table
+    # into the partitions; small row groups bound what each open partition
+    # holds before it is flushed.
+    con.execute(f"""COPY (
         SELECT f.NWI_ID, f.ATTRIBUTE, f.WETLAND_TYPE, f.ACRES, '{unit}' AS source_unit,
-               l.state AS point_state,
-               CASE WHEN l.state IS NOT NULL THEN l.state
-                    WHEN n.d <= {NEAREST_DEGREES} THEN n.state ELSE {um} END AS target,
-               (l.state IS NULL OR l.state IN ({own_sql})) AS home,
-               f.invalid, f.across, f.geom
-        FROM fixed f JOIN located l USING (NWI_ID) LEFT JOIN nearest n USING (NWI_ID)""")
-    stats = con.execute("""
-        SELECT count(*), count(*) FILTER (WHERE invalid), count(*) FILTER (WHERE across),
-               count(*) FILTER (WHERE point_state IS NULL), count(*) FILTER (WHERE NOT home),
-               count(*) FILTER (WHERE target IS NULL)
-        FROM staged""").fetchone()
-    if stats[5]:
-        sys.exit(f"{unit}: {stats[5]} rows without a target state")
-    # part_<i>.parquet, not data_<i>: the globs below then never match the
-    # ._* files macOS writes beside each file on exFAT (T9).
-    con.execute(f"""COPY (SELECT * EXCLUDE (invalid, across) FROM staged)
+               l.point_state, l.target, l.home, f.geom
+        FROM read_parquet('{fixed}') f JOIN located l USING (NWI_ID))
         TO '{stage}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (target),
-                      FILENAME_PATTERN 'part_{{i}}')""")
-    con.execute("DROP TABLE staged")
-    for t in ("fixed", "pts", "located", "nearest"):
-        con.execute(f"DROP TABLE {t}")
-    raw.unlink()
+                      FILENAME_PATTERN 'part_{{i}}', ROW_GROUP_SIZE 20000)""")
+    con.execute("DROP TABLE located")
+    fixed.unlink()
+    # part_<i>.parquet, not data_<i>: the globs never match the ._* files
+    # macOS writes beside each file on exFAT (T9).
+    parts = (f"read_parquet('{stage}/target=*/part_*.parquet', hive_partitioning = true)")
+    staged_rows, outside, neighbour, untargeted = con.execute(f"""
+        SELECT count(*), count(*) FILTER (WHERE point_state IS NULL),
+               count(*) FILTER (WHERE NOT home), count(*) FILTER (WHERE target = 'NONE')
+        FROM {parts}""").fetchone()
+    if untargeted:
+        sys.exit(f"{unit}: {untargeted} rows without a target state")
+    if staged_rows != rows:
+        sys.exit(f"{unit}: staged {staged_rows:,} rows of {rows:,}")
+    con.execute(f"""COPY (SELECT NWI_ID, source_unit, target, home, ACRES FROM {parts})
+                    TO '{stage.parent / f"{unit}.index.parquet"}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+    con.close()
     entry = {"unit": unit, "states": list(own), "layer": wet, "projects_layer": meta,
-             "rows": stats[0], "gdb_rows": expected, "repaired_invalid": stats[1],
-             "split_at_180": stats[2], "point_outside_states": stats[3],
-             "rows_in_a_neighbour": stats[4], **src}
+             "rows": rows, "gdb_rows": expected, "repaired_invalid": invalid,
+             "split_at_180": across, "point_outside_states": outside,
+             "rows_in_a_neighbour": neighbour, **src}
     done.write_text(json.dumps(entry))
-    print(f"  {unit}: {stats[0]:,} rows, {stats[4]:,} in a neighbour, {stats[3]} outside "
-          f"every state, {stats[1]} repaired, {time.monotonic() - t0:.0f} s", flush=True)
-    return entry
+    print(f"  {unit}: {rows:,} rows, {neighbour:,} in a neighbour, {outside} outside "
+          f"every state, {invalid} repaired, {time.monotonic() - t0:.0f} s", flush=True)
 
 
 def staged(work: Path, target: str = "*") -> str:
@@ -388,83 +511,189 @@ def staged(work: Path, target: str = "*") -> str:
             "hive_partitioning = true)")
 
 
-def choose(con, work: Path) -> dict:
+def index_files(work: Path) -> list[Path]:
+    """Every staged unit's index (not the ._* files exFAT adds)."""
+    return sorted(p for p in (work / "stage").glob("*.index.parquet")
+                  if not p.name.startswith("."))
+
+
+def choose(con, work: Path, groups: int = 1) -> dict:
     """Each NWI_ID once: the home copy, then the largest ACRES, then the
-    unit name. Table `win` (NWI_ID, source_unit, target)."""
-    rows = staged(work)
-    con.execute(f"""CREATE OR REPLACE TABLE win AS
+    unit name, read from the units' indexes only. Writes work/win.parquet
+    (NWI_ID, source_unit, target) and work/dedup.json; returns the dedup
+    counts and the target states in `groups` groups of about equal rows,
+    for the write jobs."""
+    files = index_files(work)
+    if not files:
+        sys.exit(f"{work / 'stage'}: no staged unit")
+    idx = "read_parquet([" + ", ".join(f"'{p}'" for p in files) + "])"
+    win = work / "win.parquet"
+    con.execute(f"""COPY (
         SELECT NWI_ID, source_unit, target, home FROM (
             SELECT NWI_ID, source_unit, target, home,
                    row_number() OVER (PARTITION BY NWI_ID
                                       ORDER BY home DESC, ACRES DESC NULLS LAST,
                                                source_unit) AS k
-            FROM {rows})
-        WHERE k = 1""")
-    copies, ids = con.execute(f"SELECT count(*), count(DISTINCT NWI_ID) FROM {rows}").fetchone()
-    kept = con.execute("SELECT count(*) FROM win").fetchone()[0]
+            FROM {idx})
+        WHERE k = 1) TO '{win}' (FORMAT PARQUET, COMPRESSION ZSTD)""")
+    copies, ids = con.execute(f"SELECT count(*), count(DISTINCT NWI_ID) FROM {idx}").fetchone()
+    kept, from_neighbour = con.execute(
+        f"SELECT count(*), count(*) FILTER (WHERE NOT home) FROM read_parquet('{win}')").fetchone()
     if kept != ids:
         sys.exit(f"dedup: {kept:,} kept for {ids:,} NWI_IDs")
-    from_neighbour = con.execute("SELECT count(*) FROM win WHERE NOT home").fetchone()[0]
     multi_home = con.execute(f"""
-        SELECT count(*) FROM (SELECT NWI_ID FROM {rows} WHERE home
+        SELECT count(*) FROM (SELECT NWI_ID FROM {idx} WHERE home
                               GROUP BY 1 HAVING count(*) > 1)""").fetchone()[0]
-    return {"copies_read": copies, "ids": ids, "copies_dropped": copies - ids,
-            "kept_from_a_neighbour": from_neighbour, "ids_with_several_home_copies": multi_home}
-
-
-def write_states(con, work: Path, rel: Path, crs: dict,
-                 low_disk: bool) -> tuple[dict[str, dict], dict]:
-    """One file per target state, from the kept rows of every unit's
-    partition for it; each partition deleted once written (low_disk). Also
-    the code gate: rows whose ATTRIBUTE is not in the code table."""
-    targets = [r[0] for r in con.execute("SELECT DISTINCT target FROM win ORDER BY 1").fetchall()]
-    staged_units = {p.name for p in (work / "stage").iterdir() if p.is_dir()}
-    foreign = [t for t in targets if t in WORKSTATION_UNITS and t not in staged_units]
+    units = sorted(p.name.split(".")[0] for p in files)
+    targets = dict(con.execute(f"SELECT target, count(*) FROM read_parquet('{win}') "
+                               "GROUP BY 1 ORDER BY 2 DESC").fetchall())
+    foreign = [t for t in targets if t in WORKSTATION_UNITS and t not in units]
     if foreign:
         sys.exit(f"rows for {foreign} from other units: that state is built on its own "
                  "(nwi_publish_ak.sh) and could not deduplicate them")
-    out = {}
+    dedup = {"units": units, "copies_read": copies, "ids": ids, "copies_dropped": copies - ids,
+             "kept_from_a_neighbour": from_neighbour, "ids_with_several_home_copies": multi_home,
+             "targets": targets}
+    (work / "dedup.json").write_text(json.dumps(dedup, indent=2) + "\n")
+    return {**dedup, "groups": balance(targets, groups)}
+
+
+def balance(sizes: dict[str, int], groups: int) -> list[list[str]]:
+    """Keys in `groups` groups of about equal total size, largest first."""
+    bins: list[tuple[int, list[str]]] = [(0, []) for _ in range(max(1, groups))]
+    for key, n in sorted(sizes.items(), key=lambda kv: -(kv[1] or 0)):
+        total, members = min(bins, key=lambda b: b[0])
+        bins.remove((total, members))
+        bins.append((total + (n or 0), members + [key]))
+    return [sorted(m) for _, m in sorted(bins, key=lambda b: -b[0]) if m]
+
+
+# Rows sorted at once by write_sorted(): a bucket of the Hilbert order.
+SORT_ROWS = 300_000
+
+
+def write_sorted(con, dest: Path, crs: dict) -> dict:
+    """census.write_src() for a state too large to sort at once: the view
+    `src` (a NAD83 `geometry` and its `bbox`) to GeoParquet 2.0, Hilbert
+    order, row groups capped by bytes. DuckDB 1.5 cannot spill a sort that
+    carries large geometries (Minnesota, 2.7 million polygons, ran out of
+    memory sorting), so the rows are streamed once with their Hilbert key,
+    sorted SORT_ROWS at a time in key ranges, and the sorted buckets read
+    back in order (insertion order kept, no sort) into the file
+    gaul.rewrite() cuts. Same file as write_src() would write."""
+    xmin, ymin, xmax, ymax, types, n = con.execute("""
+        SELECT min(ST_XMin(geometry)), min(ST_YMin(geometry)), max(ST_XMax(geometry)),
+               max(ST_YMax(geometry)), list(DISTINCT ST_GeometryType(geometry)::VARCHAR), count(*)
+        FROM src""").fetchone()
+    geo = json.dumps({
+        "version": "2.0.0", "primary_column": "geometry",
+        "columns": {"geometry": {
+            "encoding": "WKB",
+            "geometry_types": sorted(GEOMETRY_TYPE_NAMES[t] for t in types),
+            "crs": crs,
+            "bbox": [xmin, ymin, xmax, ymax],
+            "covering": {"bbox": {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}},
+        }},
+    }).replace("'", "''")
+    box = f"ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))"
+    keyed = dest.with_suffix(".keyed.parquet")
+    # Row groups of 20,000 rows in the intermediate files: DuckDB's writer
+    # buffers a whole row group per thread, and the default 122,880 rows of
+    # large polygons ran out of memory (Minnesota).
+    con.execute(f"""COPY (SELECT *, ST_Hilbert(geometry, {box}) AS _h FROM src)
+                    TO '{keyed}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
+    k = max(1, -(-n // SORT_ROWS))
+    qs = ", ".join(str(i / k) for i in range(1, k))
+    bounds = con.execute(f"""SELECT quantile_disc(_h, [{qs}])
+                             FROM read_parquet('{keyed}', hive_partitioning = false)
+                          """).fetchone()[0] if k > 1 else []
+    edges = [None, *sorted(set(bounds)), None]
+    buckets = []
+    for i, (lo, hi) in enumerate(zip(edges, edges[1:])):
+        cond = " AND ".join(c for c in (f"_h >= {lo}" if lo is not None else "",
+                                        f"_h < {hi}" if hi is not None else "") if c) or "true"
+        part = dest.with_suffix(f".b{i:03d}.parquet")
+        con.execute(f"""COPY (SELECT * EXCLUDE (_h) FROM read_parquet('{keyed}', hive_partitioning = false)
+                              WHERE {cond}
+                              ORDER BY _h)
+                        TO '{part}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 20000)""")
+        buckets.append(part)
+    keyed.unlink()
+    raw = dest.with_suffix(".raw.parquet")
+    listing = "[" + ", ".join(f"'{b}'" for b in buckets) + "]"
+    con.execute("SET preserve_insertion_order = true")
+    try:
+        # hive_partitioning off: the files sit in state=<XX>/, which DuckDB
+        # would otherwise add as a column.
+        con.execute(f"""COPY (SELECT * FROM read_parquet({listing}, hive_partitioning = false))
+            TO '{raw}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE', COMPRESSION ZSTD,
+                        ROW_GROUP_SIZE 20000, KV_METADATA {{geo: '{geo}'}})""")
+    finally:
+        con.execute("SET preserve_insertion_order = false")
+    for b in buckets:
+        b.unlink()
+    rewrite(raw, dest)
+    raw.unlink()
+    groups, largest = con.execute(f"""
+        SELECT count(*), max(b) FROM (SELECT row_group_id, sum(total_compressed_size) AS b
+        FROM parquet_metadata('{dest}') GROUP BY 1)""").fetchone()
+    return {"file": dest.name, "features": n, "bytes": dest.stat().st_size,
+            "row_groups": groups, "largest_row_group_bytes": largest, "sha256": sha256(dest)}
+
+
+def write_states(con, work: Path, out: Path, rel_name: str, crs: dict, targets: list[str],
+                 low_disk: bool) -> dict[str, dict]:
+    """One file per target state in `targets`, from the kept rows (work/
+    win.parquet) of every unit's partition for it; each partition deleted
+    once written (low_disk). Each state's entry, with its rows whose
+    ATTRIBUTE is not in the code table, also goes to out/entries/<XX>.json
+    for assemble()."""
+    win = work / "win.parquet"
+    rel = out / "nwi" / rel_name
+    (out / "entries").mkdir(parents=True, exist_ok=True)
+    result = {}
     t0 = time.monotonic()
     cols = ", ".join(f'"{c}"' for c in COLUMNS)
     decoded = ", ".join(f"c.{d}" for d in DECODED)
-    unknown, codes_seen = 0, set()
     for i, st in enumerate(targets, 1):
-        con.execute(f"""CREATE OR REPLACE TEMP TABLE src AS
+        # A view, not a table: write_src's Hilbert sort then reads the
+        # partitions and spills, where a table of Minnesota's 2.7 million
+        # polygons beside the sort ran out of memory.
+        con.execute(f"""CREATE OR REPLACE TEMP VIEW src AS
             SELECT {cols}, ST_SetCRS(geom, '{CRS}') AS geometry, {BBOX.replace('geometry', 'geom')}
             FROM (SELECT s.NWI_ID, s.ATTRIBUTE, s.WETLAND_TYPE, s.ACRES, {decoded},
                          s.source_unit, s.geom
                   FROM {staged(work, st)} s
-                  SEMI JOIN (SELECT NWI_ID, source_unit FROM win WHERE target = '{st}') w
+                  SEMI JOIN (SELECT NWI_ID, source_unit FROM read_parquet('{win}')
+                             WHERE target = '{st}') w
                       ON w.NWI_ID = s.NWI_ID AND w.source_unit = s.source_unit
                   LEFT JOIN codes c ON c.ATTRIBUTE = s.ATTRIBUTE)""")
-        bad = con.execute("SELECT count(*) FROM src WHERE ATTRIBUTE NOT IN "
-                          "(SELECT ATTRIBUTE FROM codes)").fetchone()[0]
-        unknown += bad
-        codes_seen |= {r[0] for r in con.execute(
-            "SELECT DISTINCT ATTRIBUTE FROM src WHERE ATTRIBUTE NOT IN "
-            "(SELECT ATTRIBUTE FROM codes) LIMIT 50").fetchall()}
+        # One pass over ATTRIBUTE alone (the view reads no geometry for it).
+        bad_rows, bad = con.execute(
+            "SELECT count(*), coalesce(list(DISTINCT ATTRIBUTE)[:50], []) FROM src "
+            "WHERE ATTRIBUTE NOT IN (SELECT ATTRIBUTE FROM codes)").fetchone()
         dest = rel / f"state={st}" / "wetlands.parquet"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        e = write_src(con, dest, crs)
+        e = write_sorted(con, dest, crs)
+        con.execute("DROP VIEW src")
         verify(con, dest.parent, [dest.stem])
         check_crs(con, dest)
         # The longitudes it covers, for the catalog's extent (Alaska and the
         # Pacific cross 180), measured while the file is local.
         rows = f"read_parquet('{dest}', hive_partitioning = false)"
         ymin, ymax = con.execute(f"SELECT min(bbox.ymin), max(bbox.ymax) FROM {rows}").fetchone()
-        out[st] = {**e, "path": f"state={st}/wetlands.parquet", "name": state_name(con, st),
-                   "lon_intervals": lon_intervals(con, rows), "ymin": ymin, "ymax": ymax}
+        entry = {"state": st, **e, "path": f"state={st}/wetlands.parquet",
+                 "name": state_name(con, st), "lon_intervals": lon_intervals(con, rows),
+                 "ymin": ymin, "ymax": ymax,
+                 "rows_with_unknown_code": bad_rows, "unknown_codes": bad}
+        (out / "entries" / f"{st}.json").write_text(json.dumps(entry) + "\n")
+        result[st] = entry
         if low_disk:
             for part in (work / "stage").glob(f"*/target={st}"):
                 shutil.rmtree(part)
         print(f"  [{i}/{len(targets)}] {st}: {e['features']:,} rows, {e['bytes'] / 1e6:,.1f} MB, "
               f"{e['row_groups']} groups, {time.monotonic() - t0:.0f} s", flush=True)
-    con.execute("DROP TABLE IF EXISTS src")
-    total = sum(e["features"] for e in out.values())
-    if total and unknown / total > UNKNOWN_CODE_SHARE:
-        sys.exit(f"gate: {unknown:,} of {total:,} rows have an ATTRIBUTE not in the code table: "
-                 f"{sorted(codes_seen)[:50]}")
-    return out, {"rows_with_unknown_code": unknown, "unknown_codes": sorted(codes_seen)[:50]}
+    return result
 
 
 def write_projects(con, work: Path, rel: Path, crs: dict, built: list[str],
@@ -657,50 +886,86 @@ def merge_live(manifest: dict, live: dict | None) -> dict:
     return manifest
 
 
-def build(work: Path, out: Path, units: list[str] | None, no_tiles: bool, low_disk: bool,
-          memory: str, live: str | None) -> None:
-    t0 = time.monotonic()
-    work.mkdir(parents=True, exist_ok=True)
-    (work / "spill").mkdir(exist_ok=True)
+def read_upstream(path: Path | None) -> dict:
+    """The upstream read once per run (plan writes it, every job reads it),
+    so all jobs build the same release; without a file, read now."""
+    return json.loads(path.read_text()) if path else upstream()
+
+
+def plan(groups: int, dest: Path) -> dict:
+    """The release and the runner's units in `groups` groups of about equal
+    zip size, for the staging jobs; the upstream written to dest."""
     src = upstream()
+    dest.write_text(json.dumps(src, indent=2) + "\n")
+    units = {u: (h or {}).get("bytes") or 0 for u, h in src["units"].items()
+             if u not in WORKSTATION_UNITS}
+    return {"release": src["release"], "last_updated": src["last_updated"],
+            "groups": balance(units, groups)}
+
+
+def stage(src: dict, work: Path, units: list[str], low_disk: bool, memory: str,
+          threads: int | None) -> list[dict]:
+    missing = sorted(set(units) - set(src["units"]))
+    if missing:
+        sys.exit(f"units not on the download page: {missing}")
+    return [stage_unit(u, src["units"][u], work, low_disk, memory, threads) for u in units]
+
+
+def write(src: dict, work: Path, out: Path, targets: list[str], low_disk: bool,
+          memory: str) -> dict[str, dict]:
+    con = connect(work, memory)
+    crs = projjson(con)
+    load_states(con, work)
+    load_codes(con, work, work / "codes", src["codes"])
+    files = write_states(con, work, out, src["release"], crs, targets, low_disk)
+    con.close()
+    return files
+
+
+def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None) -> dict:
+    """The release's manifest from the staged units (work/stage/<unit>.json),
+    the dedup (work/dedup.json) and the written states (out/entries/*.json),
+    with codes.parquet, projects.parquet, ATTRIBUTION.txt, index.json and
+    _source.json. Gates: every kept NWI_ID is in a state file, unknown codes
+    under UNKNOWN_CODE_SHARE."""
     rel_name = src["release"]
     rel = out / "nwi" / rel_name
     rel.mkdir(parents=True, exist_ok=True)
-    todo = units or [u for u in src["units"] if u not in WORKSTATION_UNITS]
-    missing = sorted(set(todo) - set(src["units"]))
+    dedup = json.loads((work / "dedup.json").read_text())
+    todo = dedup["units"]
+    entries = [json.loads((work / "stage" / f"{u}.json").read_text()) for u in todo]
+    files = sorted((json.loads(p.read_text()) for p in (out / "entries").glob("*.json")
+                    if not p.name.startswith(".")), key=lambda f: f["state"])
+    missing = sorted(set(dedup["targets"]) - {f["state"] for f in files})
     if missing:
-        sys.exit(f"units not on the download page: {missing}")
-    print(f"NWI release {rel_name} ({src['last_updated']}), {len(todo)} units", flush=True)
-    con = connect(work, memory)
-    crs = projjson(con)
-    load_states(con)
-    codes = load_codes(con, work, rel, src["codes"])
-    entries = [stage_unit(con, u, src["units"][u], work, low_disk) for u in todo]
-    dedup = choose(con, work)
-    print(f"  dedup: {dedup['copies_read']:,} rows read, {dedup['ids']:,} NWI_IDs kept, "
-          f"{dedup['copies_dropped']:,} copies dropped, {dedup['kept_from_a_neighbour']:,} "
-          f"kept from a neighbour's download, {dedup['ids_with_several_home_copies']:,} with "
-          f"several home copies", flush=True)
-    files, codes_gate = write_states(con, work, rel, crs, low_disk)
-    total = sum(f["features"] for f in files.values())
+        sys.exit(f"gate: no state file written for {missing}")
+    total = sum(f["features"] for f in files)
     if total != dedup["ids"]:
         sys.exit(f"gate: the state files hold {total:,} rows, {dedup['ids']:,} NWI_IDs were kept")
+    unknown = sum(f.pop("rows_with_unknown_code") for f in files)
+    codes_seen = sorted({c for f in files for c in f.pop("unknown_codes")})
+    if total and unknown / total > UNKNOWN_CODE_SHARE:
+        sys.exit(f"gate: {unknown:,} of {total:,} rows have an ATTRIBUTE not in the code table: "
+                 f"{codes_seen[:50]}")
+    con = connect(work, memory)
+    crs = projjson(con)
+    codes = load_codes(con, work, rel, src["codes"])
     live_m = live_manifest(rel_name, live)
     live_projects = (f"{live}/nwi/{rel_name}/{live_m['projects']['file']}"
                      if live_m and live_m.get("projects") else None)
     projects = write_projects(con, work, rel, crs, todo, live_projects)
     con.close()
-    if low_disk:
-        shutil.rmtree(work / "stage")
+    stats = {k: v for k, v in dedup.items() if k not in ("units", "targets")}
     manifest = {
         "dataset": "nwi", "release": rel_name, "last_updated": src["last_updated"],
         "crs": CRS, "total_features": total,
         # One part per build: the runner's (every unit but Alaska) and the
         # workstation's (Alaska), each deduplicated on its own.
-        "parts": [{"units": sorted(todo), "dedup": dedup, "gate": codes_gate,
+        "parts": [{"units": todo, "dedup": stats,
+                   "gate": {"rows_with_unknown_code": unknown, "unknown_codes": codes_seen[:50]},
                    "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}],
         "units": entries,
-        "files": [{"state": s, **e} for s, e in files.items()],
+        "files": files,
         "codes": codes, "projects": projects, "pmtiles": None,
         "glob": f"s3://parquetry/wetlands/nwi/{rel_name}/state=*/wetlands.parquet",
     }
@@ -713,50 +978,123 @@ def build(work: Path, out: Path, units: list[str] | None, no_tiles: bool, low_di
     # A unit built elsewhere (Alaska) keeps the zip it was built from, as
     # published for this release, or none in a new release: the weekly check
     # then still sees Alaska as to do, even when FWS did not change its zip.
+    source = json.loads(json.dumps(src))
     if live:
         try:
             prev = json.loads(curl(f"{live}/_source.json")).get("nwi", {})
         except subprocess.CalledProcessError:
             prev = {}
         was = prev.get("units", {}) if prev.get("release") == rel_name else {}
-        for u in set(src["units"]) - set(todo):
-            src["units"][u] = was.get(u)
-    (out / "_source.json").write_text(json.dumps({"nwi": src}, indent=2) + "\n")
+        for u in set(source["units"]) - set(todo):
+            source["units"][u] = was.get(u)
+    (out / "_source.json").write_text(json.dumps({"nwi": source}, indent=2) + "\n")
+    print(f"  assembled {rel_name}: {len(files)} state files, {total:,} rows, "
+          f"{len(manifest['files'])} with the published ones", flush=True)
+    return manifest
+
+
+def build(work: Path, out: Path, units: list[str] | None, no_tiles: bool, low_disk: bool,
+          memory: str, threads: int | None, live: str | None) -> None:
+    """Every step on one machine, in order: stage, choose, write, assemble,
+    tiles. The workflow runs the same steps as separate jobs."""
+    t0 = time.monotonic()
+    src = upstream()
+    todo = units or [u for u in src["units"] if u not in WORKSTATION_UNITS]
+    print(f"NWI release {src['release']} ({src['last_updated']}), {len(todo)} units", flush=True)
+    stage(src, work, todo, low_disk, memory, threads)
+    con = connect(work, memory)
+    d = choose(con, work)
+    con.close()
+    print(f"  dedup: {d['copies_read']:,} rows read, {d['ids']:,} NWI_IDs kept, "
+          f"{d['copies_dropped']:,} copies dropped, {d['kept_from_a_neighbour']:,} "
+          f"kept from a neighbour's download, {d['ids_with_several_home_copies']:,} with "
+          f"several home copies", flush=True)
+    write(src, work, out, sorted(d["targets"]), low_disk, memory)
+    assemble(src, work, out, memory, live)
+    if low_disk:
+        shutil.rmtree(work / "stage")
     if not no_tiles:
         tiles(work, out, memory)
-    print(f"  done: {len(files)} state files, {total:,} rows, {time.monotonic() - t0:.0f} s",
-          flush=True)
+    print(f"  done, {time.monotonic() - t0:.0f} s", flush=True)
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    def common(sp, out=False):
+        sp.add_argument("--work-dir", type=Path, default=Path("work"))
+        if out:
+            sp.add_argument("--out-dir", type=Path, required=True, help="the wetlands/ prefix")
+        sp.add_argument("--memory", default="6GB", help="DuckDB memory_limit")
+        sp.add_argument("--upstream", type=Path, help="the upstream plan wrote (default: read now)")
+
     sub.add_parser("upstream", help="print the release on the FWS download page")
-    b = sub.add_parser("build", help="fetch, stage, deduplicate and write the state files")
-    b.add_argument("--work-dir", type=Path, default=Path("work"))
-    b.add_argument("--out-dir", type=Path, required=True, help="the wetlands/ prefix")
+    pl = sub.add_parser("plan", help="the release and the units in groups, for the staging jobs")
+    pl.add_argument("--groups", type=int, default=6)
+    pl.add_argument("--upstream-out", type=Path, required=True)
+    s = sub.add_parser("stage", help="stage units, each in a process of its own")
+    common(s)
+    s.add_argument("--unit", action="append", required=True)
+    s.add_argument("--threads", type=int)
+    s.add_argument("--low-disk", action="store_true", help="delete each zip once staged")
+    one = sub.add_parser("stage-one", help=argparse.SUPPRESS)
+    common(one)
+    one.add_argument("--unit", required=True)
+    one.add_argument("--src", required=True)
+    one.add_argument("--threads", type=int)
+    one.add_argument("--low-disk", action="store_true")
+    c = sub.add_parser("choose", help="each NWI_ID once, from the staged units' indexes")
+    common(c)
+    c.add_argument("--groups", type=int, default=1)
+    w = sub.add_parser("write", help="the state files of these target states")
+    common(w, out=True)
+    w.add_argument("--target", action="append", required=True)
+    w.add_argument("--low-disk", action="store_true", help="delete each partition once written")
+    a = sub.add_parser("assemble", help="the manifest, codes, projects and source files")
+    common(a, out=True)
+    a.add_argument("--live", help="merge the published manifest of the same release")
+    b = sub.add_parser("build", help="every step on one machine (a test run, or Alaska)")
+    common(b, out=True)
     b.add_argument("--unit", action="append",
                    help="these units only (a test run, or AK on a workstation)")
     b.add_argument("--no-tiles", action="store_true")
     b.add_argument("--low-disk", action="store_true",
-                   help="delete each zip once staged, the stage once written (a runner)")
-    b.add_argument("--memory", default="6GB", help="DuckDB memory_limit")
+                   help="delete each zip once staged, the stage once written")
+    b.add_argument("--threads", type=int)
     b.add_argument("--live", help="merge the published manifest of the same release "
                                   "(the wetlands/ prefix URL)")
     t = sub.add_parser("tiles", help="wetlands.pmtiles from the state files in --out-dir")
-    t.add_argument("--work-dir", type=Path, default=Path("work"))
-    t.add_argument("--out-dir", type=Path, required=True, help="the wetlands/ prefix")
-    t.add_argument("--memory", default="6GB", help="DuckDB memory_limit")
+    common(t, out=True)
     t.add_argument("--live", help="read the release from here (the published wetlands/ prefix)")
     args = p.parse_args()
     if args.cmd == "upstream":
         print(json.dumps(upstream(), indent=2))
-        return
-    if args.cmd == "tiles":
+    elif args.cmd == "plan":
+        print(json.dumps(plan(args.groups, args.upstream_out)))
+    elif args.cmd == "stage":
+        stage(read_upstream(args.upstream), args.work_dir, args.unit, args.low_disk,
+              args.memory, args.threads)
+    elif args.cmd == "stage-one":
+        stage_one(args.unit, json.loads(args.src), args.work_dir, args.low_disk, args.memory,
+                  args.threads)
+    elif args.cmd == "choose":
+        con = connect(args.work_dir, args.memory)
+        d = choose(con, args.work_dir, args.groups)
+        con.close()
+        print(json.dumps({"groups": d["groups"], "ids": d["ids"],
+                          "copies_dropped": d["copies_dropped"]}))
+    elif args.cmd == "write":
+        write(read_upstream(args.upstream), args.work_dir, args.out_dir, args.target,
+              args.low_disk, args.memory)
+    elif args.cmd == "assemble":
+        assemble(read_upstream(args.upstream), args.work_dir, args.out_dir, args.memory,
+                 args.live)
+    elif args.cmd == "tiles":
         tiles(args.work_dir, args.out_dir, args.memory, args.live)
-        return
-    build(args.work_dir, args.out_dir, args.unit, args.no_tiles, args.low_disk, args.memory,
-          args.live)
+    else:
+        build(args.work_dir, args.out_dir, args.unit, args.no_tiles, args.low_disk,
+              args.memory, args.threads, args.live)
 
 
 if __name__ == "__main__":

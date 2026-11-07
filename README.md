@@ -203,6 +203,10 @@ Island's polygons are also in Massachusetts' download, sometimes cut
 differently): each `NWI_ID` is kept once, in the file of the state that holds
 its interior point, from that state's own download. The geometry is
 reprojected from FWS's three Albers projections to NAD83 lon/lat (EPSG:4269).
+The workflow splits the national build into jobs through a scratch prefix
+(`wetlands/_work/<release>/`, removed once published): six staging jobs by
+groups of units, one dedup job on the units' indexes, six writing jobs by
+groups of states, then one job that assembles and publishes.
 Alaska (an 11.8 GB zip) does not fit a runner: the workflow builds every other
 unit and `scripts/datasets/nwi_publish_ak.sh` builds Alaska into the same
 release from a workstation, then the workflow's `tiles` stage draws the map
