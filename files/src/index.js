@@ -302,6 +302,10 @@ const DATASETS = {
       "geonames/latest/ (every name, per country under country=<CC>/, and cities1000), rebuilt weekly.",
     attribution: "gazetteer/geonames/latest/ATTRIBUTION.txt",
   },
+  "overture/": {
+    subtitle: "Overture Maps is not stored here: this folder holds only our guide for querying " +
+      "Overture's own files (AGENTS.md). Overture's catalog: https://stac.overturemaps.org/catalog.json",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
