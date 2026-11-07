@@ -78,6 +78,13 @@ YEAR = 2025
 STEM = f"worldpop_{YEAR}"
 RES = 7               # the country files
 WORLD_RES = 5         # the world file
+# WorldPop's age and sex rasters carry float noise just below zero: up to 583
+# pixels a band, the lowest -0.17 people, at most 0.78 people a band (m_85,
+# of 18.6 million), measured on R2025A 2025. Such pixels are left out and
+# counted. A pixel at or below NEGATIVE_NOISE, or a band whose negatives add
+# up to more than NEGATIVE_SHARE of its total, fails the build.
+NEGATIVE_NOISE = -1.0
+NEGATIVE_SHARE = 1e-6
 PARALLEL = 8          # downloads at a time: WorldPop serves ~270 KB/s a connection
 SITE = "https://data.worldpop.org/GIS"
 POP_DIR = (f"{SITE}/Population/Global_2015_2030/{RELEASE}/{YEAR}/0_Mosaicked/{VERSION}/"
@@ -206,7 +213,8 @@ def fetch(url: str, dest: Path) -> Path:
 
 def count_band(con, tif: Path, dest: Path) -> dict:
     """Sum the band's pixels per resolution RES cell, by pixel centre.
-    Read in strips; only pixels with people are passed on."""
+    Read in strips; only pixels with people are passed on. Pixels just
+    below zero are float noise: left out and counted (NEGATIVE_NOISE)."""
     import numpy as np
     import pyarrow as pa
     import rasterio
@@ -218,7 +226,7 @@ def count_band(con, tif: Path, dest: Path) -> dict:
         if t.b or t.d:
             sys.exit(f"{tif.name}: rotated geotransform")
         con.execute("CREATE OR REPLACE TEMP TABLE part (cell UBIGINT, v DOUBLE)")
-        total, pixels, negative = 0.0, 0, 0
+        total, pixels, negative, negative_sum = 0.0, 0, 0, 0.0
         step = max(r.block_shapes[0][0], 256)
         step = (1024 // step) * step or step
         cols = np.arange(r.width)
@@ -229,7 +237,11 @@ def count_band(con, tif: Path, dest: Path) -> dict:
             valid = np.isfinite(a)
             if nodata is not None:
                 valid &= a != nodata
-            negative += int((valid & (a < 0)).sum())
+            below = valid & (a < 0)
+            if (valid & (a <= NEGATIVE_NOISE)).any():
+                sys.exit(f"{tif.name}: pixels of {float(a[below].min())} people")
+            negative += int(below.sum())
+            negative_sum += float(a[below].astype(np.float64).sum())
             valid &= a > 0
             rows, ci = np.nonzero(valid)
             if not rows.size:
@@ -243,12 +255,13 @@ def count_band(con, tif: Path, dest: Path) -> dict:
             con.execute(f"INSERT INTO part SELECT h3_latlng_to_cell(lat, lon, {RES}), sum(v) "
                         "FROM strip GROUP BY 1")
             con.unregister("strip")
-    if negative:
-        sys.exit(f"{tif.name}: {negative:,} negative pixels")
+    if -negative_sum > NEGATIVE_SHARE * total:
+        sys.exit(f"{tif.name}: negative pixels add up to {negative_sum} people of {total}")
     con.execute(f"COPY (SELECT cell, sum(v) AS v FROM part GROUP BY cell) TO '{dest}' "
                 "(FORMAT parquet, COMPRESSION zstd)")
     con.execute("DROP TABLE part")
-    return {"file": tif.name, "sum": total, "pixels": pixels}
+    return {"file": tif.name, "sum": total, "pixels": pixels,
+            "negative_pixels": negative, "negative_sum": negative_sum}
 
 
 def count_all(con, work: Path, keep: bool = False) -> dict:
@@ -485,7 +498,9 @@ The 1 km pixels are summed on H3 cells: each pixel goes whole to the
 resolution {RES} cell holding its centre (resolution {WORLD_RES} for the world
 file), so every total is WorldPop's, moved by at most half a cell. The age
 columns are sums of WorldPop's age bands (both sexes); `female` and `male`
-sum the per-sex bands. The `country` column is not WorldPop's: it is the
+sum the per-sex bands. Pixels WorldPop gives just below zero (float noise in
+the age and sex rasters, under one person a band) are left out; the manifest
+counts them per band. The `country` column is not WorldPop's: it is the
 GAUL 2024 L0 unit holding the cell centre (FAO, Global Administrative Unit
 Layers 2024{f', accessed {gaul_accessed}' if gaul_accessed else ''}, following the UN
 delineation; disputed areas keep GAUL's x codes). WorldPop's own national
@@ -563,7 +578,9 @@ def build(work: Path, out: Path, gaul: str, gaul_accessed: str | None, *,
         "h3_res": RES, "world_h3_res": WORLD_RES, "crs": "OGC:CRS84",
         "total_features": sum(e["features"] for e in entries),
         "totals": totals,
-        "bands": {b: {"sum": v["sum"], "pixels": v["pixels"], "url": v["url"]}
+        "bands": {b: {"sum": v["sum"], "pixels": v["pixels"], "url": v["url"],
+                      "negative_pixels": v.get("negative_pixels", 0),
+                      "negative_sum": v.get("negative_sum", 0.0)}
                   for b, v in bands.items()},
         "columns": COLUMNS, "descriptions": DESCRIPTIONS,
         "countries": assigned,

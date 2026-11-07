@@ -369,7 +369,9 @@ constrained, 1 km), summed on H3 cells (`scripts/datasets/worldpop.py`,
 workflow `dataset-worldpop.yml`), sit under
 `https://parquetry.geomermaids.com/worldpop/R2025A/2025/`: one GeoParquet file
 per country at H3 resolution 7 (about 5 km2) under `country=<ISO3>/`, a world
-file at resolution 5, and one PMTiles archive (resolutions 3 to 7 by zoom).
+file at resolution 5, and one PMTiles archive (resolutions 3 to 7 by zoom):
+253 country files, 11.5 million cells, 1.3 GB; the world file 51 MB; the
+tiles 1.3 GB. 8.2 billion people, 844 million aged 65 and over.
 Columns: `population`, `pop_0_14`, `pop_15_64`, `pop_65_plus`, `pop_80_plus`,
 `female`, `male`, the cell's `area_km2` and centre. Each 1 km pixel goes to
 the cell holding its centre, so totals are WorldPop's, checked band by band

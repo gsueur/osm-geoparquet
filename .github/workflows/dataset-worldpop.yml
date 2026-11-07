@@ -56,8 +56,10 @@ env:
 jobs:
   worldpop:
     runs-on: ubuntu-24.04
-    # Downloads dominate: 17 GB at a few MB/s in all. The workstation build
-    # took about 3 h of downloading and 45 min of counting and writing.
+    # Downloads dominate: 17 GB at about 2 MB/s in all, eight connections
+    # (about 2.5 h on the workstation, 2026-11-07). Counting, countries,
+    # writing and tiling took 33 min there, peak RSS 5.2 GB with DuckDB
+    # capped at 4 GB.
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v7
@@ -97,7 +99,7 @@ jobs:
           accessed=$(curl -fsS "$GAUL/_manifest.json" | jq -r '.accessed')
           /usr/bin/time -v uv run --project scripts --with rasterio --with shapely \
             python scripts/datasets/worldpop.py build --work-dir "$WORK/work" --out-dir "$WORK/out" \
-            --gaul-accessed "$accessed" --threads 4 --memory 10GB 2> >(tee "$WORK/time.txt" >&2)
+            --gaul-accessed "$accessed" --threads 4 --memory 8GB 2> >(tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
           du -sh "$WORK/out"; find "$WORK/out" -type f | wc -l
           jq -c '{totals, countries, files: .partitions.files, bytes: .partitions.bytes,
