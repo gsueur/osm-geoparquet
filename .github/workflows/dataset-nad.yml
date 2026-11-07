@@ -129,12 +129,11 @@ jobs:
           rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ _coverage.json" \
             --filter "+ ATTRIBUTION.txt" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
-          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
-            --filter "+ _source.json" --filter "- *" \
-            --ignore-times --header-upload "Cache-Control: public, max-age=300"
           # A rebuild of the same release number writes the same path: a
           # state the new release no longer has must not stay behind for the
-          # state=* glob to read.
+          # state=* glob to read. Before _source.json: if this fails, the
+          # published _source.json still differs from upstream and the next
+          # weekly run rebuilds and retries, instead of finding nothing new.
           rel=$(jq -r '.datasets[0].path' "$out/index.json")
           keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
           for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
@@ -142,6 +141,9 @@ jobs:
             echo "removing stale $rel/$d"
             rclone purge "$REMOTE/$rel/$d"
           done
+          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+            --filter "+ _source.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
