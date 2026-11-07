@@ -1,0 +1,214 @@
+# FEMA's USA Structures: parquetry:parquetry/structures/.
+#
+# One GeoParquet file of building footprints per state under
+# structures/latest/state=<XX>/, beside its counts on H3 cells and its map,
+# and the Portolan catalog at structures/catalog/.
+# scripts/datasets/structures.py documents the layout and the gate.
+#
+# FEMA refreshes states in batches on its public bucket fema-femadata. A
+# weekly run lists the bucket and compares each state's newest zip (key and
+# ETag) with the published structures/_source.json: only the states that
+# moved are rebuilt, each uploaded and deleted before the next, so the disk
+# never holds more than one state. The manifest merges them over the
+# published one.
+#
+#   build    the states that moved (all with force), upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the catalog
+#   tiles    only the maps of the given states, from the published files
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-structures
+
+on:
+  schedule:
+    - cron: "41 7 * * 3"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; tiles rebuilds maps; catalog only the catalog"
+        type: choice
+        options: [build, publish, tiles, catalog]
+        default: build
+      states:
+        description: "Postal codes, space-separated (default: the states that moved; tiles: required)"
+        type: string
+        default: ""
+      force:
+        description: "Rebuild every state, moved or not"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-structures
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/structures
+  PUBLIC: https://parquetry.geomermaids.com/structures
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' || inputs.stage == 'tiles' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  TILES_ONLY: ${{ inputs.stage == 'tiles' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # latest/state=<XX>/ is rewritten in place when a state moves.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  structures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      # First, so a block of runners by FEMA's bucket shows as itself and
+      # not as a failed build.
+      - name: Can the runner read FEMA's bucket?
+        if: env.CATALOG_ONLY != 'true'
+        run: |
+          list="https://fema-femadata.s3.amazonaws.com/?list-type=2&prefix=Partners/ORNL/USA_Structures/American%20Samoa/"
+          code=$(curl -s -o listing.xml -w '%{http_code}' "$list")
+          echo "listing -> $code"; [ "$code" = "200" ] || exit 1
+          key=$(grep -o '<Key>[^<]*\.zip</Key>' listing.xml | tail -1 | sed 's|<Key>||; s|</Key>||; s| |%20|g')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 "https://fema-femadata.s3.amazonaws.com/$key")
+          echo "range GET $key -> $code"; [ "$code" = "206" ]
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Which states?
+        id: check
+        if: env.CATALOG_ONLY != 'true'
+        run: |
+          if [ -n "${{ inputs.states }}" ]; then
+            states="${{ inputs.states }}"
+          elif [ "$TILES_ONLY" = "true" ]; then
+            echo "the tiles stage needs states"; exit 1
+          elif [ "${{ inputs.force }}" = "true" ]; then
+            states=$(uv run --project scripts python scripts/datasets/structures.py upstream | jq -r 'keys | join(" ")')
+          else
+            states=$(uv run --project scripts python scripts/datasets/structures.py changed --published "$PUBLIC")
+          fi
+          echo "states: ${states:-none}"
+          echo "states=$states" >> "$GITHUB_OUTPUT"
+          [ -n "$states" ] && echo "go=true" >> "$GITHUB_OUTPUT" || echo "go=false" >> "$GITHUB_OUTPUT"
+
+      - name: Work dir on the runner's big disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # One state at a time: build, upload, delete. A state that fails is
+      # skipped (its published files and manifest entry stay as they were),
+      # the others go on; the run fails at the end, and the next run finds
+      # the failed state still moved and retries it.
+      - name: Build (and upload) each state
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          out="$WORK/out"
+          failed=""
+          for st in ${{ steps.check.outputs.states }}; do
+            if [ "$TILES_ONLY" = "true" ]; then
+              cmd=(retile --state "$st" --work-dir "$WORK/src" --out-dir "$out")
+            else
+              cmd=(build --state "$st" --work-dir "$WORK/src" --out-dir "$out" --low-disk)
+            fi
+            if ! /usr/bin/time -v uv run --project scripts python scripts/datasets/structures.py \
+                "${cmd[@]}" 2> >(tee "$WORK/time.txt" >&2); then
+              echo "::error::$st failed"; failed="$failed $st"
+              rm -rf "$out/latest/state=$st" "$out/entries/$st.json" "$WORK/src"
+              continue
+            fi
+            grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+            du -sh "$out/latest/state=$st"; df -h /mnt | tail -1
+            if [ "$PUBLISH" = "true" ]; then
+              d="$out/latest/state=$st"
+              rclone copy "$d" "$REMOTE/latest/state=$st" --filter "+ *.parquet" --filter "- *" \
+                --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+                --transfers 4 --stats 60s --stats-one-line
+              rclone copy "$d" "$REMOTE/latest/state=$st" --filter "+ *.pmtiles" --filter "- *" \
+                --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+              rm -rf "$d"
+            fi
+          done
+          echo "FAILED=$failed" >> "$GITHUB_ENV"
+
+      - name: Manifest
+        if: steps.check.outputs.go == 'true' && !cancelled()
+        run: |
+          uv run --project scripts python scripts/datasets/structures.py finalize --out-dir "$WORK/out"
+          jq -c '[.states[] | {state, features, vintage: .source.vintage}]' "$WORK/out/latest/_manifest.json"
+          jq -c '.gone_upstream' "$WORK/out/latest/_manifest.json"
+
+      # The files that name the data, after it. A state gone upstream is
+      # removed before _source.json: if that fails, the next run retries.
+      - name: Publish the manifest
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out/latest" "$REMOTE/latest" --max-depth 1 --filter "+ _manifest.json" \
+            --filter "+ ATTRIBUTION.txt" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          for st in $(jq -r '.gone_upstream[]' "$out/latest/_manifest.json"); do
+            echo "removing latest/state=$st, gone upstream"
+            rclone purge "$REMOTE/latest/state=$st"
+          done
+          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+            --filter "+ _source.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json latest/_manifest.json latest/ATTRIBUTION.txt; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          for st in ${{ steps.check.outputs.states }}; do
+            for f in structures.parquet cells.parquet structures.pmtiles; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/latest/state=$st/$f")
+              [ "$code" = "200" ] || { echo "BAD state=$st/$f -> $code"; fail=1; continue; }
+            done
+            range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/latest/state=$st/structures.pmtiles")
+            [ "$range" = "206" ] || { echo "BAD $st pmtiles range request -> $range"; fail=1; }
+            echo "ok  state=$st"
+          done
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/structures_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/structures/collection.json \
+                   catalog/cells/collection.json catalog/structures/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
+
+      - name: Any state failed?
+        if: steps.check.outputs.go == 'true'
+        run: |
+          [ -z "$FAILED" ] || { echo "::error::failed:$FAILED"; exit 1; }
