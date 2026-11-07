@@ -129,6 +129,25 @@ the keys that differ from TIGER 2026. Portolan catalog at
 `https://parquetry.geomermaids.com/nri/catalog/catalog.json`
 (`scripts/datasets/nri_catalog.py`).
 
+The US National Address Database (`scripts/datasets/nad.py`, workflow
+`dataset-nad.yml`, checked weekly against data.transportation.gov) sits under
+`https://parquetry.geomermaids.com/addresses/nad/r24/`: release 24 (compiled
+September 30, 2026), 99,226,272 address points as one GeoParquet file per
+state (`state=<XX>/addresses.parquet`, 47 files: 45 states, DC and the US
+Virgin Islands), NAD's 60 columns unchanged plus
+`full_address`, a normalized one-line address for matching, lon/lat
+(OGC:CRS84: NAD's coordinates are WGS 84). No national file: the states read
+together through the S3 glob
+`s3://parquetry/addresses/nad/r24/state=*/addresses.parquet`. Participation is
+voluntary: `_coverage.json` lists rows and counties per state and the states
+with no rows (Hawaii, Michigan, Mississippi, Nevada, New Hampshire and four
+territories in r24), and `addresses_h3.parquet` / `.pmtiles` map the points
+on H3 cells. USDOT ships the text file as a 8.5 GB Deflate64 zip of a 42 GB
+CSV; `zipfile-inflate64` reads it (`uv run --with zipfile-inflate64`). The
+build gate accounts for every row of the CSV. Portolan catalog at
+`https://parquetry.geomermaids.com/addresses/catalog/catalog.json`
+(`scripts/datasets/nad_catalog.py`).
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one

@@ -283,6 +283,13 @@ const DATASETS = {
       "one PMTiles world basemap per scale.",
     attribution: "natural-earth/v5.1.2/ATTRIBUTION.txt",
   },
+  "addresses/": {
+    subtitle: "US National Address Database (USDOT), public domain: address points as one " +
+      "GeoParquet file per state under nad/r<release>/state=<XX>/, NAD's columns unchanged " +
+      "plus a normalized full_address, lon/lat; the release's coverage on H3 cells. Not " +
+      "every state contributes: see _coverage.json.",
+    attribution: "addresses/nad/r24/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
