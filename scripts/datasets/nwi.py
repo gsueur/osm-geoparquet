@@ -717,7 +717,12 @@ def write_states(con, work: Path, out: Path, rel_name: str, crs: dict, targets: 
     (out / "entries").mkdir(parents=True, exist_ok=True)
     result = {}
     t0 = time.monotonic()
-    cols = ", ".join(f'"{c}"' for c in COLUMNS)
+    # Joins as written: the kept keys (win.parquet) are the build side.
+    # DuckDB estimates the staged partitions at a few thousand rows and
+    # flips the semi join to build on them, geometries included: California
+    # and Wyoming (3 GB of staged rows each) then ran out of memory.
+    con.execute("SET disabled_optimizers = 'build_side_probe_side'")
+    cols =", ".join(f'"{c}"' for c in COLUMNS)
     decoded = ", ".join(f"c.{d}" for d in DECODED)
     for i, st in enumerate(targets, 1):
         # A view, not a table: write_src's Hilbert sort then reads the
