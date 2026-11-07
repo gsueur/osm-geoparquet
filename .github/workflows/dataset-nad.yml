@@ -56,8 +56,9 @@ env:
   RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
   RCLONE_CONFIG_PARQUETRY_ACL: private
   RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
-  # A release path never changes once written: a long cache.
-  CACHE: "Cache-Control: public, max-age=86400"
+  # USDOT can re-upload a release under the same number, which rebuilds the
+  # same path: the cache the other datasets use, not a long one.
+  CACHE: "Cache-Control: public, max-age=3600"
 
 jobs:
   nad:
@@ -131,6 +132,16 @@ jobs:
           rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
             --filter "+ _source.json" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # A rebuild of the same release number writes the same path: a
+          # state the new release no longer has must not stay behind for the
+          # state=* glob to read.
+          rel=$(jq -r '.datasets[0].path' "$out/index.json")
+          keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
+          for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
+            echo "$keep" | grep -qx "${d#state=}" && continue
+            echo "removing stale $rel/$d"
+            rclone purge "$REMOTE/$rel/$d"
+          done
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'

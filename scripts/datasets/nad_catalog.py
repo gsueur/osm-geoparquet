@@ -180,7 +180,8 @@ COLUMN_DOCS = {
     "DataSet_ID": "The provider's dataset identifier for the record.",
     "full_address": "Added here: one-line normalized address for matching, upper case, no "
                     "punctuation, USPS street type and direction abbreviations: '<number> "
-                    "<street> <subaddress>, <city>, <state> <zip>'.",
+                    "<street> <subaddress>, <city>, <state> <zip>', the street being every part "
+                    "of the complete street name, modifiers included ('OLD COUNTY RD').",
     "bbox": "Per-row bounding box (xmin, ymin, xmax, ymax), declared as the GeoParquet "
             "covering. Filter on it to prune row groups.",
     "geometry": "The address point as native Parquet GEOMETRY (WKB), lon/lat (OGC:CRS84), "
@@ -582,7 +583,8 @@ Database: one GeoParquet file per state at
   state a point lookup reads one row group.
 - Match addresses on `full_address`: normalize the input first (upper case,
   punctuation to spaces, USPS abbreviations for street types and directions,
-  '<number> <street> <unit>, <city>, <state> <zip>'). For fuzzy matches,
+  '<number> <street> <unit>, <city>, <state> <zip>', the street with its
+  modifiers: 'OLD COUNTY RD', 'MAIN ST EXT'). For fuzzy matches,
   restrict by Zip_Code or State first, then `jaro_winkler_similarity`.
 - Coverage is uneven: no rows for {missing}; within a state, check
   `_coverage.json` (counties present) or the coverage collection before

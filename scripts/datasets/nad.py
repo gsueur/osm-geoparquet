@@ -216,17 +216,22 @@ def mapped_sql(col: str, table: dict[str, str]) -> str:
 def full_address_sql() -> str:
     """`full_address`, the one-line form to match against:
 
-      <number> <pre-dir> <pre-type> <street name> <post-type> <post-dir> <sub-address>, <city>, <state> <zip>
+      <number> <pre-modifier> <pre-dir> <pre-type> <separator> <street name>
+      <post-type> <post-dir> <post-modifier> <sub-address>, <city>, <state> <zip>
+
+    the street parts in the FGDC order of a complete street name, so 'Old
+    County Road' and 'County Road' stay apart
 
     from NAD's parts, upper-cased, punctuation removed, street types and
     directions in their USPS abbreviations (ROAD -> RD, NORTH -> N), empty
     parts skipped. The city is Post_City, else Inc_Muni. Normalize an input
     address the same way before comparing; AGENTS.md shows how."""
     street = " || ' ' || ".join([
-        normalize_sql("AddNo_Full"), mapped_sql("St_PreDir", DIRECTIONS),
-        mapped_sql("St_PreTyp", SUFFIXES), normalize_sql("St_PreSep"),
-        normalize_sql("St_Name"), mapped_sql("St_PosTyp", SUFFIXES),
-        mapped_sql("St_PosDir", DIRECTIONS), normalize_sql("SubAddress"),
+        normalize_sql("AddNo_Full"), normalize_sql("St_PreMod"),
+        mapped_sql("St_PreDir", DIRECTIONS), mapped_sql("St_PreTyp", SUFFIXES),
+        normalize_sql("St_PreSep"), normalize_sql("St_Name"),
+        mapped_sql("St_PosTyp", SUFFIXES), mapped_sql("St_PosDir", DIRECTIONS),
+        normalize_sql("St_PosMod"), normalize_sql("SubAddress"),
     ])
     city = (f"(CASE WHEN {normalize_sql('Post_City')} NOT IN ('', 'NOT STATED') "
             f"THEN {normalize_sql('Post_City')} ELSE {normalize_sql('Inc_Muni')} END)")
