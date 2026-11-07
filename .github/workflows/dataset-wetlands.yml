@@ -1,0 +1,246 @@
+# The USFWS National Wetlands Inventory: parquetry:parquetry/wetlands/.
+#
+# One GeoParquet file of wetland polygons per state under
+# wetlands/nwi/<release>/state=<XX>/, the copies FWS repeats across state
+# downloads removed; the code table, the mapping projects, a PMTiles map, and
+# the Portolan catalog at wetlands/catalog/. scripts/datasets/nwi.py
+# documents the layout, the dedup and the gate.
+#
+# FWS publishes twice a year (October and May). A weekly run reads the
+# download page (its "last updated" month, each unit's zip size and ETag,
+# the code table's) and compares it with the published wetlands/_source.json:
+# anything new outside Alaska rebuilds the release (a new month is a new
+# path; the old release stays until removed by hand). Alaska's zip (11.8 GB)
+# does not fit a runner: it is built on a workstation with
+# scripts/datasets/nwi_publish_ak.sh, which then dispatches the tiles stage.
+# A change to Alaska alone fails the check with that instruction.
+#
+#   build    fetch, stage, deduplicate and write, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            tiles and the catalog
+#   tiles    only the PMTiles map, from the published state files (Alaska
+#            included), then the catalog
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-wetlands
+
+on:
+  schedule:
+    - cron: "41 7 * * 3"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; tiles the map; catalog only the catalog"
+        type: choice
+        options: [build, publish, tiles, catalog]
+        default: build
+      force:
+        description: "Rebuild even if nothing moved upstream"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-wetlands
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/wetlands
+  PUBLIC: https://parquetry.geomermaids.com/wetlands
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # FWS can re-upload a release under the same month, which rebuilds the
+  # same path: the cache the other datasets use, not a long one.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  nwi:
+    if: github.event_name == 'schedule' || inputs.stage == 'build' || inputs.stage == 'publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      published: ${{ steps.published.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          uv run --project scripts python scripts/datasets/nwi.py upstream > upstream.json
+          jq -c '{release, last_updated, units: (.units | length)}' upstream.json
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          # Alaska is built on a workstation: compare it apart.
+          sig='[.release, (.units | to_entries | map(select(.key != "AK")) | map([.key, .value.etag]) ), .codes.etag]'
+          now=$(jq -c "$sig" upstream.json)
+          was=$(echo "$live" | jq -c ".nwi // {units: {}, codes: {}} | $sig")
+          ak_now=$(jq -c '.units.AK.etag' upstream.json)
+          ak_was=$(echo "$live" | jq -c '.nwi.units.AK.etag // null')
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            if [ "$ak_now" != "$ak_was" ]; then
+              echo "::error::Only Alaska moved upstream: run scripts/datasets/nwi_publish_ak.sh on a workstation"
+              exit 1
+            fi
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      # GDAL reads the geodatabases (nwi.py, to_fgb() and gdb_layers()): the
+      # image MassGIS uses, not apt's 3.8. It needs only $WORK, where the zips
+      # and the staged files live.
+      - name: GDAL
+        if: steps.check.outputs.go == 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          for tool in ogr2ogr ogrinfo; do
+            cat > "$HOME/.local/bin/$tool" <<EOF
+          #!/usr/bin/env bash
+          exec docker run --rm -u "\$(id -u):\$(id -g)" -v "$WORK:$WORK" ghcr.io/osgeo/gdal:ubuntu-small-3.13.3 $tool "\$@"
+          EOF
+            chmod +x "$HOME/.local/bin/$tool"
+          done
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/ogrinfo" --version
+
+      # Every unit but Alaska; the published manifest of the same release
+      # lends its Alaska entry (--live), so the catalog keeps it.
+      - name: Fetch, stage, deduplicate and write
+        if: steps.check.outputs.go == 'true'
+        run: |
+          export TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py build \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" --no-tiles --low-disk --memory 5GB \
+            --live "$PUBLIC" 2> >(grep -v -e organizePolygons -e "curve geometries" | tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; df -h /mnt
+          jq -c '.parts' "$WORK/out/nwi/"*/_manifest.json
+
+      - name: rclone
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the files that name it.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 60s --stats-one-line
+          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" \
+            --filter "- *" --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # A rebuild of the same release writes the same path: a state the
+          # manifest no longer lists must not stay behind for the state=*
+          # glob to read. The manifest keeps Alaska's entry (--live), so
+          # Alaska's folder stays. Before _source.json, so that a failure
+          # here leaves the next weekly run to rebuild and retry.
+          rel=$(jq -r '.datasets[0].path' "$out/index.json")
+          keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
+          for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
+            echo "$keep" | grep -qx "${d#state=}" && continue
+            echo "removing stale $rel/$d"
+            rclone purge "$REMOTE/$rel/$d"
+          done
+          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+            --filter "+ _source.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          rel=$(jq -r '.datasets[0].path' "$WORK/out/index.json")
+          for f in index.json _source.json $rel/_manifest.json $rel/ATTRIBUTION.txt \
+                   $rel/codes.parquet $rel/projects.parquet \
+                   $rel/state=MA/wetlands.parquet $rel/state=FL/wetlands.parquet \
+                   $rel/state=PR/wetlands.parquet $rel/state=GU/wetlands.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          exit $fail
+
+      - name: Published
+        id: published
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: echo "done=true" >> "$GITHUB_OUTPUT"
+
+  # A job of its own, so the map gets a fresh time limit: every published
+  # state file streamed into a lon/lat copy, tiled, uploaded, the manifest
+  # updated, then the catalog.
+  tiles:
+    needs: nwi
+    if: >-
+      always() && (inputs.stage == 'tiles' || inputs.stage == 'catalog'
+      || needs.nwi.outputs.published == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Work dir on the runner's big disk
+        if: inputs.stage != 'catalog'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Tiles
+        if: inputs.stage != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py tiles \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" --memory 5GB --live "$PUBLIC" \
+            2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rel=$(jq -r '.datasets[0].path' "$out/index.json")
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$rel/wetlands.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; exit 1; }
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        run: |
+          uv run --project scripts python scripts/datasets/nwi_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/nwi/collection.json \
+                   catalog/projects/collection.json catalog/nwi/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
