@@ -343,7 +343,7 @@ One country (a few MB), people aged 65 and over within 10 km of a point, Lyon:
 
 ```sql
 INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;
-SET geometry_always_xy = true;
+SET geometry_always_xy = true;  -- points are (lon, lat): ST_Distance_Sphere then takes them so
 SELECT round(sum(pop_65_plus)) AS people_65_plus, round(sum(population)) AS people
 FROM read_parquet('{RELEASE_URL}/{PARTITION_KEY}=FRA/{STEM}.parquet')
 WHERE bbox.xmin <= 4.97 AND bbox.xmax >= 4.71 AND bbox.ymin <= 45.85 AND bbox.ymax >= 45.67
@@ -468,8 +468,9 @@ People per H3 cell in {YEAR} (WorldPop {RELEASE}), lon/lat, geometry column
   collection's data-<iso3> assets list them). Filter on `bbox` first.
 - Across borders: the partition glob with `hive_partitioning = true`, or the world
   file at resolution {WORLD_RES} for coarse questions (one row per cell, people counted once).
-- A radius: compare `ST_Distance_Sphere(ST_Point(lon, lat), point)` with metres
-  (`SET geometry_always_xy = true`). Cells are about 2.5 km across: answers are
+- A radius: compare `ST_Distance_Sphere(ST_Point(lon, lat), point)` with metres,
+  after `SET geometry_always_xy = true` (without it DuckDB 2.0 reads points as
+  lat, lon or refuses). Cells are about 2.5 km across: answers are
   good to a cell, not to a street.
 - Columns: `population`, `pop_0_14`, `pop_15_64`, `pop_65_plus`, `pop_80_plus`,
   `female`, `male`, `area_km2` (density = population / area_km2), `lon`/`lat`

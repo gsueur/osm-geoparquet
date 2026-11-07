@@ -545,7 +545,8 @@ def build(work: Path, out: Path, gaul: str, gaul_accessed: str | None, *,
             SELECT p, arg_max(country, population) AS country,
                    {', '.join(f'sum({c}) AS {c}' for c in COLUMNS)}
             FROM (SELECT h3_cell_to_parent(cell, {WORLD_RES}) AS p, country,
-                         {', '.join(COLUMNS)} FROM cells)
+                         {', '.join(f'sum({c}) AS {c}' for c in COLUMNS)}
+                  FROM cells GROUP BY 1, 2)
             GROUP BY p)""", folder / f"{STEM}_world_r{WORLD_RES}.parquet")
     print(f"  world file: {world['features']:,} cells, {time.monotonic() - t0:.0f} s",
           flush=True)
