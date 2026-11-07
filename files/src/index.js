@@ -289,6 +289,12 @@ const DATASETS = {
       "columns unchanged with each code decoded, NAD83. Public domain.",
     attribution: "padus/v4.1/ATTRIBUTION.txt",
   },
+  "gazetteer/": {
+    subtitle: "Gazetteers, names to coordinates: the Census Bureau's 2026 Gazetteer Files under " +
+      "census/2026/ (one file per layer, GEOID joins TIGER/Line, NAD83) and GeoNames under " +
+      "geonames/latest/ (every name, per country under country=<CC>/, and cities1000), rebuilt weekly.",
+    attribution: "gazetteer/geonames/latest/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
