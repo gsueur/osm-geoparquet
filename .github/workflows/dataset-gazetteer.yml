@@ -1,0 +1,186 @@
+# Gazetteers: parquetry:parquetry/gazetteer/.
+#
+# The Census Bureau's Gazetteer Files (gazetteer/census/<year>/) and GeoNames
+# (gazetteer/geonames/latest/). scripts/datasets/gazetteer.py documents the
+# layout.
+#
+# A weekly run compares each part's sources (Last-Modified) with the
+# published gazetteer/_source.json and rebuilds the parts that moved:
+# GeoNames republishes its dump daily, so its part is rebuilt every week
+# into latest/; the Census files change once a year, or on a correction.
+#
+#   build    fetch, convert and verify the parts that moved, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog at /gazetteer/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-gazetteer
+
+on:
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild both parts even if no source has moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-gazetteer
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/gazetteer
+  PUBLIC: https://parquetry.geomermaids.com/gazetteer
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place every week (GeoNames): a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  gazetteer:
+    runs-on: ubuntu-24.04
+    # GeoNames: a 423 MB zip, 1.8 GB of text, 13.5 million rows written
+    # three times (world file, per country, cities1000).
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "parts=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/gazetteer.py upstream > upstream.json
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          echo "$live" > live.json
+          parts=""
+          for p in census geonames; do
+            now=$(jq -c --arg p $p '.[$p] | map_values(.last_modified)' upstream.json)
+            was=$(jq -c --arg p $p '(.[$p] // {}) | map_values(.last_modified)' live.json)
+            echo "$p upstream $now"
+            echo "$p published $was"
+            if [ "$now" != "$was" ] || [ "${{ inputs.force }}" = "true" ] || [ "$PUBLISH" != "true" ]; then
+              parts="$parts $p"
+            fi
+          done
+          echo "parts:${parts:- none}"
+          echo "parts=${parts# }" >> "$GITHUB_OUTPUT"
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.parts != ''
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, convert and verify
+        if: steps.check.outputs.parts != ''
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          args=""
+          for p in ${{ steps.check.outputs.parts }}; do args="$args --part $p"; done
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/gazetteer.py build \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" $args 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          # A part not rebuilt keeps its published source record.
+          jq -s '.[0] * .[1]' live.json "$WORK/out/_source.json" > "$WORK/source.json"
+          mv "$WORK/source.json" "$WORK/out/_source.json"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | grep -v "country=" | sort | sed "s|$WORK/out/||"
+          echo "$(find "$WORK/out" -path '*country=*' -type f | wc -l) country files"
+
+      - name: rclone
+        if: (steps.check.outputs.parts != '' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet.
+      - name: Publish
+        if: steps.check.outputs.parts != '' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 16 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 6 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" \
+            --filter "- *" --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+            --filter "+ snapshots.json" --filter "+ _source.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # A country GeoNames no longer lists keeps no stale file: remove the
+          # country=<CC>/ directories the new manifest does not name.
+          m="$out/geonames/latest/_manifest.json"
+          if [ -f "$m" ]; then
+            jq -r '.partitions.entries[].country' "$m" | sort > want.txt
+            rclone lsf "$REMOTE/geonames/latest/" --dirs-only \
+              | sed -n 's|^country=\(.*\)/$|\1|p' | sort > have.txt
+            for cc in $(comm -13 want.txt have.txt); do
+              echo "stale country=$cc"
+              rclone purge "$REMOTE/geonames/latest/country=$cc"
+            done
+          fi
+
+      - name: Check what is live
+        if: steps.check.outputs.parts != '' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json census/2026/_manifest.json census/2026/ATTRIBUTION.txt \
+                   census/2026/place.parquet census/2026/zcta520.parquet \
+                   geonames/latest/_manifest.json geonames/latest/ATTRIBUTION.txt \
+                   geonames/latest/geonames.parquet geonames/latest/country=US/geonames.parquet \
+                   geonames/latest/country=none/geonames.parquet \
+                   geonames/latest/cities1000.parquet geonames/latest/cities1000.pmtiles; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/geonames/latest/cities1000.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.parts != '' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          # From the files just built when there are some (the CDN may still
+          # serve last week's bytes for an hour); a part not rebuilt, and a
+          # catalog-only run, read the published files.
+          uv run --project scripts python scripts/datasets/gazetteer_catalog.py publish \
+            --remote "$REMOTE" ${WORK:+--out-dir "$WORK/out"}
+          for f in catalog/catalog.json catalog/census-2026/catalog.json \
+                   catalog/census-2026/census-2026-place/collection.json \
+                   catalog/geonames/catalog.json catalog/geonames/geonames/collection.json \
+                   catalog/geonames/cities1000/collection.json \
+                   catalog/geonames/cities1000/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done

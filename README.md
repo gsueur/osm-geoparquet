@@ -148,6 +148,24 @@ build gate accounts for every row of the CSV. Portolan catalog at
 `https://parquetry.geomermaids.com/addresses/catalog/catalog.json`
 (`scripts/datasets/nad_catalog.py`).
 
+Gazetteers (`scripts/datasets/gazetteer.py`, workflow `dataset-gazetteer.yml`,
+checked weekly) sit under `https://parquetry.geomermaids.com/gazetteer/`: the
+Census Bureau's 2026 Gazetteer Files (`census/2026/<code>.parquet`, 17 files
+named after the TIGER/Line layer codes: `place`, `county`, `zcta520`, `cd120`...,
+every column as published, the internal point as a NAD83 point; GEOID joins
+TIGER/Line and the ACS) and GeoNames (`geonames/latest/geonames.parquet`, about
+13.5 million names worldwide with decoded feature types, country, admin1 and
+admin2 names; the same rows under `country=<CC>/geonames.parquet`, `none` for
+rows without a country; and `cities1000.parquet`, the populated places of 1,000
+people or more plus seats of government, with `cities1000.pmtiles` for map
+labels). GeoNames republishes its dump daily; `latest/` is rebuilt weekly and
+keeps no dated snapshots. The build checks rows against the sources, GEOID and
+geonameid uniqueness, coordinates, and every Census GEOID against TIGER/Line.
+Census: public domain; GeoNames: CC BY 4.0. Portolan catalog at
+`https://parquetry.geomermaids.com/gazetteer/catalog/catalog.json`
+(`scripts/datasets/gazetteer_catalog.py`), one sub-catalog per source;
+thumbnails under `catalog/thumbnails/gazetteer/`.
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
