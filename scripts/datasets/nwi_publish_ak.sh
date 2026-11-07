@@ -65,7 +65,10 @@ if [ -n "$dry" ]; then
   jq -c '{files: [.files[].state], parts: [.parts[].units], total_features}' "$out/$rel/_manifest.json"
   exit 0
 fi
-if rclone lsf -R "$remote/$rel" | grep -q '\._'; then
+# The whole listing first: grep -q under pipefail can exit before rclone
+# has listed everything, and the pipe then reports a failure.
+listing=$(rclone lsf -R "$remote/$rel")
+if grep -q '\._' <<<"$listing"; then
   echo "._* files reached the bucket" >&2; exit 1
 fi
 fail=0

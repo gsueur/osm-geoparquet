@@ -53,7 +53,10 @@ up --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" --filter "- *" \
 up --max-depth 1 --filter "+ index.json" --filter "+ snapshots.json" --filter "+ _source.json" \
   --filter "- *" --ignore-times --header-upload "$short"
 
-if rclone lsf -R "$remote" | grep -q '\._'; then
+# The whole listing first: grep -q under pipefail can exit before rclone
+# has listed everything, and the pipe then reports a failure.
+listing=$(rclone lsf -R "$remote")
+if grep -q '\._' <<<"$listing"; then
   echo "._* files reached the bucket" >&2; exit 1
 fi
 v=$(jq -r '.version' "$work/upstream.json")

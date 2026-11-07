@@ -136,7 +136,10 @@ jobs:
           # weekly run rebuilds and retries, instead of finding nothing new.
           rel=$(jq -r '.datasets[0].path' "$out/index.json")
           keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
-          for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
+          # A plain assignment, so a failing listing stops the step (-e)
+          # instead of looking like a folder with no stale states.
+          dirs=$(rclone lsf --dirs-only "$REMOTE/$rel/")
+          for d in $(echo "$dirs" | grep '^state=' | sed 's|/$||'); do
             echo "$keep" | grep -qx "${d#state=}" && continue
             echo "removing stale $rel/$d"
             rclone purge "$REMOTE/$rel/$d"
