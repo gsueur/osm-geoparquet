@@ -296,6 +296,13 @@ const DATASETS = {
       "every state contributes: see _coverage.json.",
     attribution: "addresses/nad/r24/ATTRIBUTION.txt",
   },
+  "structures/": {
+    subtitle: "FEMA USA Structures (ORNL), public domain: building footprints with occupancy " +
+      "class and a population estimate per building, one GeoParquet file per state under " +
+      "latest/state=<XX>/ with its counts on H3 cells and a PMTiles map; states have their " +
+      "own vintage (_manifest.json). Checked weekly.",
+    attribution: "structures/latest/ATTRIBUTION.txt",
+  },
   "gazetteer/": {
     subtitle: "Gazetteers, names to coordinates: the Census Bureau's 2026 Gazetteer Files under " +
       "census/2026/ (one file per layer, GEOID joins TIGER/Line, NAD83) and GeoNames under " +

@@ -169,6 +169,26 @@ build gate accounts for every row of the CSV. Portolan catalog at
 `https://parquetry.geomermaids.com/addresses/catalog/catalog.json`
 (`scripts/datasets/nad_catalog.py`).
 
+FEMA's USA Structures (`scripts/datasets/structures.py`, workflow
+`dataset-structures.yml`, checked weekly against FEMA's public bucket
+`fema-femadata`) sits under `https://parquetry.geomermaids.com/structures/latest/`:
+building footprints over 450 square feet, produced by ORNL, one GeoParquet file
+per state (`state=<XX>/structures.parquet`, 56 states and territories), FEMA's
+columns unchanged (occupancy class and use, height, area, address where known,
+census tract, ORNL's population estimate per building with its 95% bounds) bar
+the geodatabase's own Shape_Area and Shape_Length, lon/lat (OGC:CRS84). Beside
+each file, `cells.parquet` counts footprints, residential footprints and
+population on H3 cells (resolutions 4, 6, 8) and `structures.pmtiles` maps them:
+population on cells to zoom 12, footprints by occupancy from zoom 13. FEMA
+refreshes states in batches, so each state has its own vintage (in
+`latest/_manifest.json`) and one path, rewritten when its zip changes; the
+weekly run rebuilds only the states that moved, one at a time. Population
+estimates are missing on part of some states' residential buildings (DC: about
+27% carry one in the 2026-09-13 delivery). Public domain; credit "Oak Ridge
+National Laboratory (ORNL); FEMA Geospatial Response Office". Portolan catalog
+at `https://parquetry.geomermaids.com/structures/catalog/catalog.json`
+(`scripts/datasets/structures_catalog.py`).
+
 Gazetteers (`scripts/datasets/gazetteer.py`, workflow `dataset-gazetteer.yml`,
 checked weekly) sit under `https://parquetry.geomermaids.com/gazetteer/`: the
 Census Bureau's 2026 Gazetteer Files (`census/2026/<code>.parquet`, 17 files
