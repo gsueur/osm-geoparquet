@@ -12,8 +12,9 @@
 # anything new outside Alaska rebuilds the release (a new month is a new
 # path; the old release stays until removed by hand). Alaska's zip (11.8 GB)
 # does not fit a runner: it is built on a workstation with
-# scripts/datasets/nwi_publish_ak.sh, which then dispatches the tiles stage.
-# A change to Alaska alone fails the check with that instruction.
+# scripts/datasets/nwi_publish_ak.sh, then the tiles stage is dispatched.
+# Until Alaska is built from the zip FWS lists (a new zip, or a new release),
+# the weekly check fails with that instruction.
 #
 #   build    fetch, stage, deduplicate and write, upload nothing
 #   publish  the same, then upload (a scheduled run publishes), then the
@@ -88,7 +89,7 @@ jobs:
           ak_was=$(echo "$live" | jq -c '.nwi.units.AK.etag // null')
           if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
             if [ "$ak_now" != "$ak_was" ]; then
-              echo "::error::Only Alaska moved upstream: run scripts/datasets/nwi_publish_ak.sh on a workstation"
+              echo "::error::Alaska is not built from the zip FWS now lists (new zip, or not built for this release): run scripts/datasets/nwi_publish_ak.sh on a workstation"
               exit 1
             fi
             echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"

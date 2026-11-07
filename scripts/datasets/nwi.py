@@ -711,12 +711,14 @@ def build(work: Path, out: Path, units: list[str] | None, no_tiles: bool, low_di
         {"path": f"nwi/{rel_name}", "code": "nwi",
          "name": f"National Wetlands Inventory, {src['last_updated']}"}]}, indent=2) + "\n")
     # A unit built elsewhere (Alaska) keeps the zip it was built from, as
-    # published: the weekly check then still sees a new Alaska zip as to do.
+    # published for this release, or none in a new release: the weekly check
+    # then still sees Alaska as to do, even when FWS did not change its zip.
     if live:
         try:
-            was = json.loads(curl(f"{live}/_source.json")).get("nwi", {}).get("units", {})
+            prev = json.loads(curl(f"{live}/_source.json")).get("nwi", {})
         except subprocess.CalledProcessError:
-            was = {}
+            prev = {}
+        was = prev.get("units", {}) if prev.get("release") == rel_name else {}
         for u in set(src["units"]) - set(todo):
             src["units"][u] = was.get(u)
     (out / "_source.json").write_text(json.dumps({"nwi": src}, indent=2) + "\n")
