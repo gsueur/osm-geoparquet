@@ -1,0 +1,167 @@
+# WorldPop Global2 population on H3: parquetry:parquetry/worldpop/.
+#
+# One GeoParquet file per country at H3 resolution 7, a world file at
+# resolution 5 and one PMTiles archive, under worldpop/R2025A/2025/.
+# scripts/datasets/worldpop.py documents the layout and the checks.
+#
+# WorldPop's server ignores Range requests and serves each connection at a
+# few hundred KB/s, so the build downloads its 61 rasters (about 17 GB)
+# eight at a time, counts each on H3 cells and deletes it: disk stays near
+# 3 GB. Each band's cell sums are checked against the raster's own sum.
+#
+# R2025A is a fixed release. The monthly run only checks upstream: it fails
+# when WorldPop lists a newer Global2 release (taking it is a code change,
+# RELEASE in worldpop.py), and warns when the pinned total raster changed
+# (ETag) since the published build.
+#
+#   build    download, count, assign countries, write, tile, verify; upload nothing
+#   publish  the same, then upload, then the Portolan catalog at /worldpop/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-worldpop
+
+on:
+  schedule:
+    - cron: "17 6 3 * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+
+concurrency:
+  group: dataset-worldpop
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/worldpop
+  PUBLIC: https://parquetry.geomermaids.com/worldpop
+  GAUL: https://parquetry.geomermaids.com/gaul/2024
+  STAGE: ${{ inputs.stage || 'upstream' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # A fixed release, replaced only by a rebuild: a day of cache.
+  CACHE: "Cache-Control: public, max-age=86400"
+
+jobs:
+  worldpop:
+    runs-on: ubuntu-24.04
+    # Downloads dominate: 17 GB at about 2 MB/s in all, eight connections
+    # (about 2.5 h on the workstation, 2026-11-07). Counting, countries,
+    # writing and tiling took 33 min there, peak RSS 5.2 GB with DuckDB
+    # capped at 4 GB.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Upstream
+        if: env.STAGE != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/worldpop.py upstream > upstream.json
+          jq -c '{release, releases, newer, total: (.total | {last_modified, etag, bytes})}' upstream.json
+          newer=$(jq -r '.newer | join(" ")' upstream.json)
+          if [ -n "$newer" ]; then
+            echo "::error::WorldPop lists Global2 $newer, worldpop.py builds $(jq -r .release upstream.json): set RELEASE in scripts/datasets/worldpop.py"
+            exit 1
+          fi
+          was=$(curl -fsS "$PUBLIC/_source.json" | jq -r '.total.etag' || echo "")
+          now=$(jq -r '.total.etag' upstream.json)
+          if [ -n "$was" ] && [ "$was" != "$now" ]; then
+            echo "::warning::the total raster changed since the published build (ETag $was -> $now): rebuild with stage=publish"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: env.STAGE == 'build' || env.STAGE == 'publish'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Download, count, assign countries, write, tile, verify
+        if: env.STAGE == 'build' || env.STAGE == 'publish'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          accessed=$(curl -fsS "$GAUL/_manifest.json" | jq -r '.accessed')
+          /usr/bin/time -v uv run --project scripts --with rasterio --with shapely \
+            python scripts/datasets/worldpop.py build --work-dir "$WORK/work" --out-dir "$WORK/out" \
+            --gaul-accessed "$accessed" --threads 4 --memory 8GB 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | wc -l
+          jq -c '{totals, countries, files: .partitions.files, bytes: .partitions.bytes,
+                  world: (.world | {features, bytes}), pmtiles: (.pmtiles[0] | {tiles, bytes})}' \
+            "$WORK/out/R2025A/2025/_manifest.json"
+
+      - name: rclone
+        if: env.STAGE == 'publish' || env.STAGE == 'catalog'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet.
+      - name: Publish
+        if: env.STAGE == 'publish'
+        run: |
+          case "$REMOTE" in
+            *:*) ;;
+            *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
+          esac
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: env.STAGE == 'publish'
+        run: |
+          set +e
+          fail=0
+          r=R2025A/2025
+          for f in index.json _source.json $r/_manifest.json $r/ATTRIBUTION.txt \
+                   $r/worldpop_2025_world_r5.parquet $r/worldpop_2025.pmtiles \
+                   $r/country=FRA/worldpop_2025.parquet $r/country=IND/worldpop_2025.parquet \
+                   $r/country=xJK/worldpop_2025.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          want=$(jq '.partitions.files' "$WORK/out/$r/_manifest.json")
+          got=$(rclone lsf "$REMOTE/$r" --dirs-only | grep -c '^country=')
+          [ "$want" = "$got" ] || { echo "BAD $got country folders online, $want built"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$r/worldpop_2025.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: env.STAGE == 'publish' || env.STAGE == 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/worldpop_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/worldpop_2025/collection.json \
+                   catalog/worldpop_2025/styles/default.json catalog/worldpop_2025/thumbnail.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done

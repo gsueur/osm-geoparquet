@@ -326,6 +326,12 @@ const DATASETS = {
       "the mapping projects, FWS's code table and a PMTiles map. Not a jurisdictional delineation.",
     attribution: "wetlands/nwi/2026-10/ATTRIBUTION.txt",
   },
+  "worldpop/": {
+    subtitle: "WorldPop Global2 R2025A, people per H3 cell in 2025 with age groups and sex, " +
+      "CC BY 4.0: one GeoParquet file per country (GAUL iso3) at resolution 7 under " +
+      "R2025A/2025/country=<ISO3>/, the world at resolution 5, and one PMTiles archive.",
+    attribution: "worldpop/R2025A/2025/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },

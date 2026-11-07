@@ -364,6 +364,25 @@ of up to 416 MB; here each file is Hilbert sorted with a bbox covering and
 row groups of at most 4 MiB, so a small bbox reads a few MB. CC0. The job
 runs weekly and stops when neither the export nor the rivers release moved.
 
+WorldPop's Global2 population estimates for 2025 (release R2025A,
+constrained, 1 km), summed on H3 cells (`scripts/datasets/worldpop.py`,
+workflow `dataset-worldpop.yml`), sit under
+`https://parquetry.geomermaids.com/worldpop/R2025A/2025/`: one GeoParquet file
+per country at H3 resolution 7 (about 5 km2) under `country=<ISO3>/`, a world
+file at resolution 5, and one PMTiles archive (resolutions 3 to 7 by zoom):
+253 country files, 11.5 million cells, 1.3 GB; the world file 51 MB; the
+tiles 1.3 GB. 8.2 billion people, 844 million aged 65 and over.
+Columns: `population`, `pop_0_14`, `pop_15_64`, `pop_65_plus`, `pop_80_plus`,
+`female`, `male`, the cell's `area_km2` and centre. Each 1 km pixel goes to
+the cell holding its centre, so totals are WorldPop's, checked band by band
+against the 61 source rasters. Countries are GAUL 2024 `iso3_code` (disputed
+areas keep GAUL's x codes), so the files join `gaul/`. CC BY 4.0, cite
+Bondarenko et al. 2025, doi:10.5258/SOTON/WP00846. WorldPop's server ignores
+Range requests and is slow per connection: the build downloads eight rasters
+at a time and deletes each once counted. Portolan catalog at
+`https://parquetry.geomermaids.com/worldpop/catalog/catalog.json`
+(`scripts/datasets/worldpop_catalog.py`).
+
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to
 `https://parquetry.geomermaids.com/meta/repositories.json` by `meta.yml` when
