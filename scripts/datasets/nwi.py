@@ -55,8 +55,13 @@ unit's own states within 1 degree, else UM in PacTrust. A row is a home
 copy when that state is one of its unit's. Each NWI_ID is then kept once,
 national: the home copy first, then the largest ACRES (the least cut), then
 the unit name; it is written to the file of the state its point lies in.
-The gate checks that NWI_ID is unique within each unit and that every
-NWI_ID read is kept exactly once; _manifest.json counts the copies dropped,
+An NWI_ID FWS repeats within one unit (Vermont: Lake Champlain and a
+0.42-acre piece of lake 52 km away) is kept once by the same rule, the
+largest ACRES then the geometry's WKB order, before the dedup; identical
+copies are counted, different ones counted and listed in _manifest.json,
+and more than 0.01% of a unit's rows (at least two) fails the build
+(in_unit_duplicates). The gate checks that every NWI_ID read is kept
+exactly once; _manifest.json counts the copies dropped,
 the IDs whose kept copy came from a neighbour's download, and the IDs with
 more than one home copy. Alaska is built on its own (build-ak below): no
 other unit reaches it, so its IDs are deduplicated among its own rows.
@@ -130,6 +135,15 @@ DECODED = ["SYSTEM_NAME", "SUBSYSTEM_NAME", "CLASS_NAME", "SUBCLASS_NAME", "SPLI
            "SPLIT_SUBCLASS_NAME", "WATER_REGIME_NAME", "MODIFIER1_NAME", "MODIFIER2_NAME"]
 COLUMNS = ["NWI_ID", "ATTRIBUTE", "WETLAND_TYPE", "ACRES", *DECODED, "source_unit"]
 UNKNOWN_CODE_SHARE = 0.001
+# An NWI_ID repeated with different rows within one unit: above this share
+# of the unit's rows (and more than one), the build fails.
+DUPLICATE_SHARE = 0.0001
+# Written in each unit's counts; the workflow reuses a unit staged by an
+# earlier run only if it has this version and the same zip. Bump it when a
+# change alters what stage_one writes for units already staged. (Version 1:
+# the first split runs; in_unit_duplicates changes only units with repeats,
+# which no staged unit had.)
+STAGE_VERSION = 1
 PROJECT_COLUMNS = ["PROJECT_NAME", "STATUS", "SUPPMAPINFO", "FGDC_METADATA", "DATA_SOURCE",
                    "IMAGE_YR", "IMAGE_DATE", "IMAGE_SCALE", "ALL_SCALES", "EMULSION",
                    "COMMENTS", "SOURCE_TYPE"]
@@ -429,12 +443,13 @@ def stage_one(unit: str, src: dict, work: Path, low_disk: bool, memory: str,
         problems.append(f"{rows:,} rows, the geodatabase has {expected:,}")
     if nulls:
         problems.append(f"{nulls} rows without NWI_ID")
-    if ids + (1 if nulls else 0) != rows:
-        problems.append(f"NWI_ID: {rows - ids} repeated within the unit")
     if empty:
         problems.append(f"{empty} empty geometries after repair")
     if problems:
         sys.exit(f"{unit}: gate failed: " + "; ".join(problems))
+    dups = in_unit_duplicates(con, unit, fixed, rows) if ids != rows else \
+        {"identical": 0, "different": 0, "dropped": []}
+    rows -= dups["identical"] + dups["different"]
     # A fresh connection for the joins: the one that wrote and counted the
     # fixed file keeps memory DuckDB does not hand back (the same join that
     # fits in a new connection ran out of memory in it, Minnesota).
@@ -498,10 +513,59 @@ def stage_one(unit: str, src: dict, work: Path, low_disk: bool, memory: str,
     entry = {"unit": unit, "states": list(own), "layer": wet, "projects_layer": meta,
              "rows": rows, "gdb_rows": expected, "repaired_invalid": invalid,
              "split_at_180": across, "point_outside_states": outside,
-             "rows_in_a_neighbour": neighbour, **src}
+             "rows_in_a_neighbour": neighbour,
+             "duplicates_identical": dups["identical"],
+             "duplicates_different": dups["different"],
+             "duplicates_dropped": dups["dropped"], "stage_version": STAGE_VERSION, **src}
     done.write_text(json.dumps(entry))
     print(f"  {unit}: {rows:,} rows, {neighbour:,} in a neighbour, {outside} outside "
           f"every state, {invalid} repaired, {time.monotonic() - t0:.0f} s", flush=True)
+
+
+def in_unit_duplicates(con, unit: str, fixed: Path, rows: int) -> dict:
+    """An NWI_ID FWS repeats within one unit's download, kept once, by the
+    cross-state rule: the largest ACRES, then the geometry's WKB bytes in
+    ascending order. A copy identical to the one kept (attributes and shape)
+    is dropped and counted; a different one is dropped, counted and listed.
+    The build fails if more than DUPLICATE_SHARE of the unit's rows are
+    different copies (at least one is allowed): beyond that it is an
+    upstream problem, not a stray polygon. fixed is rewritten without them.
+
+    Vermont, 2026-10: Lake Champlain's NWI_ID also names a 0.42-acre piece
+    of lake 52 km north, apart from the 221,309-acre lake; the lake is kept."""
+    ranked = f"""
+        WITH d AS (SELECT NWI_ID FROM read_parquet('{fixed}') GROUP BY 1 HAVING count(*) > 1),
+        r AS (SELECT f.file_row_number AS r, f.NWI_ID, f.ATTRIBUTE, f.WETLAND_TYPE, f.ACRES,
+                     md5(ST_AsWKB(f.geom)::BLOB) AS h,
+                     row_number() OVER (PARTITION BY f.NWI_ID
+                                        ORDER BY f.ACRES DESC NULLS LAST,
+                                                 ST_AsWKB(f.geom)::BLOB, f.ATTRIBUTE,
+                                                 f.WETLAND_TYPE) AS k
+              FROM read_parquet('{fixed}', file_row_number = true) f SEMI JOIN d USING (NWI_ID))
+        SELECT x.r, x.NWI_ID, x.ACRES, k.ACRES,
+               (x.ATTRIBUTE IS NOT DISTINCT FROM k.ATTRIBUTE
+                AND x.WETLAND_TYPE IS NOT DISTINCT FROM k.WETLAND_TYPE
+                AND x.ACRES IS NOT DISTINCT FROM k.ACRES AND x.h = k.h) AS identical
+        FROM r x JOIN r k ON k.NWI_ID = x.NWI_ID AND k.k = 1
+        WHERE x.k > 1 ORDER BY x.NWI_ID, x.r"""
+    drop = con.execute(ranked).fetchall()
+    different = [d for d in drop if not d[4]]
+    out = {"identical": len(drop) - len(different), "different": len(different),
+           "dropped": [{"NWI_ID": d[1], "acres": d[2], "kept_acres": d[3]}
+                       for d in different[:50]]}
+    if len(different) > max(1, rows * DUPLICATE_SHARE):
+        sys.exit(f"{unit}: gate failed: {len(different)} NWI_IDs repeated with different rows "
+                 f"within the unit (over {DUPLICATE_SHARE:.2%} of {rows:,}): {out['dropped'][:10]}")
+    kept = fixed.with_suffix(".dedup.parquet")
+    gone = ", ".join(str(d[0]) for d in drop)
+    con.execute(f"""COPY (SELECT * EXCLUDE (file_row_number)
+                          FROM read_parquet('{fixed}', file_row_number = true)
+                          WHERE file_row_number NOT IN ({gone}))
+                    TO '{kept}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 50000)""")
+    kept.replace(fixed)
+    print(f"  {unit}: NWI_ID repeated within the unit: {out['identical']} identical and "
+          f"{out['different']} different copies dropped {out['dropped']}", flush=True)
+    return out
 
 
 def staged(work: Path, target: str = "*") -> str:
@@ -962,7 +1026,12 @@ def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None) ->
         # One part per build: the runner's (every unit but Alaska) and the
         # workstation's (Alaska), each deduplicated on its own.
         "parts": [{"units": todo, "dedup": stats,
-                   "gate": {"rows_with_unknown_code": unknown, "unknown_codes": codes_seen[:50]},
+                   "gate": {"rows_with_unknown_code": unknown, "unknown_codes": codes_seen[:50],
+                            "duplicates_within_units": {
+                                "identical": sum(e.get("duplicates_identical", 0) for e in entries),
+                                "different": sum(e.get("duplicates_different", 0) for e in entries),
+                                "dropped": {e["unit"]: e["duplicates_dropped"] for e in entries
+                                            if e.get("duplicates_dropped")}}},
                    "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}],
         "units": entries,
         "files": files,

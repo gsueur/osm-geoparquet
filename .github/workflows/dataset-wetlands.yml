@@ -19,7 +19,8 @@
 # The national build (52 units, about 35 million rows) is split so that no
 # job runs long, through a scratch prefix, wetlands/_work/<release>/:
 #
-#   plan      the upstream check; the units in groups of about equal zip size
+#   plan      the upstream check; the units in groups of about equal zip size;
+#             a new run keeps the units an earlier run of the release staged
 #   stage     one job per group: each unit staged (nwi.py stage, a process per
 #             unit) and uploaded: its rows partitioned by target state, its
 #             index (the dedup's columns), its projects, its counts
@@ -33,9 +34,10 @@
 #   tiles     the PMTiles map from every published state (Alaska included),
 #             then the catalog
 #
-# A failed job can be re-run alone ("Re-run failed jobs"): the scratch prefix
-# is kept until assemble, and a staging job skips the units already uploaded.
-# A new run (attempt 1) clears it first.
+# A failed job can be re-run alone ("Re-run failed jobs"), or the workflow
+# dispatched again: the scratch prefix is kept until assemble, and a staging
+# job skips a unit already uploaded from the same zip and stage version
+# (nwi.py STAGE_VERSION). force restages everything.
 #
 # Stages (dispatch): build (everything, publishes nothing), publish (also
 # uploads; a scheduled run publishes), tiles (the map, then the catalog),
@@ -131,13 +133,35 @@ jobs:
         if: steps.check.outputs.go == 'true'
         run: curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
 
-      # The same upstream for every job of the run.
+      # The same upstream for every job of the run. A new run keeps the units
+      # an earlier run of the release staged (a staging job reuses one only
+      # if it has the same zip and stage version) and clears the rest: what
+      # choose, write and assemble rebuild, and the units no longer listed.
+      # force clears everything.
       - name: Scratch prefix
         if: steps.check.outputs.go == 'true'
         run: |
           scratch="$REMOTE/_work/${{ steps.plan.outputs.release }}"
           if [ "${{ github.run_attempt }}" = "1" ]; then
-            rclone purge "$scratch" 2>/dev/null || true
+            if [ "${{ inputs.force }}" = "true" ]; then
+              rclone purge "$scratch" 2>/dev/null || true
+            else
+              rclone purge "$scratch/out" 2>/dev/null || true
+              for f in win.parquet dedup.json; do
+                rclone deletefile "$scratch/$f" 2>/dev/null || true
+              done
+              listed=$(jq -r '.groups[][]' plan.json | sort)
+              # Every unit with anything left: counts, index, projects or rows.
+              for u in $(rclone lsf --max-depth 1 "$scratch/stage" 2>/dev/null \
+                         | sed -E 's#/$##; s#\.(json|index\.parquet|projects\.parquet)$##' | sort -u); do
+                echo "$listed" | grep -qx "$u" && continue
+                echo "dropping $u: no longer listed"
+                rclone purge "$scratch/stage/$u" 2>/dev/null || true
+                for f in "$u.json" "$u.index.parquet" "$u.projects.parquet"; do
+                  rclone deletefile "$scratch/stage/$f" 2>/dev/null || true
+                done
+              done
+            fi
           fi
           rclone copyto upstream.json "$scratch/upstream.json"
 
@@ -178,13 +202,16 @@ jobs:
       - name: Stage
         run: |
           rclone copyto "$SCRATCH/upstream.json" "$WORK/upstream.json"
+          version=$(uv run --project scripts python -c \
+                    "import sys; sys.path.insert(0, 'scripts'); from datasets.nwi import STAGE_VERSION as v; print(v)")
           todo=(); units=()
           for u in ${{ matrix.units }}; do
             # A re-run skips a unit an earlier attempt uploaded, if from the
             # zip this run's upstream lists (FWS can re-upload within a month).
             want=$(jq -r --arg u "$u" '.units[$u].etag' "$WORK/upstream.json")
-            have=$(rclone cat "$SCRATCH/stage/$u.json" 2>/dev/null | jq -r '.etag // empty' || true)
-            if [ -n "$have" ] && [ "$have" = "$want" ]; then
+            have=$(rclone cat "$SCRATCH/stage/$u.json" 2>/dev/null \
+                   | jq -r '"\(.etag) \(.stage_version // 1)"' || true)
+            if [ -n "$want" ] && [ "$want" != "null" ] && [ "$have" = "$want $version" ]; then
               echo "$u: already staged"
             else
               todo+=(--unit "$u"); units+=("$u")
