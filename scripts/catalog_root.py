@@ -59,6 +59,10 @@ DATASETS = [
                   "monitoring sites.", SITE),
     ("nri", "FEMA's National Risk Index for 18 natural hazards, by census tract and "
             "county: expected annual loss, social vulnerability and resilience.", SITE),
+    ("padus", "USGS's Protected Areas Database: federal, state, local and private "
+              "conservation lands, with manager, owner, GAP status and public access.", SITE),
+    ("addresses", "The US National Address Database: 99 million address points, one file "
+                  "per state, and a map of where states contribute.", SITE),
     ("gazetteer", "Place names to coordinates: the Census Gazetteer 2026 for US areas and "
                   "GeoNames' 13 million names worldwide.", SITE),
     ("census", "TIGER/Line geography, including the congressional and state legislative "
@@ -98,7 +102,8 @@ def build_root(children: list[dict], updated: str) -> dict:
         "description": (
             "Every dataset Geomermaids republishes as GeoParquet: OpenStreetMap for North "
             "America and its infrastructure worldwide, administrative units, land cover, "
-            "a world basemap, place names, flood zones, natural hazard risk, water features, "
+            "a world basemap, place names, addresses, protected areas, flood zones, natural "
+            "hazard risk, water features, "
             "census geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
             "under its own licence."),
         "updated": updated,
