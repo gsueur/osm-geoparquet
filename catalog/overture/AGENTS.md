@@ -71,6 +71,7 @@ open:
 
 ```python
 import json, urllib.request
+from urllib.parse import urljoin
 
 def get(url):
     with urllib.request.urlopen(url) as r:
@@ -79,8 +80,9 @@ def get(url):
 def overture_files(theme, type_, west, south, east, north):
     root = "https://stac.overturemaps.org"
     release = get(f"{root}/catalog.json")["latest"]
-    col = get(f"{root}/{release}/{theme}/{type_}/collection.json")
-    items = [l["href"] for l in col["links"] if l["rel"] == "item"]
+    col_url = f"{root}/{release}/{theme}/{type_}/collection.json"
+    col = get(col_url)
+    items = [urljoin(col_url, l["href"]) for l in col["links"] if l["rel"] == "item"]
     boxes = col["extent"]["spatial"]["bbox"][1:]
     if len(boxes) != len(items):            # no per-file extent: read the items
         boxes = [get(h)["bbox"] for h in items]

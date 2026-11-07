@@ -29,6 +29,7 @@ git -C "$work" checkout -q FETCH_HEAD
 #   0001: the data preview sent one range request per column chunk, all at
 #   once, and Cloudflare answered part of the burst with 503 (shown as a
 #   cross-origin error); at most 16 in flight now, table capped at 1,000 rows.
+shopt -s nullglob  # no patch left once BROWSER_SHA includes them all
 for p in "$here"/patches/*.patch; do
   git -C "$work" apply "$p" || { echo "build.sh: $(basename "$p") does not apply" >&2; exit 1; }
 done

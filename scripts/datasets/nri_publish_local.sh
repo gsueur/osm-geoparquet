@@ -23,6 +23,9 @@ mkdir -p "$work"
 uv run --project scripts python scripts/datasets/nri.py upstream > "$work/upstream.json"
 pinned=$(jq -r '.path' "$work/upstream.json")
 newest=$(jq -r '.page_versions // [] | last // empty' "$work/upstream.json")
+if [ -z "$newest" ]; then
+  echo "warning: OpenFEMA's NRI page could not be read; check for a release newer than $pinned by hand" >&2
+fi
 if [ -n "$newest" ] && [ "${newest#v}" -gt "${pinned#v}" ]; then
   echo "OpenFEMA lists NRI $newest, nri.py builds $pinned: set VERSION and VDIR in scripts/datasets/nri.py" >&2
   exit 1
@@ -47,7 +50,10 @@ up --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" --filter "- *" \
 up --max-depth 1 --filter "+ index.json" --filter "+ snapshots.json" --filter "+ _source.json" \
   --filter "- *" --ignore-times --header-upload "$short"
 
-if rclone lsf -R "$remote" | grep -q '\._'; then
+# The whole listing first: grep -q under pipefail can exit before rclone
+# has listed everything, and the pipe then reports a failure.
+listing=$(rclone lsf -R "$remote")
+if grep -q '\._' <<<"$listing"; then
   echo "._* files reached the bucket" >&2; exit 1
 fi
 v=$(jq -r '.version' "$work/upstream.json")
