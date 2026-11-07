@@ -16,14 +16,30 @@
 # Until Alaska is built from the zip FWS lists (a new zip, or a new release),
 # the weekly check fails with that instruction.
 #
-#   build    fetch, stage, deduplicate and write, upload nothing
-#   publish  the same, then upload (a scheduled run publishes), then the
-#            tiles and the catalog
-#   tiles    only the PMTiles map, from the published state files (Alaska
-#            included), then the catalog
-#   catalog  only the catalog, rendered from the files already published
+# The national build (52 units, about 35 million rows) is split so that no
+# job runs long, through a scratch prefix, wetlands/_work/<release>/:
 #
-# Needs the R2 secrets the nightly uses.
+#   plan      the upstream check; the units in groups of about equal zip size
+#   stage     one job per group: each unit staged (nwi.py stage, a process per
+#             unit) and uploaded: its rows partitioned by target state, its
+#             index (the dedup's columns), its projects, its counts
+#   choose    each NWI_ID once, from the indexes only (nwi.py choose); the
+#             target states in groups of about equal rows
+#   write     one job per group of states: their partitions downloaded, the
+#             state files written (nwi.py write) and uploaded to the scratch
+#   assemble  the manifest, codes, projects (nwi.py assemble); when publishing,
+#             the state files copied server-side to the release, then the
+#             files that name them; the scratch prefix removed
+#   tiles     the PMTiles map from every published state (Alaska included),
+#             then the catalog
+#
+# A failed job can be re-run alone ("Re-run failed jobs"): the scratch prefix
+# is kept until assemble, and a staging job skips the units already uploaded.
+# A new run (attempt 1) clears it first.
+#
+# Stages (dispatch): build (everything, publishes nothing), publish (also
+# uploads; a scheduled run publishes), tiles (the map, then the catalog),
+# catalog (the catalog only). Needs the R2 secrets the nightly uses.
 
 name: dataset-wetlands
 
@@ -61,17 +77,21 @@ env:
   # FWS can re-upload a release under the same month, which rebuilds the
   # same path: the cache the other datasets use, not a long one.
   CACHE: "Cache-Control: public, max-age=3600"
+  # DuckDB's limit in every job: well under the runner's 16 GB, the rest for
+  # GDAL, GEOS and pyarrow, which DuckDB does not count.
+  MEMORY: 5GB
 
 jobs:
-  nwi:
+  plan:
     if: github.event_name == 'schedule' || inputs.stage == 'build' || inputs.stage == 'publish'
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 15
     outputs:
-      published: ${{ steps.published.outputs.done }}
+      go: ${{ steps.check.outputs.go }}
+      release: ${{ steps.plan.outputs.release }}
+      groups: ${{ steps.plan.outputs.groups }}
     steps:
       - uses: actions/checkout@v7
-
       - uses: astral-sh/setup-uv@v10.1.0
       - run: uv sync --project scripts
 
@@ -97,105 +117,245 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Work dir on the runner's big disk
+      - name: Plan the staging jobs
+        id: plan
         if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/nwi.py plan --groups 6 \
+            --upstream-out upstream.json > plan.json
+          jq -c '.groups' plan.json
+          echo "release=$(jq -r '.release' plan.json)" >> "$GITHUB_OUTPUT"
+          echo "groups=$(jq -c '[.groups[] | join(" ")]' plan.json)" >> "$GITHUB_OUTPUT"
+
+      - name: rclone
+        if: steps.check.outputs.go == 'true'
+        run: curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+
+      # The same upstream for every job of the run.
+      - name: Scratch prefix
+        if: steps.check.outputs.go == 'true'
+        run: |
+          scratch="$REMOTE/_work/${{ steps.plan.outputs.release }}"
+          if [ "${{ github.run_attempt }}" = "1" ]; then
+            rclone purge "$scratch" 2>/dev/null || true
+          fi
+          rclone copyto upstream.json "$scratch/upstream.json"
+
+  stage:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        units: ${{ fromJSON(needs.plan.outputs.groups) }}
+    env:
+      SCRATCH: parquetry:parquetry/wetlands/_work/${{ needs.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Work dir, rclone, GDAL
         run: |
           sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
           echo "WORK=/mnt/work" >> "$GITHUB_ENV"
-          df -h /mnt; free -g
-
-      # GDAL reads the geodatabases (nwi.py, to_fgb() and gdb_layers()): the
-      # image MassGIS uses, not apt's 3.8. It needs only $WORK, where the zips
-      # and the staged files live.
-      - name: GDAL
-        if: steps.check.outputs.go == 'true'
-        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          # GDAL reads the geodatabases (nwi.py, to_fgb() and gdb_layers()):
+          # the image MassGIS uses, not apt's 3.8. It needs only /mnt/work.
           mkdir -p "$HOME/.local/bin"
           for tool in ogr2ogr ogrinfo; do
             cat > "$HOME/.local/bin/$tool" <<EOF
           #!/usr/bin/env bash
-          exec docker run --rm -u "\$(id -u):\$(id -g)" -v "$WORK:$WORK" ghcr.io/osgeo/gdal:ubuntu-small-3.13.3 $tool "\$@"
+          exec docker run --rm -u "\$(id -u):\$(id -g)" -v /mnt/work:/mnt/work ghcr.io/osgeo/gdal:ubuntu-small-3.13.3 $tool "\$@"
           EOF
             chmod +x "$HOME/.local/bin/$tool"
           done
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/ogrinfo" --version
+          df -h /mnt; free -g
 
-      # Every unit but Alaska; the published manifest of the same release
-      # lends its Alaska entry (--live), so the catalog keeps it.
-      - name: Fetch, stage, deduplicate and write
-        if: steps.check.outputs.go == 'true'
+      - name: Stage
         run: |
-          export TMPDIR="$WORK/tmp"
-          mkdir -p "$TMPDIR"
-          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py build \
-            --work-dir "$WORK/src" --out-dir "$WORK/out" --no-tiles --low-disk --memory 5GB \
-            --live "$PUBLIC" 2> >(grep -v -e organizePolygons -e "curve geometries" | tee "$WORK/time.txt" >&2)
+          rclone copyto "$SCRATCH/upstream.json" "$WORK/upstream.json"
+          todo=()
+          for u in ${{ matrix.units }}; do
+            # A re-run skips the units an earlier attempt uploaded.
+            if rclone lsf "$SCRATCH/stage/$u.json" 2>/dev/null | grep -q .; then
+              echo "$u: already staged"
+            else
+              todo+=(--unit "$u")
+            fi
+          done
+          [ ${#todo[@]} -eq 0 ] && exit 0
+          export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py stage \
+            --upstream "$WORK/upstream.json" --work-dir "$WORK/w" "${todo[@]}" \
+            --low-disk --memory "$MEMORY" --threads 4 \
+            2> >(grep -v -e organizePolygons -e "curve geometries" | tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
-          du -sh "$WORK/out"; df -h /mnt
-          jq -c '.parts' "$WORK/out/nwi/"*/_manifest.json
+          # The rows, indexes and projects first, then each unit's counts,
+          # which mark it staged.
+          rclone copy "$WORK/w/stage" "$SCRATCH/stage" --filter "- *.json" --filter "- *.fgb" \
+            --filter "- *.fixed.parquet" --filter "+ **" --transfers 16 --stats-one-line --stats 60s
+          rclone copy "$WORK/w/stage" "$SCRATCH/stage" --max-depth 1 --filter "+ *.json" --filter "- *"
 
-      - name: rclone
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+  choose:
+    needs: [plan, stage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      groups: ${{ steps.choose.outputs.groups }}
+    env:
+      SCRATCH: parquetry:parquetry/wetlands/_work/${{ needs.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+      - name: Choose
+        id: choose
         run: |
           curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
-          rclone version | sed -n 1p
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          w=/mnt/work/w
+          rclone copy "$SCRATCH/stage" "$w/stage" --max-depth 1 \
+            --filter "+ *.index.parquet" --filter "- *"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py choose \
+            --work-dir "$w" --memory "$MEMORY" --groups 6 > choose.json 2> >(tee time.txt >&2)
+          grep -E "Maximum resident|Elapsed" time.txt
+          cat choose.json; jq -c 'del(.targets)' "$w/dedup.json"
+          echo "groups=$(jq -c '[.groups[] | join(" ")]' choose.json)" >> "$GITHUB_OUTPUT"
+          rclone copy "$w" "$SCRATCH" --max-depth 1 --filter "+ win.parquet" \
+            --filter "+ dedup.json" --filter "- *"
 
-      # The data first, then the files that name it.
-      - name: Publish
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+  write:
+    needs: [plan, choose]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        targets: ${{ fromJSON(needs.choose.outputs.groups) }}
+    env:
+      SCRATCH: parquetry:parquetry/wetlands/_work/${{ needs.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+      - name: Write
         run: |
-          out="$WORK/out"
-          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          w=/mnt/work/w; out=/mnt/work/out
+          rclone copy "$SCRATCH" "$w" --max-depth 1 --filter "+ win.parquet" \
+            --filter "+ upstream.json" --filter "- *"
+          filters=(); args=()
+          for t in ${{ matrix.targets }}; do
+            filters+=(--filter "+ /*/target=$t/**"); args+=(--target "$t")
+          done
+          rclone copy "$SCRATCH/stage" "$w/stage" "${filters[@]}" --filter "- *" \
+            --transfers 16 --stats-one-line --stats 60s
+          export TMPDIR=/mnt/work/tmp; mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py write \
+            --upstream "$w/upstream.json" --work-dir "$w" --out-dir "$out" "${args[@]}" \
+            --low-disk --memory "$MEMORY" 2> >(tee time.txt >&2)
+          grep -E "Maximum resident|Elapsed" time.txt
+          # Uploaded with the headers they are served with: assemble copies
+          # them server-side, which keeps them.
+          rclone copy "$out" "$SCRATCH/out" --filter "+ *.parquet" --filter "- *" \
             --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 60s --stats-one-line
-          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" \
-            --filter "- *" --ignore-times --header-upload "Cache-Control: public, max-age=300"
+            --transfers 8 --stats-one-line --stats 60s
+          rclone copy "$out/entries" "$SCRATCH/out/entries"
+
+  assemble:
+    needs: [plan, write]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      published: ${{ steps.published.outputs.done }}
+    env:
+      SCRATCH: parquetry:parquetry/wetlands/_work/${{ needs.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+      - name: Assemble
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          w=/mnt/work/w; out=/mnt/work/out
+          rclone copy "$SCRATCH" "$w" --max-depth 1 --filter "+ upstream.json" \
+            --filter "+ dedup.json" --filter "- *"
+          rclone copy "$SCRATCH/stage" "$w/stage" --max-depth 1 --filter "+ *.json" \
+            --filter "+ *.projects.parquet" --filter "- *"
+          rclone copy "$SCRATCH/out/entries" "$out/entries"
+          uv run --project scripts python scripts/datasets/nwi.py assemble \
+            --upstream "$w/upstream.json" --work-dir "$w" --out-dir "$out" --memory "$MEMORY" \
+            --live "$PUBLIC"
+          jq -c '.parts' "$out/nwi/"*/_manifest.json
+          echo "OUT=$out" >> "$GITHUB_ENV"
+
+      # The data first (server-side, from the scratch prefix), then the files
+      # that name it.
+      - name: Publish
+        if: env.PUBLISH == 'true'
+        run: |
+          rel=$(jq -r '.datasets[0].path' "$OUT/index.json")
+          rclone copy "$SCRATCH/out/$rel" "$REMOTE/$rel" --filter "+ /state=*/wetlands.parquet" \
+            --filter "- *" --transfers 16 --stats-one-line --stats 60s
+          rclone copy "$OUT/$rel" "$REMOTE/$rel" --filter "+ codes.parquet" \
+            --filter "+ projects.parquet" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet"
+          rclone copy "$OUT/$rel" "$REMOTE/$rel" --filter "+ _manifest.json" \
+            --filter "+ ATTRIBUTION.txt" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
           # A rebuild of the same release writes the same path: a state the
           # manifest no longer lists must not stay behind for the state=*
           # glob to read. The manifest keeps Alaska's entry (--live), so
           # Alaska's folder stays. Before _source.json, so that a failure
           # here leaves the next weekly run to rebuild and retry.
-          rel=$(jq -r '.datasets[0].path' "$out/index.json")
-          keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
+          keep=$(jq -r '.files[].state' "$OUT/$rel/_manifest.json" | sort)
           for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
             echo "$keep" | grep -qx "${d#state=}" && continue
             echo "removing stale $rel/$d"
             rclone purge "$REMOTE/$rel/$d"
           done
-          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+          rclone copy "$OUT" "$REMOTE" --max-depth 1 --filter "+ index.json" \
             --filter "+ _source.json" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true'
         run: |
           set +e
           fail=0
-          rel=$(jq -r '.datasets[0].path' "$WORK/out/index.json")
+          rel=$(jq -r '.datasets[0].path' "$OUT/index.json")
           for f in index.json _source.json $rel/_manifest.json $rel/ATTRIBUTION.txt \
                    $rel/codes.parquet $rel/projects.parquet \
-                   $rel/state=MA/wetlands.parquet $rel/state=FL/wetlands.parquet \
+                   $rel/state=MA/wetlands.parquet $rel/state=MN/wetlands.parquet \
                    $rel/state=PR/wetlands.parquet $rel/state=GU/wetlands.parquet; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
-            echo "ok  $f"
+            type=$(curl -sI "$PUBLIC/$f" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print $2}')
+            echo "ok  $f ($type)"
           done
           exit $fail
 
       - name: Published
         id: published
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true'
         run: echo "done=true" >> "$GITHUB_OUTPUT"
 
-  # A job of its own, so the map gets a fresh time limit: every published
-  # state file streamed into a lon/lat copy, tiled, uploaded, the manifest
-  # updated, then the catalog.
+      - name: Remove the scratch prefix
+        run: rclone purge "$SCRATCH"
+
+  # A job of its own: every published state file streamed into a lon/lat
+  # copy, tiled, uploaded, the manifest updated, then the catalog.
   tiles:
-    needs: nwi
+    needs: assemble
     if: >-
       always() && (inputs.stage == 'tiles' || inputs.stage == 'catalog'
-      || needs.nwi.outputs.published == 'true')
+      || needs.assemble.outputs.published == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
@@ -223,7 +383,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           mkdir -p "$TMPDIR"
           /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py tiles \
-            --work-dir "$WORK/src" --out-dir "$WORK/out" --memory 5GB --live "$PUBLIC" \
+            --work-dir "$WORK/src" --out-dir "$WORK/out" --memory "$MEMORY" --live "$PUBLIC" \
             2> >(tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
           out="$WORK/out"
