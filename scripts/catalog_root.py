@@ -18,6 +18,10 @@ and each dataset workflow checks its own catalog.
 Usage:
   python3 scripts/catalog_root.py build [--dest catalog-site/public]
   python3 scripts/catalog_root.py check [catalog-site/public]
+  python3 scripts/catalog_root.py guides [--remote parquetry:parquetry] [--dry-run]
+
+`guides` uploads our guides for the external catalogs (catalog/<name>/AGENTS.md
+to <remote>/<name>/AGENTS.md). Run it from a workstation after a guide changes.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -72,6 +77,21 @@ DATASETS = [
                 "Information, checked weekly.", SITE),
 ]
 
+# Catalogs published by others, linked as they are: nothing is built or stored
+# on parquetry. Their title is ours, saying whose catalog it is (Overture's
+# root has no title), and a guide of ours may stand in for an AGENTS.md they
+# do not ship (catalog/<name>/AGENTS.md, uploaded to parquetry/<name>/).
+EXTERNAL = [
+    {"url": "https://stac.overturemaps.org/catalog.json",
+     "title": "Overture Maps (Overture's own catalog)",
+     "summary": "Overture's buildings, places, transportation, divisions, addresses and "
+                "base layers worldwide, one release a month. Files and metadata are "
+                "Overture's; the guide is ours.",
+     "license": "ODbL-1.0 for most themes; places and addresses per source",
+     "page": "https://docs.overturemaps.org/",
+     "guide": f"{PUBLIC_BASE}/overture/AGENTS.md"},
+]
+
 
 def child_url(prefix: str) -> str:
     return f"{PUBLIC_BASE}/{prefix}/catalog/catalog.json"
@@ -89,7 +109,7 @@ def read_children() -> list[dict]:
         lic = next((link for link in cat["links"] if link["rel"] == "license"), {})
         out.append({"url": child_url(prefix), "title": cat["title"], "summary": summary,
                     "license": lic.get("title", "see the catalog"), "page": page})
-    return out
+    return out + [dict(e) for e in EXTERNAL]
 
 
 def build_root(children: list[dict], updated: str) -> dict:
@@ -105,7 +125,8 @@ def build_root(children: list[dict], updated: str) -> dict:
             "a world basemap, place names, addresses, protected areas, flood zones, natural "
             "hazard risk, water features, "
             "census geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
-            "under its own licence."),
+            "under its own licence. Overture Maps is linked to Overture's own catalog, "
+            "not copied."),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{ROOT_URL}/catalog.json", "type": "application/json"},
@@ -127,7 +148,9 @@ def build_root(children: list[dict], updated: str) -> dict:
 
 def root_readme(root: dict, children: list[dict]) -> str:
     rows = "\n".join(
-        f"| [{c['title']}]({c['url']}) | {c['summary']} | {c['license']} | "
+        f"| [{c['title']}]({c['url']}) | {c['summary']}"
+        + (f" [Guide]({c['guide']})." if c.get("guide") else "")
+        + f" | {c['license']} | "
         f"[{c['page'].removeprefix('https://').rstrip('/')}]({c['page']}) |" for c in children)
     return f"""\
 # {root['title']}
@@ -140,7 +163,8 @@ def root_readme(root: dict, children: list[dict]) -> str:
 
 ## Access
 
-Every file is on {PUBLIC_BASE} and can be read in place over HTTPS with
+Every Geomermaids file is on {PUBLIC_BASE} (Overture's are on Overture's
+own buckets) and can be read in place over HTTPS with
 range requests: DuckDB, GDAL, polars and pyarrow need no download and no
 credentials. Each dataset catalog's README says how its files are laid out
 and how to query them.
@@ -159,13 +183,15 @@ Geomermaids, {CONTACT_EMAIL}. Source and issues: {REPO_URL}.
 
 def root_agents(children: list[dict]) -> str:
     listing = "\n".join(f"- {c['title']}: {c['url']}\n  {c['summary']} Licence: {c['license']}."
+                        + (f"\n  Guide: {c['guide']}" if c.get("guide") else "")
                         for c in children)
     return f"""\
 # {CATALOG_ID}: agent guide
 
 The root of the Geomermaids catalogs. It holds no data: each child is a
 complete Portolan catalog on {PUBLIC_BASE}, with its own README.md and
-AGENTS.md beside its catalog.json. Read the child's AGENTS.md before
+AGENTS.md beside its catalog.json, except Overture Maps: that child is
+Overture's own STAC catalog, read through the guide named below. Read the child's AGENTS.md before
 querying it: layouts differ (one file per region, per country, per county or
 per layer).
 
@@ -202,6 +228,21 @@ def check_root(tree: Path) -> int:
         return check(Path(tmp))
 
 
+def upload_guides(remote: str, *, dry_run: bool) -> None:
+    for e in EXTERNAL:
+        if not e.get("guide"):
+            continue
+        name = e["guide"].removeprefix(f"{PUBLIC_BASE}/").split("/")[0]
+        src = REPO / "catalog" / name / "AGENTS.md"
+        cmd = ["rclone", "copyto", "--ignore-times",
+               "--header-upload", "Cache-Control: public, max-age=300",
+               "--header-upload", "Content-Type: text/markdown; charset=utf-8",
+               str(src), f"{remote}/{name}/AGENTS.md"]
+        print(f"  $ {' '.join(cmd)}")
+        if not dry_run:
+            subprocess.run(cmd, check=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -209,7 +250,13 @@ def main() -> None:
     b.add_argument("--dest", type=Path, default=DEST)
     c = sub.add_parser("check", help="rashid over a rendered root")
     c.add_argument("tree", type=Path, nargs="?", default=DEST)
+    g = sub.add_parser("guides", help="upload our guides for the external catalogs")
+    g.add_argument("--remote", default="parquetry:parquetry")
+    g.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
+    if args.cmd == "guides":
+        upload_guides(args.remote, dry_run=args.dry_run)
+        return
     if args.cmd == "build":
         print(f"wrote {args.dest}/ ({render(args.dest)} child catalogs)")
         sys.exit(check_root(args.dest))
