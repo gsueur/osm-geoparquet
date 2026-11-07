@@ -150,6 +150,43 @@ proclamation boundary around both): take the union of the geometries, or the
 `https://parquetry.geomermaids.com/padus/catalog/catalog.json`
 (`scripts/datasets/padus_catalog.py`).
 
+The US National Address Database (`scripts/datasets/nad.py`, workflow
+`dataset-nad.yml`, checked weekly against data.transportation.gov) sits under
+`https://parquetry.geomermaids.com/addresses/nad/r24/`: release 24 (compiled
+September 30, 2026), 99,226,272 address points as one GeoParquet file per
+state (`state=<XX>/addresses.parquet`, 47 files: 45 states, DC and the US
+Virgin Islands), NAD's 60 columns unchanged plus
+`full_address`, a normalized one-line address for matching, lon/lat
+(OGC:CRS84: NAD's coordinates are WGS 84). No national file: the states read
+together through the S3 glob
+`s3://parquetry/addresses/nad/r24/state=*/addresses.parquet`. Participation is
+voluntary: `_coverage.json` lists rows and counties per state and the states
+with no rows (Hawaii, Michigan, Mississippi, Nevada, New Hampshire and four
+territories in r24), and `addresses_h3.parquet` / `.pmtiles` map the points
+on H3 cells. USDOT ships the text file as a 8.5 GB Deflate64 zip of a 42 GB
+CSV; `zipfile-inflate64` reads it (`uv run --with zipfile-inflate64`). The
+build gate accounts for every row of the CSV. Portolan catalog at
+`https://parquetry.geomermaids.com/addresses/catalog/catalog.json`
+(`scripts/datasets/nad_catalog.py`).
+
+Gazetteers (`scripts/datasets/gazetteer.py`, workflow `dataset-gazetteer.yml`,
+checked weekly) sit under `https://parquetry.geomermaids.com/gazetteer/`: the
+Census Bureau's 2026 Gazetteer Files (`census/2026/<code>.parquet`, 17 files
+named after the TIGER/Line layer codes: `place`, `county`, `zcta520`, `cd120`...,
+every column as published, the internal point as a NAD83 point; GEOID joins
+TIGER/Line and the ACS) and GeoNames (`geonames/latest/geonames.parquet`, about
+13.5 million names worldwide with decoded feature types, country, admin1 and
+admin2 names; the same rows under `country=<CC>/geonames.parquet`, `none` for
+rows without a country; and `cities1000.parquet`, the populated places of 1,000
+people or more plus seats of government, with `cities1000.pmtiles` for map
+labels). GeoNames republishes its dump daily; `latest/` is rebuilt weekly and
+keeps no dated snapshots. The build checks rows against the sources, GEOID and
+geonameid uniqueness, coordinates, and every Census GEOID against TIGER/Line.
+Census: public domain; GeoNames: CC BY 4.0. Portolan catalog at
+`https://parquetry.geomermaids.com/gazetteer/catalog/catalog.json`
+(`scripts/datasets/gazetteer_catalog.py`), one sub-catalog per source;
+thumbnails under `catalog/thumbnails/gazetteer/`.
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one
@@ -188,24 +225,6 @@ it (`<scale>/basemap-style.json`). Public domain. Portolan catalog at
 `https://parquetry.geomermaids.com/natural-earth/catalog/catalog.json`
 (`scripts/datasets/natural_earth_catalog.py`), one sub-catalog per scale;
 its thumbnails are committed under `catalog/thumbnails/natural-earth/`.
-
-Gazetteers (`scripts/datasets/gazetteer.py`, workflow `dataset-gazetteer.yml`,
-checked weekly) sit under `https://parquetry.geomermaids.com/gazetteer/`: the
-Census Bureau's 2026 Gazetteer Files (`census/2026/<code>.parquet`, 17 files
-named after the TIGER/Line layer codes: `place`, `county`, `zcta520`, `cd120`...,
-every column as published, the internal point as a NAD83 point; GEOID joins
-TIGER/Line and the ACS) and GeoNames (`geonames/latest/geonames.parquet`, about
-13.5 million names worldwide with decoded feature types, country, admin1 and
-admin2 names; the same rows under `country=<CC>/geonames.parquet`, `none` for
-rows without a country; and `cities1000.parquet`, the populated places of 1,000
-people or more plus seats of government, with `cities1000.pmtiles` for map
-labels). GeoNames republishes its dump daily; `latest/` is rebuilt weekly and
-keeps no dated snapshots. The build checks rows against the sources, GEOID and
-geonameid uniqueness, coordinates, and every Census GEOID against TIGER/Line.
-Census: public domain; GeoNames: CC BY 4.0. Portolan catalog at
-`https://parquetry.geomermaids.com/gazetteer/catalog/catalog.json`
-(`scripts/datasets/gazetteer_catalog.py`), one sub-catalog per source;
-thumbnails under `catalog/thumbnails/gazetteer/`.
 
 Geobox's samples (`scripts/datasets/geobox_samples.py`, no workflow: the
 sources are static, rebuilt by hand) sit under

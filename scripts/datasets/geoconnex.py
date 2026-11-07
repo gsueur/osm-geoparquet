@@ -400,7 +400,10 @@ def rewrite(src: Path, dest: Path) -> None:
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
-    table = pq.read_table(src)
+    # One file, never a dataset: without partitioning=None pyarrow reads a
+    # `key=value` directory in the path (nad.py's state=XX/) as a Hive
+    # partition and adds it to the file as a column.
+    table = pq.read_table(src, partitioning=None)
     sizes = np.zeros(table.num_rows, dtype=np.int64)
     for name in table.column_names:
         col = table.column(name)

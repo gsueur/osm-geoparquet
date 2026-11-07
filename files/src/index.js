@@ -289,6 +289,13 @@ const DATASETS = {
       "columns unchanged with each code decoded, NAD83. Public domain.",
     attribution: "padus/v4.1/ATTRIBUTION.txt",
   },
+  "addresses/": {
+    subtitle: "US National Address Database (USDOT), public domain: address points as one " +
+      "GeoParquet file per state under nad/r<release>/state=<XX>/, NAD's columns unchanged " +
+      "plus a normalized full_address, lon/lat; the release's coverage on H3 cells. Not " +
+      "every state contributes: see _coverage.json.",
+    attribution: "addresses/nad/r24/ATTRIBUTION.txt",
+  },
   "gazetteer/": {
     subtitle: "Gazetteers, names to coordinates: the Census Bureau's 2026 Gazetteer Files under " +
       "census/2026/ (one file per layer, GEOID joins TIGER/Line, NAD83) and GeoNames under " +

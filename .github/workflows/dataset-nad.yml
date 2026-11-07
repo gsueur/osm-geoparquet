@@ -1,0 +1,173 @@
+# The US National Address Database: parquetry:parquetry/addresses/.
+#
+# One GeoParquet file of address points per state under
+# addresses/nad/r<release>/state=<XX>/, the release's coverage on H3 cells
+# and its map, and the Portolan catalog at addresses/catalog/.
+# scripts/datasets/nad.py documents the layout and the gate.
+#
+# USDOT publishes a release every few months on data.transportation.gov.
+# A weekly run reads the dataset's metadata (release number, compile date,
+# the text zip's size and update time) and compares it with the published
+# addresses/_source.json: anything new rebuilds the whole release, which is
+# a new path (r25 beside r24; the old release stays until removed by hand).
+#
+# The text zip is 8.5 GB of Deflate64 (zipfile-inflate64 reads it) and holds
+# a 42 GB CSV of 99 million rows: the work dir is the runner's big disk, and
+# the zip is deleted once extracted.
+#
+#   build    fetch, load, gate and write, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-nad
+
+on:
+  schedule:
+    - cron: "17 6 * * 2"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if the release has not moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-nad
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/addresses
+  PUBLIC: https://parquetry.geomermaids.com/addresses
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # USDOT can re-upload a release under the same number, which rebuilds the
+  # same path: the cache the other datasets use, not a long one.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  nad:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          # The catalog stage reads only what is published.
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/nad.py upstream > upstream.json
+          cat upstream.json
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          now=$(jq -c '[.release, .txt_bytes, .txt_updated]' upstream.json)
+          was=$(echo "$live" | jq -c '.nad // {} | [.release, .txt_bytes, .txt_updated]')
+          echo "upstream $now, published $was"
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, load, gate and write
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts --with zipfile-inflate64 \
+            python scripts/datasets/nad.py build --work-dir "$WORK/src" --out-dir "$WORK/out" \
+            --low-disk 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; df -h /mnt
+          jq -c '.gate' "$WORK/out/nad/"r*/_manifest.json
+          jq -c '[.missing[].state]' "$WORK/out/nad/"r*/_coverage.json
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the files that name it.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 60s --stats-one-line
+          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ _coverage.json" \
+            --filter "+ ATTRIBUTION.txt" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
+            --filter "+ _source.json" --filter "- *" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # A rebuild of the same release number writes the same path: a
+          # state the new release no longer has must not stay behind for the
+          # state=* glob to read.
+          rel=$(jq -r '.datasets[0].path' "$out/index.json")
+          keep=$(jq -r '.files[].state' "$out/$rel/_manifest.json" | sort)
+          for d in $(rclone lsf --dirs-only "$REMOTE/$rel/" | grep '^state=' | sed 's|/$||'); do
+            echo "$keep" | grep -qx "${d#state=}" && continue
+            echo "removing stale $rel/$d"
+            rclone purge "$REMOTE/$rel/$d"
+          done
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          rel=$(jq -r '.datasets[0].path' "$WORK/out/index.json")
+          for f in index.json _source.json $rel/_manifest.json $rel/_coverage.json \
+                   $rel/ATTRIBUTION.txt $rel/addresses_h3.parquet $rel/addresses_h3.pmtiles \
+                   $rel/state=MA/addresses.parquet $rel/state=TX/addresses.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$rel/addresses_h3.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/nad_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/nad/collection.json \
+                   catalog/coverage/collection.json catalog/coverage/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
