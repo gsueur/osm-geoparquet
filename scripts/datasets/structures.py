@@ -238,8 +238,12 @@ def load(con, archive: Path, st: str) -> int:
     path, layer = gdb_path(archive, st)
     meta = con.execute(f"SELECT layers FROM ST_Read_Meta('{path}')").fetchone()[0]
     layers = {m["name"]: m for m in meta}
-    if layer not in layers:
-        sys.exit(f"{archive.name}: no layer {layer}, has {sorted(layers)}")
+    # Deliveries differ in case (AR 2025-09-13 names it AR_structures): match
+    # the layer case-insensitively, but only when exactly one fits.
+    fits = [n for n in layers if n.lower() == layer.lower()]
+    if len(fits) != 1:
+        sys.exit(f"{archive.name}: no single layer {layer}, has {sorted(layers)}")
+    layer = fits[0]
     cols = [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM ST_Read('{path}', layer = '{layer}')")
             .fetchall() if r[0] != "Shape"]
     if cols != SOURCE_COLUMNS:
