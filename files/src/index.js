@@ -283,6 +283,12 @@ const DATASETS = {
       "one PMTiles world basemap per scale.",
     attribution: "natural-earth/v5.1.2/ATTRIBUTION.txt",
   },
+  "padus/": {
+    subtitle: "USGS PAD-US 4.1, the Protected Areas Database of the United States: one GeoParquet " +
+      "file per feature class under v4.1/, the Combined layer also per state and as PMTiles, " +
+      "columns unchanged with each code decoded, NAD83. Public domain.",
+    attribution: "padus/v4.1/ATTRIBUTION.txt",
+  },
   "addresses/": {
     subtitle: "US National Address Database (USDOT), public domain: address points as one " +
       "GeoParquet file per state under nad/r<release>/state=<XX>/, NAD's columns unchanged " +

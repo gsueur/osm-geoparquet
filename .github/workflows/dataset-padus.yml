@@ -1,0 +1,111 @@
+# USGS PAD-US: parquetry:parquetry/padus/.
+#
+# One GeoParquet file per feature class (combined, fee, designation,
+# easement, marine, proclamation), the Combined layer also per state and as
+# PMTiles, PAD-US's code tables and USGS's metadata, under padus/v<version>/.
+# scripts/datasets/padus.py documents the layout and the gate.
+#
+# The national geodatabase is behind a ScienceBase login, so nothing here
+# downloads it: it is fetched by hand once per release and built and
+# published from a workstation with scripts/datasets/padus_publish_local.sh.
+# This workflow does the two things that need no login:
+#
+#   upstream  (monthly, and on dispatch) reads the release item's public JSON
+#             on ScienceBase and fails, telling a human to download again,
+#             when ScienceBase lists a newer PAD-US full inventory or when the
+#             item's title, last update or zip size differ from what was
+#             published (padus/_source.json).
+#   catalog   (dispatch) renders the Portolan catalog at /padus/catalog/ from
+#             the files already published.
+#
+# Needs the R2 secrets the nightly uses (catalog stage only).
+
+name: dataset-padus
+
+on:
+  schedule:
+    - cron: "17 8 3 * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "upstream checks ScienceBase; catalog renders and uploads the catalog"
+        type: choice
+        options: [catalog, upstream]
+        default: catalog
+
+concurrency:
+  group: dataset-padus
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/padus
+  PUBLIC: https://parquetry.geomermaids.com/padus
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  upstream:
+    if: github.event_name == 'schedule' || inputs.stage == 'upstream'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new on ScienceBase?
+        run: |
+          uv run --project scripts python scripts/datasets/padus.py upstream > upstream.json
+          cat upstream.json
+          newer=$(jq -r '.newer // [] | join(", ")' upstream.json)
+          if [ -n "$newer" ]; then
+            echo "::error::ScienceBase lists a newer PAD-US ($newer): download it by hand, set VERSION in scripts/datasets/padus.py, run padus_publish_local.sh"
+            exit 1
+          fi
+          if jq -e '.newer == null' upstream.json >/dev/null; then
+            echo "::warning::could not search ScienceBase for a newer PAD-US; checking the release item only"
+          fi
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          now=$(jq -c '[.title, .last_updated, .zip.bytes]' upstream.json)
+          was=$(echo "$live" | jq -c '[.title, .last_updated, .zip.bytes]')
+          echo "upstream  $now"
+          echo "published $was"
+          if [ "$now" != "$was" ]; then
+            echo "::error::The PAD-US release item changed since the published build ($was -> $now): download PADUS4_1Geodatabase.zip again and run padus_publish_local.sh"
+            exit 1
+          fi
+          echo "nothing moved upstream"
+
+  catalog:
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == 'catalog'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: STAC catalog, published
+        run: |
+          uv run --project scripts python scripts/datasets/padus_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/combined/collection.json \
+                   catalog/combined/styles/default.json catalog/fee/collection.json \
+                   catalog/designation/collection.json catalog/easement/collection.json \
+                   catalog/marine/collection.json catalog/proclamation/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
