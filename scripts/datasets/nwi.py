@@ -668,11 +668,10 @@ def write_states(con, work: Path, out: Path, rel_name: str, crs: dict, targets: 
                              WHERE target = '{st}') w
                       ON w.NWI_ID = s.NWI_ID AND w.source_unit = s.source_unit
                   LEFT JOIN codes c ON c.ATTRIBUTE = s.ATTRIBUTE)""")
-        bad = [r[0] for r in con.execute(
-            "SELECT DISTINCT ATTRIBUTE FROM src WHERE ATTRIBUTE NOT IN "
-            "(SELECT ATTRIBUTE FROM codes) LIMIT 50").fetchall()]
-        bad_rows = con.execute("SELECT count(*) FROM src WHERE ATTRIBUTE NOT IN "
-                               "(SELECT ATTRIBUTE FROM codes)").fetchone()[0]
+        # One pass over ATTRIBUTE alone (the view reads no geometry for it).
+        bad_rows, bad = con.execute(
+            "SELECT count(*), coalesce(list(DISTINCT ATTRIBUTE)[:50], []) FROM src "
+            "WHERE ATTRIBUTE NOT IN (SELECT ATTRIBUTE FROM codes)").fetchone()
         dest = rel / f"state={st}" / "wetlands.parquet"
         dest.parent.mkdir(parents=True, exist_ok=True)
         e = write_sorted(con, dest, crs)

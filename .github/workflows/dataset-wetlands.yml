@@ -178,13 +178,16 @@ jobs:
       - name: Stage
         run: |
           rclone copyto "$SCRATCH/upstream.json" "$WORK/upstream.json"
-          todo=()
+          todo=(); units=()
           for u in ${{ matrix.units }}; do
-            # A re-run skips the units an earlier attempt uploaded.
-            if rclone lsf "$SCRATCH/stage/$u.json" 2>/dev/null | grep -q .; then
+            # A re-run skips a unit an earlier attempt uploaded, if from the
+            # zip this run's upstream lists (FWS can re-upload within a month).
+            want=$(jq -r --arg u "$u" '.units[$u].etag' "$WORK/upstream.json")
+            have=$(rclone cat "$SCRATCH/stage/$u.json" 2>/dev/null | jq -r '.etag // empty' || true)
+            if [ -n "$have" ] && [ "$have" = "$want" ]; then
               echo "$u: already staged"
             else
-              todo+=(--unit "$u")
+              todo+=(--unit "$u"); units+=("$u")
             fi
           done
           [ ${#todo[@]} -eq 0 ] && exit 0
@@ -194,8 +197,13 @@ jobs:
             --low-disk --memory "$MEMORY" --threads 4 \
             2> >(grep -v -e organizePolygons -e "curve geometries" | tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
-          # The rows, indexes and projects first, then each unit's counts,
-          # which mark it staged.
+          # What an earlier attempt left of these units goes first (copy never
+          # removes a file: a stale part would be read twice), then the rows,
+          # indexes and projects, then each unit's counts, which mark it staged.
+          for u in "${units[@]}"; do
+            rclone purge "$SCRATCH/stage/$u" 2>/dev/null || true
+            rclone deletefile "$SCRATCH/stage/$u.json" 2>/dev/null || true
+          done
           rclone copy "$WORK/w/stage" "$SCRATCH/stage" --filter "- *.json" --filter "- *.fgb" \
             --filter "- *.fixed.parquet" --filter "+ **" --transfers 16 --stats-one-line --stats 60s
           rclone copy "$WORK/w/stage" "$SCRATCH/stage" --max-depth 1 --filter "+ *.json" --filter "- *"
