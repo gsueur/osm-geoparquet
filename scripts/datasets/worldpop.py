@@ -471,7 +471,15 @@ def tiles(con, work: Path, dest: Path) -> dict:
     return entry
 
 
-def attribution(source: dict, gaul_accessed: str | None) -> str:
+def attribution(source: dict, gaul_accessed: str | None, bands: dict) -> str:
+    pixels = sum(v.get("negative_pixels", 0) for v in bands.values())
+    worst = max(bands, key=lambda b: -bands[b].get("negative_sum", 0.0))
+    worst_sum = -bands[worst].get("negative_sum", 0.0)
+    noise = (f"{pixels:,} pixels WorldPop gives just below zero (float noise; at most "
+             f"{worst_sum:.2f} people in one band, {worst}) are left out, counted per band in the "
+             f"manifest; the build fails on a pixel at or below {NEGATIVE_NOISE:g} or on "
+             f"negatives above {NEGATIVE_SHARE:g} of a band's total."
+             if pixels else "No pixel was below zero.")
     return f"""\
 # Data attribution
 
@@ -498,9 +506,7 @@ The 1 km pixels are summed on H3 cells: each pixel goes whole to the
 resolution {RES} cell holding its centre (resolution {WORLD_RES} for the world
 file), so every total is WorldPop's, moved by at most half a cell. The age
 columns are sums of WorldPop's age bands (both sexes); `female` and `male`
-sum the per-sex bands. Pixels WorldPop gives just below zero (float noise in
-the age and sex rasters, under one person a band) are left out; the manifest
-counts them per band. The `country` column is not WorldPop's: it is the
+sum the per-sex bands. {noise} The `country` column is not WorldPop's: it is the
 GAUL 2024 L0 unit holding the cell centre (FAO, Global Administrative Unit
 Layers 2024{f', accessed {gaul_accessed}' if gaul_accessed else ''}, following the UN
 delineation; disputed areas keep GAUL's x codes). WorldPop's own national
@@ -571,7 +577,7 @@ def build(work: Path, out: Path, gaul: str, gaul_accessed: str | None, *,
 
     totals = dict(zip(COLUMNS, con.execute(
         f"SELECT {', '.join(f'sum({c})' for c in COLUMNS)} FROM cells").fetchone()))
-    (folder / "ATTRIBUTION.txt").write_text(attribution(source, gaul_accessed))
+    (folder / "ATTRIBUTION.txt").write_text(attribution(source, gaul_accessed, bands))
     (folder / "_manifest.json").write_text(json.dumps({
         "state_name": f"WorldPop Global2 {RELEASE}, {YEAR}, on H3",
         "release": RELEASE, "version": VERSION, "year": YEAR,
