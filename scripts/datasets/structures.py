@@ -613,6 +613,7 @@ def main() -> None:
     b.add_argument("--out-dir", type=Path, required=True, help="the structures/ prefix")
     b.add_argument("--no-tiles", action="store_true")
     b.add_argument("--low-disk", action="store_true", help="delete each zip once loaded")
+    b.add_argument("--published", default=PUBLIC_DATA)
     r = sub.add_parser("retile", help="rebuild the maps of published states")
     r.add_argument("--state", action="append", required=True)
     r.add_argument("--work-dir", type=Path, default=Path("work"))
@@ -629,6 +630,13 @@ def main() -> None:
         print(" ".join(changed(args.published)))
     elif args.cmd == "build":
         up = upstream()
+        # A state gone upstream that the published set still lists is
+        # skipped (changed() lists it; finalize drops it); any other unknown
+        # code is a typo.
+        was = (get_json(f"{args.published}/_source.json") or {}).get("states", {})
+        bad = [st for st in args.state if st not in up and st not in was]
+        if bad:
+            sys.exit(f"not upstream: {bad}")
         for st in args.state:
             if st not in up:
                 # Gone upstream (changed() lists it): finalize drops it.
