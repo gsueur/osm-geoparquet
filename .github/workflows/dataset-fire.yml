@@ -127,7 +127,10 @@ jobs:
           # showing fires that are out.
           for n in $(jq -r '.files[] | select(.kind == "perimeter") | .name' "$out/_manifest.json"); do
             jq -e --arg n "$n" '.pmtiles | map(.name) | index($n)' "$out/_manifest.json" >/dev/null \
-              || rclone deletefile "$REMOTE/$GROUP/latest/$n.pmtiles" 2>/dev/null || true
+              && continue
+            if rclone lsf "$REMOTE/$GROUP/latest/$n.pmtiles" | grep -q .; then
+              rclone deletefile "$REMOTE/$GROUP/latest/$n.pmtiles"
+            fi
           done
           rclone copyto "$out/_manifest.json" "$REMOTE/$GROUP/latest/_manifest.json" \
             --ignore-times --header-upload "$CACHE" --header-upload "Content-Type: application/json"
@@ -152,6 +155,12 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
+          done
+          # An empty perimeter layer's archive must be gone.
+          for n in $(jq -r '.files[] | select(.kind == "perimeter") | .name' "out/fire/$GROUP/latest/_manifest.json" 2>/dev/null); do
+            jq -e --arg n "$n" '.pmtiles | map(.name) | index($n)' "out/fire/$GROUP/latest/_manifest.json" >/dev/null && continue
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$GROUP/latest/$n.pmtiles")
+            [ "$code" = "404" ] || { echo "BAD $n.pmtiles still served for an empty layer -> $code"; fail=1; }
           done
           tiles=$( [ "$GROUP" = mtbs ] && echo mtbs/latest/mtbs_perimeters.pmtiles || echo wfigs/latest/all_since_2016.pmtiles )
           type=$(curl -sI "$PUBLIC/$tiles" | tr -d '\r' | awk 'tolower($1)=="content-type:"{print $2}')
