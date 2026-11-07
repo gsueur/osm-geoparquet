@@ -32,6 +32,7 @@ import json
 import shutil
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -207,12 +208,20 @@ def latest_url(group: str) -> str:
     return f"{PUBLIC_DATA}/{group}/latest"
 
 
-def read_manifest(group: str, out_dir: Path | None) -> dict:
+def read_manifest(group: str, out_dir: Path | None) -> dict | None:
+    """The group's manifest, local or published; None when the group has
+    never been published (the first run of the other group)."""
     local = out_dir / group / "latest" / "_manifest.json" if out_dir else None
     if local and local.is_file():
         return json.loads(local.read_text())
-    with urllib.request.urlopen(f"{latest_url(group)}/_manifest.json") as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(f"{latest_url(group)}/_manifest.json") as r:
+            return json.load(r)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"  {group}: not published yet, its collections are left out")
+            return None
+        raise
 
 
 def data_source(group: str, out_dir: Path | None, file: str) -> str:
@@ -671,10 +680,14 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     manifests = {g: read_manifest(g, out_dir) for g in ("wfigs", "mtbs")}
+    if not any(manifests.values()):
+        sys.exit("neither group is built or published: nothing to catalog")
     collections, total = [], 0
     for name, spec in COLLECTIONS.items():
         group = spec["group"]
         manifest = manifests[group]
+        if manifest is None:
+            continue
         entry = {f["name"]: f for f in manifest["files"]}[name]
         tiles = {t["name"]: t for t in manifest["pmtiles"]}.get(name)
         if not (THUMBS / f"{name}.png").is_file():
@@ -712,7 +725,8 @@ def publish(out_dir: Path | None, remote: str, *, dry_run: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="fire-catalog-") as tmp:
         tree = Path(tmp) / "catalog"
         total = build(out_dir, tree)
-        print(f"  rendered {len(COLLECTIONS)} collections, {total:,} rows")
+        n = len(json.loads((tree / "catalog.json").read_text())["links"])
+        print(f"  rendered {total:,} rows ({n} root links)")
         if check(tree):
             sys.exit("catalog failed rashid; not uploading")
         shared.upload(tree, remote, CATALOG_PREFIX, dry_run=dry_run)

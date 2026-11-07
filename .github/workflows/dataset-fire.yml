@@ -122,6 +122,13 @@ jobs:
             --transfers 4 --stats 30s --stats-one-line
           rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.xml" --include "ATTRIBUTION.txt" \
             --ignore-times --header-upload "$CACHE"
+          # A perimeter layer that came out empty (no fire burning) has no
+          # archive this run: remove the last one, or maps would keep
+          # showing fires that are out.
+          for n in $(jq -r '.files[] | select(.kind == "perimeter") | .name' "$out/_manifest.json"); do
+            jq -e --arg n "$n" '.pmtiles | map(.name) | index($n)' "$out/_manifest.json" >/dev/null \
+              || rclone deletefile "$REMOTE/$GROUP/latest/$n.pmtiles" 2>/dev/null || true
+          done
           rclone copyto "$out/_manifest.json" "$REMOTE/$GROUP/latest/_manifest.json" \
             --ignore-times --header-upload "$CACHE" --header-upload "Content-Type: application/json"
           rclone copy out/fire "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
@@ -139,9 +146,9 @@ jobs:
         run: |
           set +e
           fail=0
+          col=$( [ "$GROUP" = mtbs ] && echo mtbs_perimeters || echo all_since_2016 )
           for f in index.json $GROUP/latest/_manifest.json $GROUP/latest/ATTRIBUTION.txt \
-                   catalog/catalog.json catalog/all_since_2016/collection.json \
-                   catalog/mtbs_perimeters/collection.json catalog/current/thumbnail.png; do
+                   catalog/catalog.json "catalog/$col/collection.json" "catalog/$col/thumbnail.png"; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
