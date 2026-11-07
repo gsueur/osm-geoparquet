@@ -187,6 +187,30 @@ Census: public domain; GeoNames: CC BY 4.0. Portolan catalog at
 (`scripts/datasets/gazetteer_catalog.py`), one sub-catalog per source;
 thumbnails under `catalog/thumbnails/gazetteer/`.
 
+US wildfire perimeters (`scripts/datasets/fire.py`, workflow `dataset-fire.yml`)
+sit under `https://parquetry.geomermaids.com/fire/`, in two groups.
+`wfigs/latest/` holds NIFC's Wildland Fire Interagency Geospatial Services
+layers, read from their public ArcGIS FeatureServers three times a day and
+rebuilt when a layer's `lastEditDate` has moved: `current.parquet` (the fires
+burning now), `year_to_date.parquet`, `all_since_2016.parquet` (every WFIGS
+perimeter) and `incidents_ytd.parquet` (this year's points of origin), with a
+PMTiles archive per perimeter layer. Each layer is read in pages by OBJECTID up
+to the highest one at the start, so the edits NIFC makes every few minutes do
+not shift the pages; the gate compares the rows read with the server's count
+for the same range. `mtbs/latest/mtbs_perimeters.parquet` and `.pmtiles` hold
+the Monitoring Trends in Burn Severity burned areas (large fires since 1984,
+USGS and USDA Forest Service), checked weekly: the zip is regenerated daily
+with the same content, so the build hashes the shapefile inside and rebuilds
+only when it changed. 42 of WFIGS's 119 perimeter columns are kept (32 of the incident layer's), named as
+WFIGS names them, dates as UTC timestamps; MTBS's columns are all kept. Lon/lat
+(MTBS reprojected from NAD83), invalid polygons repaired and counted. An empty
+current layer (no active fire) is published with its columns and no rows.
+US federal works; WFIGS comes with a disclaimer only, MTBS asks for
+acknowledgement. Portolan catalog at
+`https://parquetry.geomermaids.com/fire/catalog/catalog.json`
+(`scripts/datasets/fire_catalog.py`); thumbnails under
+`catalog/thumbnails/fire/`.
+
 MassGIS, the Massachusetts Bureau of Geographic Information
 (`scripts/datasets/massgis.py`, workflow `dataset-massgis.yml`, checked
 weekly), sits under `https://parquetry.geomermaids.com/massgis/<theme>/`: one

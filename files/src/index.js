@@ -302,6 +302,12 @@ const DATASETS = {
       "geonames/latest/ (every name, per country under country=<CC>/, and cities1000), rebuilt weekly.",
     attribution: "gazetteer/geonames/latest/ATTRIBUTION.txt",
   },
+  "fire/": {
+    subtitle: "US wildfire perimeters: NIFC WFIGS under wfigs/latest/ (fires burning now, this " +
+      "year's, every perimeter since 2016, this year's incident points; rebuilt several times a " +
+      "day) and MTBS burned areas since 1984 under mtbs/latest/, GeoParquet and PMTiles, lon/lat.",
+    attribution: "fire/wfigs/latest/ATTRIBUTION.txt",
+  },
   "overture/": {
     subtitle: "Overture Maps is not stored here: this folder holds only our guide for querying " +
       "Overture's own files (AGENTS.md). Overture's catalog: https://stac.overturemaps.org/catalog.json",

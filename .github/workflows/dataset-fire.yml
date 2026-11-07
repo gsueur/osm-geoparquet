@@ -1,0 +1,174 @@
+# US wildfire perimeters: NIFC WFIGS several times a day, MTBS weekly.
+#
+# scripts/datasets/fire.py documents the layout (fire/wfigs/latest/,
+# fire/mtbs/latest/). Each group is built only when its source moved: WFIGS
+# when a layer's editingInfo.lastEditDate differs from the published
+# manifest's, MTBS when the shapefile in its zip hashes differently (the zip
+# is regenerated daily with the same content). A run that finds nothing new
+# writes run.json with changed=false and stops before uploading: a minute
+# for WFIGS, the 421 MB download for MTBS.
+#
+#   build    fetch, convert, tile, verify and render the catalog, upload nothing
+#   publish  the same, then upload the data and the catalog
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-fire
+
+on:
+  schedule:
+    # WFIGS, three a day off the hour (GitHub may start a run hours late or
+    # drop it, so more slots than the minimum). NIFC edits the layers every
+    # few minutes during the season.
+    - cron: "41 3,11,19 * * *"
+    # MTBS, Monday morning. It changes a few times a year.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "wfigs (live perimeters and incidents) or mtbs (burned areas since 1984)"
+        type: choice
+        options: [wfigs, mtbs]
+        default: wfigs
+      stage:
+        description: "build converts and checks; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Build even when the source has not changed"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-fire
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/fire
+  PUBLIC: https://parquetry.geomermaids.com/fire
+  GROUP: ${{ github.event_name == 'schedule' && (github.event.schedule == '23 6 * * 1' && 'mtbs' || 'wfigs') || inputs.group }}
+  STAGE: ${{ github.event_name == 'schedule' && 'publish' || inputs.stage }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files in latest/ are replaced in place: a short cache, so a reader never
+  # mixes a cached footer with new bytes for long.
+  CACHE: "Cache-Control: public, max-age=300"
+
+jobs:
+  fire:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      summary: ${{ steps.build.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: tylertoo
+        if: env.STAGE != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: rclone
+        if: env.STAGE != 'build'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch, convert, tile and verify
+        id: build
+        if: env.STAGE != 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/fire.py build --group "$GROUP" \
+            --work-dir work --out-dir out/fire ${{ inputs.force && '--force' || '' }}
+          changed=$(jq -r .changed out/fire/run.json)
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          jq -r '"\(.group): " + (if .changed then (.rows | to_entries | map("\(.key) \(.value)") | join(", ")) else "unchanged" end)' \
+            out/fire/run.json | tee /dev/stderr | sed 's/^/summary=/' >> "$GITHUB_OUTPUT"
+          [ "$changed" = "true" ] && { du -sh out/fire; find out/fire -type f | sort | sed 's|out/fire/||'; }
+          true
+
+      # rashid over the rendered tree, before anything is uploaded. The other
+      # group's collection is rendered from its published manifest.
+      - name: STAC catalog, rendered and checked
+        if: env.STAGE == 'catalog' || steps.build.outputs.changed == 'true'
+        run: |
+          out="${{ env.STAGE != 'catalog' && '--out-dir out/fire' || '' }}"
+          uv run --project scripts python scripts/datasets/fire_catalog.py build $out --dest build/catalog
+          uv run --project scripts python scripts/datasets/fire_catalog.py check build/catalog
+
+      # Order matters: data, then the manifest and attribution that describe
+      # it, then the repository files. copy, never sync: a run holds one group.
+      - name: Upload
+        if: env.STAGE == 'publish' && steps.build.outputs.changed == 'true'
+        run: |
+          out="out/fire/$GROUP/latest"
+          rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.parquet" --ignore-times \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 4 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.pmtiles" --ignore-times \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 4 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.xml" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "$CACHE"
+          rclone copyto "$out/_manifest.json" "$REMOTE/$GROUP/latest/_manifest.json" \
+            --ignore-times --header-upload "$CACHE" --header-upload "Content-Type: application/json"
+          rclone copy out/fire "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --ignore-times --header-upload "$CACHE"
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: env.STAGE == 'catalog' || (env.STAGE == 'publish' && steps.build.outputs.changed == 'true')
+        run: |
+          out="${{ env.STAGE != 'catalog' && '--out-dir out/fire' || '' }}"
+          uv run --project scripts python scripts/datasets/fire_catalog.py publish $out --remote "$REMOTE"
+
+      - name: Check what is live
+        if: env.STAGE == 'catalog' || (env.STAGE == 'publish' && steps.build.outputs.changed == 'true')
+        run: |
+          set +e
+          fail=0
+          for f in index.json $GROUP/latest/_manifest.json $GROUP/latest/ATTRIBUTION.txt \
+                   catalog/catalog.json catalog/all_since_2016/collection.json \
+                   catalog/mtbs_perimeters/collection.json catalog/current/thumbnail.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          tiles=$( [ "$GROUP" = mtbs ] && echo mtbs/latest/mtbs_perimeters.pmtiles || echo wfigs/latest/all_since_2016.pmtiles )
+          type=$(curl -sI "$PUBLIC/$tiles" | tr -d '\r' | awk 'tolower($1)=="content-type:"{print $2}')
+          [ "$type" = "application/vnd.pmtiles" ] || { echo "BAD pmtiles Content-Type: $type"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$tiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+  notify:
+    needs: [fire]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RESULT: ${{ needs.fire.result }}
+          SUMMARY: ${{ needs.fire.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
+          # Routine refreshes are not news: failures only.
+          [[ "$RESULT" == "success" ]] && exit 0
+          curl -fsS --max-time 10 -H "Title: Fire FAILED" -H "Tags: warning" \
+            -H "Priority: high" -H "Click: $RUN_URL" -d "${SUMMARY:-no summary}" \
+            "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || echo "ntfy POST failed"
