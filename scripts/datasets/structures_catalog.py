@@ -284,7 +284,7 @@ def asset_s3(path: str) -> dict:
 
 def pop_share(e: dict) -> float:
     g = e["gate"]
-    return 100 * g["with_population"] / g["residential"] if g["residential"] else 0.0
+    return 100 * g["residential_with_population"] / g["residential"] if g["residential"] else 0.0
 
 
 def state_line(e: dict) -> str:

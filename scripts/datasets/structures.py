@@ -186,12 +186,13 @@ def get_json(url: str) -> dict | None:
 
 def changed(published: str) -> list[str]:
     """States whose newest zip differs (key or ETag) from the one the
-    published _source.json records, plus states gone upstream."""
+    published _source.json records, plus states gone upstream: build skips
+    those, and finalize drops them from the manifest."""
     up = upstream()
     was = (get_json(f"{published}/_source.json") or {}).get("states", {})
     moved = [st for st, s in up.items()
              if (was.get(st) or {}).get("key") != s["key"] or was[st].get("etag") != s["etag"]]
-    return sorted(moved)
+    return sorted(moved + sorted(set(was) - set(up)))
 
 
 def fetch(state: dict, work: Path) -> Path:
@@ -272,7 +273,7 @@ def gate(con, st: str, expected: int) -> dict:
     stats = con.execute("""
         SELECT sum(POP_MEDIAN), sum(POP_CI95_LOWER), sum(POP_CI95_UPPER),
                count(*) FILTER (WHERE OCC_CLS = 'Residential'),
-               count(*) FILTER (WHERE POP_MEDIAN IS NOT NULL),
+               count(*) FILTER (WHERE OCC_CLS = 'Residential' AND POP_MEDIAN IS NOT NULL),
                count(*) FILTER (WHERE POP_CI95_LOWER > POP_MEDIAN OR POP_MEDIAN > POP_CI95_UPPER),
                min(PROD_DATE)::DATE::VARCHAR, max(PROD_DATE)::DATE::VARCHAR
         FROM src""").fetchone()
@@ -281,7 +282,7 @@ def gate(con, st: str, expected: int) -> dict:
     return {"layer_features": expected, "rows_written": n, "uuid_values_repeated": uuid_repeated,
             "outside_state_box": outside, "population_median": stats[0],
             "population_lower": stats[1], "population_upper": stats[2],
-            "residential": stats[3], "with_population": stats[4],
+            "residential": stats[3], "residential_with_population": stats[4],
             "population_bounds_out_of_order": stats[5],
             "prod_date_min": stats[6], "prod_date_max": stats[7], "occupancy": occ}
 
@@ -420,8 +421,10 @@ def tiles(cells: Path, footprints: Path, work: Path, dest: Path) -> dict:
     con = duckdb.connect()
     fp_part, fp = footprint_band(footprints, work)
     bands = []
-    for lo, hi, res in H3_BANDS:
-        hi = min(hi, fp["min_zoom"] - 1)
+    for i, (lo, hi, res) in enumerate(H3_BANDS):
+        # The last band of cells reaches the first zoom of the footprints,
+        # whichever step of the ladder that is: no blank zoom between them.
+        hi = fp["min_zoom"] - 1 if i == len(H3_BANDS) - 1 else min(hi, fp["min_zoom"] - 1)
         if lo > hi:
             continue
         src = work / f"cells_r{res}.parquet"
@@ -432,8 +435,7 @@ def tiles(cells: Path, footprints: Path, work: Path, dest: Path) -> dict:
                      properties=CELL_PROPS, verbatim=True)
         bands.append((lo, hi, part, f"cells_r{res}"))
         src.unlink()
-    last = max(b[1] for b in bands)
-    bands.append((last + 1, FOOTPRINT_MAX_ZOOM, fp_part, FOOTPRINT_LAYER))
+    bands.append((fp["min_zoom"], FOOTPRINT_MAX_ZOOM, fp_part, FOOTPRINT_LAYER))
     entry = pmtiles.pyramid(bands, dest)
     entry["bands"] = [{"min_zoom": lo, "max_zoom": hi, "layer": layer} for lo, hi, _, layer in bands]
     entry["footprints"] = {k: fp[k] for k in ("min_zoom", "properties", "tiles")
@@ -627,10 +629,11 @@ def main() -> None:
         print(" ".join(changed(args.published)))
     elif args.cmd == "build":
         up = upstream()
-        missing = [s for s in args.state if s not in up]
-        if missing:
-            sys.exit(f"not upstream: {missing}")
         for st in args.state:
+            if st not in up:
+                # Gone upstream (changed() lists it): finalize drops it.
+                print(f"{st}: not upstream any more, skipped", flush=True)
+                continue
             build_state(st, up[st], args.work_dir, args.out_dir, no_tiles=args.no_tiles,
                         low_disk=args.low_disk)
     elif args.cmd == "retile":

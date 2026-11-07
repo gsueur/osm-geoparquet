@@ -138,9 +138,11 @@ jobs:
               continue
             fi
             grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
-            du -sh "$out/latest/state=$st"; df -h /mnt | tail -1
+            d="$out/latest/state=$st"
+            # A state gone upstream builds nothing: finalize drops it.
+            [ -d "$d" ] || continue
+            du -sh "$d"; df -h /mnt | tail -1
             if [ "$PUBLISH" = "true" ]; then
-              d="$out/latest/state=$st"
               rclone copy "$d" "$REMOTE/latest/state=$st" --filter "+ *.parquet" --filter "- *" \
                 --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
                 --transfers 4 --stats 60s --stats-one-line
@@ -185,7 +187,8 @@ jobs:
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
           done
-          for st in ${{ steps.check.outputs.states }}; do
+          for st in $(jq -r '.states[].state' "$WORK/out/latest/_manifest.json"); do
+            echo " ${{ steps.check.outputs.states }} " | grep -q " $st " || continue
             for f in structures.parquet cells.parquet structures.pmtiles; do
               code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/latest/state=$st/$f")
               [ "$code" = "200" ] || { echo "BAD state=$st/$f -> $code"; fail=1; continue; }
