@@ -59,6 +59,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import shutil
@@ -138,7 +139,8 @@ def newer_items() -> list[str] | None:
     try:
         found = http_json("https://www.sciencebase.gov/catalog/items?format=json&max=50"
                           "&fields=title&q=PAD-US%20Full%20Inventory%20Database")
-    except OSError as exc:
+    # A maintenance page (not JSON) or a cut-off body must warn, not crash.
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         print(f"  ScienceBase search: {exc}", file=sys.stderr)
         return None
     def version(title: str) -> tuple[int, ...] | None:
