@@ -203,6 +203,7 @@ jobs:
           for u in "${units[@]}"; do
             rclone purge "$SCRATCH/stage/$u" 2>/dev/null || true
             rclone deletefile "$SCRATCH/stage/$u.json" 2>/dev/null || true
+            rclone deletefile "$SCRATCH/stage/$u.projects.parquet" 2>/dev/null || true
           done
           rclone copy "$WORK/w/stage" "$SCRATCH/stage" --filter "- *.json" --filter "- *.fgb" \
             --filter "- *.fixed.parquet" --filter "+ **" --transfers 16 --stats-one-line --stats 60s
