@@ -94,8 +94,10 @@ CENSUS_LAYERS = {
     "sdadm": ("sdadm", "School district administrative areas (Vermont)",
               ("school/sdadm", "GEOID")),
     "aiannh": ("aiannh", "American Indian, Alaska Native and Native Hawaiian areas", None),
+    # aiannh's GEOID is the 4-digit AIANNHCE, one row per area; TIGER/Line has
+    # one row per part (reservation R, trust land T), as aiannhrt does.
     "aiannhrt": ("aiannhrt", "American Indian reservations and off-reservation trust lands",
-                 None),
+                 ("aiarelated/aiannh", "GEOID")),
 }
 CENSUS_INTEGERS = {"ALAND", "AWATER"}
 CENSUS_DOUBLES = {"ALAND_SQMI", "AWATER_SQMI", "INTPTLAT", "INTPTLONG"}

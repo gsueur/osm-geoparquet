@@ -240,8 +240,8 @@ def census_collection(code: str, layer: str, title: str, entry: dict, gate: dict
                       columns: list[tuple[str, str]], bbox: list[float], updated: str) -> dict:
     path = f"{CENSUS_PATH}/{entry['file']}"
     tiger = gate.get("tiger")
-    join = (f" Its GEOID joins census/tiger/{YEAR} `{tiger['file'].rsplit('/', 2)[-2]}/"
-            f"{code}.parquet` on `{tiger['key']}`: "
+    join = (f" Its GEOID joins census/tiger/{YEAR} `{'/'.join(tiger['file'].rsplit('/', 2)[-2:])}`"
+            f" on `{tiger['key']}`: "
             + ("every row here is there (the build fails otherwise)"
                if not tiger["gazetteer_not_in_tiger"] else
                f"{tiger['gazetteer_not_in_tiger']:,} rows here are not there")
