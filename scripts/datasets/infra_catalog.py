@@ -4,7 +4,11 @@ Render, validate and publish the Portolan catalog for GMWID, the GeoMermaids
 World Infrastructures Dataset (OpenStreetMap infrastructure, enriched).
 
 One STAC Collection per layer of infra.py (27), in four groups, each with its
-layer's one whole-world file as the data asset. Row counts come from
+layer's one whole-world file as the data asset, and its PMTiles archive
+(infra.py tiles, the manifest's `pmtiles`) registered as formats.md asks: a
+`rel: pmtiles` link with `pmtiles:layers` (web-map-links v1.3.0), the same
+file as a `visual` asset, and a MapLibre style under styles/ as the
+`default` style asset. Row counts come from
 _manifest.json, sizes from the files, extents from the bbox column and column
 types from the footer, all read from the build's output directory. Only
 latest/ is published, and the next build replaces it, so assets carry sizes
@@ -40,6 +44,8 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets import infra
+from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
+from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -395,7 +401,8 @@ def remote_sizes(remote: str) -> dict[str, int]:
     import subprocess
     out = subprocess.run(["rclone", "lsjson", "--files-only", f"{remote}/latest/"],
                          check=True, capture_output=True, text=True).stdout
-    return {e["Path"]: e["Size"] for e in json.loads(out) if e["Path"].endswith(".parquet")}
+    return {e["Path"]: e["Size"] for e in json.loads(out)
+            if e["Path"].endswith((".parquet", ".pmtiles"))}
 
 
 def data_asset(name: str, agg: dict) -> dict:
@@ -415,8 +422,11 @@ def data_asset(name: str, agg: dict) -> dict:
 
 
 def measure(out_dir: Path, sizes: dict[str, int] | None = None) -> dict[str, dict]:
-    """Per layer: rows, size, row groups, extent, columns, countries."""
-    themes = json.loads((out_dir / "_manifest.json").read_text())["themes"]
+    """Per layer: rows, size, row groups, extent, columns, countries, and
+    its archive's manifest entry (tiles) when the build tiled it."""
+    manifest = json.loads((out_dir / "_manifest.json").read_text())
+    themes = manifest["themes"]
+    tiles = {t["name"]: t for t in manifest.get("pmtiles", [])}
     con = duckdb.connect()
     layers = {}
     for layer in infra.LAYERS:
@@ -437,20 +447,105 @@ def measure(out_dir: Path, sizes: dict[str, int] | None = None) -> dict[str, dic
             "columns": [(r[0], "GEOMETRY" if r[1].startswith("GEOMETRY") else r[1])
                         for r in con.execute(f"DESCRIBE SELECT * FROM '{f}'").fetchall()],
             "countries": countries,
+            "tiles": ({**tiles[layer.name], "bytes": sizes.get(tiles[layer.name]["file"],
+                                                                tiles[layer.name]["bytes"])}
+                      if sizes and layer.name in tiles else tiles.get(layer.name)),
         }
     return layers
 
 
 # ---------- STAC ----------
 
+def is_type(kind: str) -> list:
+    """A filter on the geometry type, its multi-part form included (renderers
+    differ on which one a multi-part tile feature reports)."""
+    return ["in", ["geometry-type"], ["literal", [kind, f"Multi{kind}"]]]
+
+
+def style(name: str, tiles: dict, title: str) -> dict:
+    """The layer in Open Infrastructure Map's colour (COLORS): polygons
+    filled, lines stroked, points as dots, each drawn from the geometry
+    type, since most layers mix them (a substation is an outline or a node).
+    Lines and dots that carry a rank (voltage, output, height) grow with it."""
+    color = COLORS[name]
+    layer = tiles["layer"]
+    rank = infra.TILES[name].sort_key
+    base = {"source": "data", "source-layer": layer}
+    width = ["interpolate", ["linear"], ["zoom"], 2, 0.4, 13, 2.0]
+    if rank and rank in tiles["properties"]:
+        # 0 to 1 by the rank, so a 400 kV line is three times a 20 kV one.
+        scale = ["min", 1, ["/", ["coalesce", ["to-number", ["get", rank]], 0],
+                            {"voltage_kv": 400, "output_mw": 500, "height_m": 150}[rank]]]
+        width = ["*", width, ["+", 1, ["*", 2, scale]]]
+    return {
+        "version": 8,
+        "name": f"{title}, Open Infrastructure Map colours",
+        "sources": {"data": {"type": "vector",
+                             "url": f"pmtiles://{DATA_URL}/{tiles['file']}",
+                             "attribution": OSM_ATTRIBUTION}},
+        "layers": [
+            {"id": f"{layer}-fill", "type": "fill", **base,
+             "filter": is_type("Polygon"),
+             "paint": {"fill-color": color, "fill-opacity": 0.4,
+                       "fill-outline-color": color}},
+            {"id": f"{layer}-line", "type": "line", **base,
+             "filter": is_type("LineString"),
+             "paint": {"line-color": color, "line-width": width}},
+            {"id": f"{layer}-point", "type": "circle", **base,
+             "filter": is_type("Point"),
+             "paint": {"circle-color": color,
+                       "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 1.5, 13, 4],
+                       "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5}},
+        ],
+    }
+
+
+def tile_parts(name: str, tiles: dict, title: str) -> tuple[dict, dict]:
+    """The archive as a `visual` asset and the style as the default `style`
+    asset; and the `rel: pmtiles` link. Sizes but no checksum, as the data
+    asset: the next build replaces the file."""
+    path = f"{DATASET_PREFIX}/latest/{tiles['file']}"
+    assets = {
+        "pmtiles": {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PMTILES_TYPE,
+            "title": f"{title}, vector tiles",
+            "description": f"PMTiles, layer `{tiles['layer']}`, zoom {tiles['min_zoom']} to "
+                           f"{tiles['max_zoom']}, {tiles['tiles']:,} tiles; properties "
+                           f"{', '.join(tiles['properties'])}. Coarse zooms are thinned, "
+                           f"every feature is in zoom {tiles['max_zoom']}"
+                           + (f" (rows where {tiles['where']}: the rest, small solar "
+                              f"panel outlines, are in the GeoParquet only)"
+                              if tiles.get("where") else "")
+                           + f". Built with tylertoo {tiles['tylertoo']}.",
+            "roles": ["visual"],
+            "file:size": tiles["bytes"],
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        },
+        "style": {
+            "href": "./styles/default.json",
+            "type": STYLE_TYPE,
+            "title": "Open Infrastructure Map colours",
+            "roles": ["style", "default"],
+        },
+    }
+    link = {"rel": "pmtiles", "href": f"{PUBLIC_BASE}/{path}", "type": PMTILES_TYPE,
+            "title": f"{title}, vector tiles", "pmtiles:layers": [tiles["layer"]]}
+    return assets, link
+
+
 def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
                      updated: str) -> dict:
     title, description = LAYER_DOCS[name]
     thumb = THUMBS / f"{name}.png"
+    tiles = agg.get("tiles")
+    tile_assets, tile_link = tile_parts(name, tiles, title) if tiles else ({}, None)
     return {
         "type": "Collection",
         "stac_version": "1.1.0",
-        "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT],
+        "stac_extensions": [PORTOLAN_SCHEMA, TABLE_EXT, FILE_EXT, VERSION_EXT, ALTERNATE_EXT,
+                            *([WEB_MAP_LINKS_EXT] if tiles else [])],
         "id": name,
         "title": title,
         "description": (
@@ -484,6 +579,7 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
                 "file:size": thumb.stat().st_size,
                 "file:checksum": multihash(thumb),
             },
+            **tile_assets,
         },
         "links": [
             {"rel": "root", "href": "../../catalog.json", "type": "application/json"},
@@ -494,6 +590,7 @@ def build_collection(name: str, agg: dict, docs: dict, interval: list[str],
             VIA_LINK,
             {"rel": "alternate", "href": f"{DATA_URL}/", "type": "text/html",
              "title": "Browse the latest files"},
+            *([tile_link] if tile_link else []),
         ],
     }
 
@@ -662,6 +759,26 @@ The same file is `s3://{BUCKET}/{DATASET_PREFIX}/latest/{name}.parquet` on the
 anonymous S3 endpoint `{S3_ENDPOINT}` (path-style, empty credentials)."""
 
 
+def map_row(agg: dict) -> str:
+    t = agg.get("tiles")
+    if not t:
+        return ""
+    return (f"| Map | `{t['file']}`, PMTiles, zoom {t['min_zoom']} to {t['max_zoom']}, "
+            f"{t['bytes'] / 1e6:,.0f} MB; style `styles/default.json` |\n")
+
+
+def map_tip(agg: dict) -> str:
+    t = agg.get("tiles")
+    if not t:
+        return ""
+    return (f"- For a map, use the `rel: pmtiles` link (`{DATA_URL}/{t['file']}`, "
+            f"source-layer `{t['layer']}`, zoom {t['min_zoom']} to {t['max_zoom']}, "
+            f"properties {', '.join(t['properties'])}) with `styles/default.json`. "
+            f"Coarse zooms are thinned; query the GeoParquet for counts."
+            + (f" The map holds the rows where {t['where']}; small solar panel outlines "
+               f"are in the GeoParquet only." if t.get("where") else "") + "\n")
+
+
 def collection_readme(col: dict, agg: dict, interval: list[str]) -> str:
     schema = "\n".join(f"| `{c['name']}` | `{c['type']}` | {c['description']} |"
                        for c in col["table:columns"])
@@ -677,7 +794,7 @@ def collection_readme(col: dict, agg: dict, interval: list[str]) -> str:
 | Countries | {agg['countries']} |
 | Extent | {shared.fmt_bbox(agg['bbox'])} (lon/lat) |
 | Data as of | {interval[0]} (Geofabrik extracts) |
-| License | ODbL 1.0, © OpenStreetMap contributors |
+{map_row(agg)}| License | ODbL 1.0, © OpenStreetMap contributors |
 
 ## Access
 
@@ -722,7 +839,7 @@ def collection_agents(col: dict, agg: dict) -> str:
 - Country and state are assigned from one point on each feature, so a long
   line or cable counts in one country only. They are a convenience for
   filtering, not a statement on borders.
-- Data (c) OpenStreetMap contributors, ODbL 1.0: credit it.
+{map_tip(agg)}- Data (c) OpenStreetMap contributors, ODbL 1.0: credit it.
 """
 
 
@@ -793,6 +910,10 @@ per layer, one file per layer. Only the latest build is published.
   and `state` (skips most of them): rows are Hilbert-sorted.
 - `{DATA_URL}/_regions.json` maps every `country`/`state` slug to its names
   and GAUL code.
+- For a map: `{DATA_URL}/<layer>.pmtiles` (the collection's `rel: pmtiles`
+  link, source-layer `<layer>`, zoom 13 at most), with the collection's
+  `styles/default.json`. Coarse zooms are thinned, so count with the
+  GeoParquet.
 
 ## Conventions
 
@@ -828,6 +949,11 @@ def build(out_dir: Path, dest: Path, *, attribution: str | None = None,
         agg = aggs[layer.name]
         col = build_collection(layer.name, agg, docs, interval, updated)
         cdir = dest / layer.group / col["id"]
+        if agg.get("tiles"):
+            path = cdir / "styles" / "default.json"
+            write_json(path, style(layer.name, agg["tiles"], col["title"]))
+            col["assets"]["style"].update({"file:size": path.stat().st_size,
+                                           "file:checksum": multihash(path)})
         write_json(cdir / "collection.json", col)
         shutil.copyfile(THUMBS / f"{layer.name}.png", cdir / "thumbnail.png")
         (cdir / "README.md").write_text(collection_readme(col, agg, interval))
