@@ -252,14 +252,20 @@ def pick(layers: dict[str, int], unit: str) -> tuple[str, str | None]:
     return wet[0], (meta[0] if len(meta) == 1 else None)
 
 
-def to_fgb(gdb: str, layer: str, dest: Path, columns: list[str]) -> None:
+def to_fgb(gdb: str, layer: str, dest: Path, columns: list[str], driver: str = "FlatGeobuf") -> None:
     """One layer through GDAL to FlatGeobuf (any GDAL build writes it, the
     Parquet driver needs Arrow): curves cut into segments, 2D, NAD83 lon/lat
-    with longitudes in [0, 360]. Every feature is kept."""
+    with longitudes in [0, 360]. Every feature is kept. With driver="GPKG",
+    a GeoPackage whose geometry column is `geom`, as ST_Read names it from
+    FlatGeobuf: the project layers go that way, because GDAL's FlatGeobuf
+    writer garbles an empty polygon (WKB type 0, which no reader accepts)
+    and wrote 69 of Alaska's project outlines as NULL."""
     dest.unlink(missing_ok=True)
-    subprocess.run(["ogr2ogr", "-f", "FlatGeobuf", "-t_srs", WRAP_SRS,
+    lco = (["-lco", "SPATIAL_INDEX=NO"] if driver == "FlatGeobuf"
+           else ["-lco", "GEOMETRY_NAME=geom", "-lco", "SPATIAL_INDEX=NO"])
+    subprocess.run(["ogr2ogr", "-f", driver, "-t_srs", WRAP_SRS,
                     "-nlt", "CONVERT_TO_LINEAR", "-nlt", "PROMOTE_TO_MULTI", "-dim", "XY",
-                    "-lco", "SPATIAL_INDEX=NO", "-nln", layer,
+                    *lco, "-nln", layer,
                     "-sql", f'SELECT {", ".join(columns)} FROM "{layer}"',
                     str(dest), gdb], check=True)
 
@@ -407,9 +413,9 @@ def stage_one(unit: str, src: dict, work: Path, low_disk: bool, memory: str,
     to_fgb(gdb, wet, raw, ["NWI_ID", "ATTRIBUTE", "WETLAND_TYPE", "ACRES"])
     con = connect(work, memory, threads)
     if meta:
-        fgb = stage.parent / f"{unit}.projects.fgb"
+        fgb = stage.parent / f"{unit}.projects.gpkg"
         to_fgb(gdb, meta, fgb, [c for c in PROJECT_COLUMNS if c != "DATA_SOURCE"]
-               + (["DATA_SOURCE"] if unit == "PacTrust" else []))
+               + (["DATA_SOURCE"] if unit == "PacTrust" else []), driver="GPKG")
         con.execute(f"""COPY (SELECT * EXCLUDE (geom), ST_AsWKB(geom) AS geom FROM ST_Read('{fgb}'))
                         TO '{stage.parent / f"{unit}.projects.parquet"}' (FORMAT PARQUET)""")
         fgb.unlink()
@@ -843,7 +849,7 @@ def tile_all(con, sources: dict[str, str], rel: Path, work: Path) -> dict:
 
 
 def tiles(work: Path, out: Path, memory: str, live: str | None = None) -> None:
-    """The tiles stage: wetlands.pmtiles from every state file of the
+    """nwi_tiles_local.sh's step: wetlands.pmtiles from every state file of the
     release, and its entry in the release's _manifest.json. With `live`
     (the published wetlands/ prefix) the manifest and the state files are
     read from there, Alaska included, each file streamed into its lon/lat
@@ -938,7 +944,7 @@ def merge_live(manifest: dict, live: dict | None) -> dict:
     """Keep what the published manifest of the same release has from units
     this build did not stage: their states, units and build part (Alaska,
     built on a workstation; or the rest, when this is the Alaska build). Its
-    map is kept, marked stale, until the tiles stage redraws it."""
+    map is kept, marked stale, until nwi_tiles_local.sh redraws it."""
     if not live:
         return manifest
     built = set(manifest["parts"][0]["units"])

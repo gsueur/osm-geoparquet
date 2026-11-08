@@ -7,7 +7,8 @@
 # published the release (it refuses otherwise), then the map and the catalog:
 #
 #   bash scripts/datasets/nwi_publish_ak.sh /Volumes/T9/claude-scratch/osm-geoparquet/wetlands/ak
-#   gh workflow run dataset-wetlands.yml -f stage=tiles
+#   bash scripts/datasets/nwi_tiles_local.sh /Volumes/T9/claude-scratch/osm-geoparquet/wetlands/tiles
+#   gh workflow run dataset-wetlands.yml -f stage=catalog
 #
 # Needs ogr2ogr and ogrinfo (GDAL 3.13 was used), rclone with a `parquetry`
 # remote (the R2 bucket), uv, curl and jq. The work dir holds about 40 GB
@@ -79,5 +80,5 @@ for f in _source.json $rel/_manifest.json $rel/projects.parquet $rel/state=$unit
 done
 curl -fsS "$public/$rel/_manifest.json" | jq -e --arg u "$unit" '[.files[].state] | index($u)' >/dev/null \
   || { echo "BAD the published manifest does not list $unit"; fail=1; }
-[ "$fail" = 0 ] && echo "now: gh workflow run dataset-wetlands.yml -f stage=tiles"
+[ "$fail" = 0 ] && echo "now: bash scripts/datasets/nwi_tiles_local.sh <work dir>, then gh workflow run dataset-wetlands.yml -f stage=catalog"
 exit $fail
