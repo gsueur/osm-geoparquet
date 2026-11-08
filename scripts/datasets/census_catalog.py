@@ -149,6 +149,21 @@ COLUMN_DOCS = {
     "LOGRADE": "Lowest grade covered by the school district.",
     "HIGRADE": "Highest grade covered by the school district.",
     "SDTYP": "School district type.",
+    "AIANNHCE": "American Indian, Alaska Native or Native Hawaiian area census code; on a "
+                "tribal subdivision, census tract or block group, the area it belongs to.",
+    "AIANNHNS": "American Indian, Alaska Native or Native Hawaiian area National Standards "
+                "(NS) code.",
+    "AIANNHR": "Recognition: F federally recognized, S state recognized.",
+    "COMPTYP": "Component: R the reservation, statistical area or Hawaiian home land, T its "
+               "off-reservation trust land. An area with both is two rows; GEOID is "
+               "AIANNHCE followed by COMPTYP.",
+    "ANRCFP": "Alaska Native Regional Corporation FIPS code.",
+    "ANRCNS": "Alaska Native Regional Corporation National Standards (NS) code.",
+    "TRSUBCE": "Tribal subdivision code, within its AIANNHCE.",
+    "TRSUBNS": "Tribal subdivision National Standards (NS) code.",
+    "TTRACTCE": "Tribal census tract code (T plus digits), within its AIANNHCE.",
+    "TBLKGPCE": "Tribal block group code. Empty in the 2026 file: the letter is the last "
+                "character of GEOID.",
     "CD120FP": "120th congressional district FIPS code. 00: at-large district; 98: "
                "non-voting delegate or resident commissioner; ZZ: no district defined.",
     "SLDUST": "State legislative district (upper chamber) code. ZZZ: no district defined.",
@@ -194,6 +209,8 @@ KEYWORDS = {
     "substategeo": ["counties", "places", "census tracts", "block groups"],
     "nationgeo": ["metropolitan areas", "urban areas", "ZIP codes", "ZCTA"],
     "school": ["school districts", "education"],
+    "aiarelated": ["tribal lands", "American Indian", "Alaska Native", "Native Hawaiian",
+                   "reservations"],
 }
 
 # The page's district palette: neighbours never share a colour (color_index).
@@ -464,6 +481,9 @@ EXAMPLE_POINT = {
     "sdadm": (-72.5754, 44.2601),                                # Montpelier, VT
     "csa": (-71.0589, 42.3601), "metdiv": (-71.0589, 42.3601),   # Boston, MA
     "concity": (-86.7816, 36.1627),                              # Nashville, TN
+    "aiannh": (-109.0452, 35.6869), "aitsn": (-109.0452, 35.6869),  # Window Rock, AZ
+    "ttract": (-109.0452, 35.6869), "tbg": (-109.0452, 35.6869),    # (Navajo Nation)
+    "anrc": (-149.9003, 61.2181),                                # Anchorage, AK
 }
 
 
@@ -709,11 +729,17 @@ def publish(out_dir: Path | None, remote: str, *, dry_run: bool) -> None:
 # ---------- thumbnails ----------
 
 CONUS = (-125.0, 24.0, -66.5, 49.5)
+# A layer outside the conterminous US: Alaska's Native Regional Corporations,
+# framed on the state without the far Aleutians (they cross the antimeridian).
+THUMB_WINDOWS = {"anrc": (-170.0, 52.0, -129.0, 71.5)}
 
 
 def thumb_window(con, path: Path) -> tuple[float, float, float, float]:
     """The conterminous US, or the layer's own extent there when it covers a
-    small part of it (Vermont's administrative school areas)."""
+    small part of it (Vermont's administrative school areas), or the window
+    THUMB_WINDOWS names."""
+    if path.stem in THUMB_WINDOWS:
+        return THUMB_WINDOWS[path.stem]
     bx0, by0, bx1, by1 = con.execute(f"""
         SELECT min(bbox.xmin), min(bbox.ymin), max(bbox.xmax), max(bbox.ymax)
         FROM read_parquet('{path}')

@@ -141,6 +141,28 @@ PRODUCTS = {
              ["STATEFP", "SDADMLEA", "GEOID", "NAME", "LOGRADE", "HIGRADE", "ALAND", "AWATER"]),
         ],
     },
+    "aiarelated": {
+        "title": "American Indian/Alaska Native/Native Hawaiian Areas",
+        "gpkg": f"tlgpkg_{YEAR}_us_aiarelated.gpkg",
+        "layers": [
+            ("American Indian-Alaska Native-Native Hawaiian Area", "aiannh",
+             "American Indian, Alaska Native and Native Hawaiian areas: reservations, "
+             "off-reservation trust lands, statistical areas and Hawaiian home lands",
+             "AIANNHCE", (0, 12),
+             ["AIANNHCE", "AIANNHR", "GEOID", "NAMELSAD", "LSAD", "COMPTYP", "ALAND", "AWATER"]),
+            ("Alaska Native Regional Corporation", "anrc",
+             "Alaska Native Regional Corporations", "ANRCFP", (0, 12),
+             ["ANRCFP", "GEOID", "NAMELSAD", "ALAND", "AWATER"]),
+            ("Tribal Subdivision", "aitsn", "Tribal subdivisions", "TRSUBCE", (0, 12),
+             ["AIANNHCE", "TRSUBCE", "GEOID", "NAMELSAD", "ALAND", "AWATER"]),
+            ("Tribal Census Tract", "ttract", "Tribal census tracts", "TTRACTCE", (0, 12),
+             ["AIANNHCE", "TTRACTCE", "GEOID", "NAMELSAD", "ALAND", "AWATER"]),
+            # TBLKGPCE is empty in the 2026 file: the block group letter is the
+            # last character of GEOID (and of NAMELSAD).
+            ("Tribal Block Group", "tbg", "Tribal block groups", "GEOID", (0, 12),
+             ["AIANNHCE", "TTRACTCE", "GEOID", "NAMELSAD", "ALAND", "AWATER"]),
+        ],
+    },
 }
 
 # TIGER's placeholder rows, by area code column: they stand for where no area

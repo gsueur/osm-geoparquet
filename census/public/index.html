@@ -293,12 +293,13 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
 </ul>
 
 <h2 id="next">More of TIGER/Line</h2>
-<p>The Census Bureau publishes twelve national GeoPackages for 2026, from rails to census blocks. Four are here, under the same layout, <code>census/tiger/2026/&lt;product&gt;/&lt;layer&gt;.parquet</code>, each layer with its map tiles and in the same catalog:</p>
+<p>The Census Bureau publishes twelve national GeoPackages for 2026, from rails to census blocks. Five are here, under the same layout, <code>census/tiger/2026/&lt;product&gt;/&lt;layer&gt;.parquet</code>, each layer with its map tiles and in the same catalog:</p>
 <ul>
   <li><strong>legislative</strong>: <code>cd120</code>, <code>sldu</code>, <code>sldl</code>, the districts above.</li>
   <li><strong>substategeo</strong>: <code>state</code>, <code>county</code>, <code>place</code>, <code>concity</code>, <code>cousub</code>, <code>tract</code>, <code>bg</code>. Census tracts and block groups are the units Census statistics are published on: join them on <code>GEOID</code>.</li>
   <li><strong>nationgeo</strong>: <code>cbsa</code> (metropolitan and micropolitan areas), <code>csa</code>, <code>metdiv</code>, <code>uac20</code> (urban areas), <code>zcta520</code> (ZIP Code Tabulation Areas).</li>
   <li><strong>school</strong>: <code>unsd</code>, <code>elsd</code>, <code>scsd</code>, <code>sdadm</code>, the school districts.</li>
+  <li><strong>aiarelated</strong>: <code>aiannh</code> (American Indian, Alaska Native and Native Hawaiian areas: reservations, off-reservation trust lands, statistical areas, Hawaiian home lands), <code>anrc</code> (Alaska Native Regional Corporations), <code>aitsn</code> (tribal subdivisions), <code>ttract</code> and <code>tbg</code> (tribal census tracts and block groups).</li>
 </ul>
 
 <h2 id="licence">Licence</h2>
