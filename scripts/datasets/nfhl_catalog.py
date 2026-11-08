@@ -5,7 +5,9 @@ Render, validate and publish the Portolan catalog for the FEMA NFHL.
 One STAC Collection, the flood hazard areas: one file per FEMA county-wide
 delivery under latest/state=<XX>/<DFIRM_ID>.parquet, described through the
 partition extension (`partition:glob`), and the index of those files,
-latest/counties.parquet, as the `index` asset. latest/ is updated in place
+latest/counties.parquet, as the `index` asset, and each delivery file as a
+`data-<dfirm_id>` asset (title, size, sha256 from that index, so browsers and
+assistants can list and pick a county). latest/ is updated in place
 every day by nfhl.py, so the catalog is rendered again after each update:
 counts, sizes and the index checksum come from the manifests and the index
 just published, column types from one delivery's footer (a range request
@@ -41,7 +43,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets.nfhl import ATTRIBUTION, INDEX, LATEST, ROW_GROUP_ROWS, STEM
+from datasets.nfhl import ATTRIBUTION, INDEX, LATEST, ROW_GROUP_ROWS, STEM, state_name
 
 import catalog as shared  # scripts/catalog.py
 from catalog import (
@@ -212,13 +214,45 @@ def connect(remote: bool):
     return con
 
 
+def county_assets(con, index_source: str) -> dict:
+    """One `data-<dfirm_id>` asset per delivery file, from the index the run
+    just wrote (or the published one): the files and their sizes and sha256
+    are the ones the catalog is published beside, so no asset names a file
+    that is not there. Geobox and its assistants list a collection's parts
+    from its data assets, as for NAD and USA Structures."""
+    rows = con.execute(f"""
+        SELECT state, county, dfirm_id, fema_update_date::VARCHAR, path, features, zones,
+               bytes, sha256
+        FROM read_parquet('{index_source}') ORDER BY state, dfirm_id""").fetchall()
+    names = {st: state_name(st) for st in {r[0] for r in rows}}
+    assets = {}
+    for st, county, dfirm, day, rel, features, zones, size, digest in rows:
+        name = names[st]
+        # A territory-wide delivery already names its territory (72000C).
+        place = county if name.lower() in county.lower() else f"{county}, {name}"
+        path = f"{DATASET_PREFIX}/{LATEST}/{rel}"
+        assets[f"data-{dfirm.lower()}"] = {
+            "href": f"{PUBLIC_BASE}/{path}",
+            "type": PARQUET_TYPE,
+            "title": f"{place} ({dfirm})",
+            "description": (f"FEMA delivery {dfirm}, updated {day}: {features:,} pieces of "
+                            f"{zones:,} zones"),
+            "roles": ["data"],
+            "file:size": size,
+            "file:checksum": "1220" + digest,
+            "alternate": {"s3": {"href": f"s3://{BUCKET}/{path}",
+                                 "title": f"S3 endpoint {S3_ENDPOINT}, path style"}},
+        }
+    return assets
+
+
 # ---------- STAC ----------
 
 GLOB = f"s3://{BUCKET}/{DATASET_PREFIX}/{LATEST}/{PARTITION_KEY}=*/*.parquet"
 
 
 def build_collection(manifest: dict, columns: list[tuple[str, str]], geo: dict,
-                     index: tuple[int, str], updated: str) -> dict:
+                     index: tuple[int, str], updated: str, counties: dict) -> dict:
     x0, y0, x1, y1 = geo["columns"]["geometry"]["bbox"]
     first, _ = manifest["fema_update_dates"]
     day = manifest["updated"]
@@ -295,6 +329,7 @@ def build_collection(manifest: dict, columns: list[tuple[str, str]], geo: dict,
                 "file:size": THUMB.stat().st_size,
                 "file:checksum": multihash(THUMB),
             },
+            **counties,
         },
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
@@ -601,7 +636,12 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    col = build_collection(manifest, columns, index_geo, index_facts(out_dir), updated)
+    counties = county_assets(con, index_source)
+    if len(counties) != manifest["county_deliveries"]:
+        sys.exit(f"{INDEX}: {len(counties):,} files, the manifest has "
+                 f"{manifest['county_deliveries']:,} county deliveries")
+    col = build_collection(manifest, columns, index_geo, index_facts(out_dir), updated,
+                           counties)
     cdir = dest / col["id"]
     write_json(cdir / "collection.json", col)
     shutil.copyfile(THUMB, cdir / "thumbnail.png")
