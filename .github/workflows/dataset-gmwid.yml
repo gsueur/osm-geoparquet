@@ -10,7 +10,8 @@
 #   filter  one job per region: download, keep the infrastructure (~0.5%),
 #           upload the subset as an artifact.
 #   build   merge the subsets (osmium merge writes an object present in two
-#           regions once), build every layer, verify every file, and with
+#           regions once), build every layer, verify every file, tile each
+#           layer into <layer>.pmtiles (listed in _manifest.json), and with
 #           stage=publish replace latest/.
 #
 # Only latest/ is published: no dated snapshots, no snapshots.json. Features
@@ -317,6 +318,24 @@ jobs:
           du -sh "$WORK/out/latest" "$WORK/out/nsta"
           ls -la "$WORK/out/latest" "$WORK/out/nsta"
 
+      # One PMTiles archive per layer, for web maps and the catalog's
+      # previews (infra.py TILES). A layer that does not fit the tile size
+      # cap at any setting fails the build, so nothing is published.
+      # On a workstation at 4 threads: 6 min, 5.0 GB peak, 3.4 GB of archives.
+      - name: PMTiles, one archive per layer
+        working-directory: ${{ env.WORK }}
+        run: |
+          uv run --project "$GITHUB_WORKSPACE/scripts" python \
+            "$GITHUB_WORKSPACE/scripts/datasets/pmtiles.py" install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project "$GITHUB_WORKSPACE/scripts" \
+            python "$GITHUB_WORKSPACE/scripts/datasets/infra.py" tiles --out-dir "$WORK/out/latest" \
+            2> >(tee "$WORK/time-tiles.txt" >&2)
+          grep -E "Elapsed|Maximum resident" "$WORK/time-tiles.txt"
+          rm -rf "$TMPDIR"
+          ls -la "$WORK/out/latest"/*.pmtiles
+
       - name: ATTRIBUTION.txt
         run: |
           stamps=$(for f in "$WORK"/subsets/*.timestamp; do
@@ -428,8 +447,14 @@ jobs:
           esac
           # latest/ is the only version: sync replaces it, removing files the
           # new build no longer has. Data first, then the files that
-          # point at it.
-          rclone sync "$WORK/out/latest" "$REMOTE/latest" \
+          # point at it. The archives go first with their own Content-Type
+          # (rclone would send application/octet-stream); the sync leaves
+          # them alone (excluded files are not deleted).
+          rclone copy "$WORK/out/latest" "$REMOTE/latest" --max-depth 1 --include '*.pmtiles' \
+            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
+            --header-upload "Content-Type: application/vnd.pmtiles" \
+            --transfers 8 --stats 60s --stats-one-line
+          rclone sync "$WORK/out/latest" "$REMOTE/latest" --exclude '*.pmtiles' \
             --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
             --transfers 16 --checkers 32 --stats 60s --stats-one-line
           rclone sync "$WORK/out/nsta" "$REMOTE/nsta" \
@@ -458,12 +483,18 @@ jobs:
                    latest/power_line.parquet latest/power_tower.parquet \
                    latest/water_well.parquet latest/_coverage.json \
                    nsta/LICENSE.txt nsta/petroleum_well.parquet \
+                   latest/power_line.pmtiles latest/power_tower.pmtiles \
                    catalog/catalog.json catalog/power/power_line/collection.json \
-                   catalog/power/power_line/thumbnail.png; do
+                   catalog/power/power_line/thumbnail.png \
+                   catalog/power/power_line/styles/default.json; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
           done
+          type=$(curl -sI "$PUBLIC/latest/power_line.pmtiles" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print $2}')
+          [ "$type" = "application/vnd.pmtiles" ] || { echo "BAD power_line.pmtiles Content-Type: $type"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/latest/power_line.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD power_line.pmtiles range request -> $range"; fail=1; }
           exit $fail
 
   notify:

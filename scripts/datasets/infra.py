@@ -27,6 +27,8 @@ Two stages, so the worldwide build can fan out over Geofabrik regions:
           for the whole world, <out>/_manifest.json, <out>/stats/, and
           index.json in <out>'s parent (the repository base; <out> is
           `latest`, the only version published: no snapshots.json)
+  tiles   <out>/<layer>.parquet -> <out>/<layer>.pmtiles, one archive per
+          layer for web maps (TILES below), listed in _manifest.json
 
 Each layer is one file, sorted along a Hilbert curve over its extent, in row
 groups of 32,000: a bbox filter reads only the groups it touches (a box
@@ -2407,6 +2409,125 @@ def write_stats(con: duckdb.DuckDBPyConnection, out: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# PMTiles: one archive per layer, for web maps and the catalog's previews.
+#
+# Points and lines, so the tiler thins the coarse zooms (coverage=False) and
+# every feature is in the maximum zoom. Where a layer has a natural rank
+# (voltage, output, height) it picks each thinning cell's winner, so a
+# 400 kV line outlives a 20 kV one as the map zooms out. Each layer starts
+# at the zoom where it reads as a network rather than noise: 40 M towers
+# from z8, plants and lines from z2. The properties are what a style
+# colours on and a popup shows; the rest is in the GeoParquet.
+#
+# One layer is not tiled whole. 6.1 M of the 6.8 M generators are solar
+# panels, 5.2 M of them mapped one outline per panel row (median 99 m2):
+# a solar farm puts up to 117,000 of them in one zoom-13 tile, which no
+# setting fits (2 MB tiles still dropped half; zoom 15 still had 9 over the
+# cap). The map leaves out generator outlines under 2,000 m2: the farm is
+# power_plant's outline, and every panel stays in the GeoParquet.
+
+TILE_MAX_ZOOM = 13
+TILE_COMMON = ["type", "lifecycle", "name", "operator", "origin"]
+# 59 M features: 6 min on a workstation at 4 threads (power_tower 3 of them),
+# 5.0 GB peak, 3.4 GB of archives.
+TILE_TIMEOUT_S = 30 * 60
+
+
+@dataclass(frozen=True)
+class Tiles:
+    min_zoom: int
+    columns: list[str] = field(default_factory=list)   # after TILE_COMMON
+    sort_key: str | None = None                        # numeric, larger wins
+    where: str | None = None                           # rows tiled (tylertoo --filter)
+
+
+TILES: dict[str, Tiles] = {
+    "power_line": Tiles(2, ["voltage_kv", "circuits", "line", "location"], "voltage_kv"),
+    "power_circuit": Tiles(2, ["voltage_kv", "length_km"], "voltage_kv"),
+    "power_tower": Tiles(8, ["ref"]),
+    "power_substation": Tiles(4, ["substation", "voltage_kv"], "voltage_kv"),
+    "power_plant": Tiles(2, ["source", "method", "output_mw", "output_mw_estimated"],
+                         "output_mw"),
+    "power_generator": Tiles(6, ["source", "method", "generator_type", "output_mw", "area_m2"],
+                             "output_mw", where="area_m2 IS NULL OR area_m2 >= 2000"),
+    "power_switchgear": Tiles(8, ["voltage_kv"], "voltage_kv"),
+    "power_other": Tiles(8, ["voltage_kv"], "voltage_kv"),
+    "telecom_cable": Tiles(0, ["location"]),
+    "telecom_building": Tiles(4, ["telecom"]),
+    "telecom_location": Tiles(6),
+    "telecom_mast": Tiles(6, ["height_m"], "height_m"),
+    "telecom_antenna": Tiles(8, ["height_m"], "height_m"),
+    "utility_pole": Tiles(8, ["utility"]),
+    "street_cabinet": Tiles(8, ["utility"]),
+    "pipeline": Tiles(2, ["category", "substance", "diameter", "location"]),
+    "petroleum_site": Tiles(4, ["industrial"]),
+    "petroleum_well": Tiles(6, ["substance"]),
+    "offshore_platform": Tiles(0),
+    "pipeline_feature": Tiles(6, ["substance", "valve"]),
+    "marker": Tiles(8, ["marker", "utility", "substance"]),
+    "water_treatment_plant": Tiles(4),
+    "wastewater_plant": Tiles(4),
+    "pumping_station": Tiles(4, ["pumping_station", "substance"]),
+    "water_tower": Tiles(6, ["height_m"], "height_m"),
+    "water_well": Tiles(6, ["pump", "drinking_water"]),
+    "pressurised_waterway": Tiles(4),
+}
+
+
+def tile_layer(out: Path, name: str) -> dict:
+    """<out>/<name>.pmtiles down a ladder: every property from the layer's
+    first zoom, then only type, lifecycle and the rank, then the same two
+    zooms later. pmtiles.tile() fails a step that puts a tile over the cap
+    (it would drop features), and the next step is tried."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from datasets import pmtiles
+    spec = TILES[name]
+    full = TILE_COMMON + spec.columns
+    small = ["type", "lifecycle"] + ([spec.sort_key] if spec.sort_key else [])
+    if spec.where:   # the filter's columns must be read too
+        small += [c for c in full if c in spec.where and c not in small]
+    extra = (["--sort-key", spec.sort_key] if spec.sort_key else []) + \
+            (["--filter", spec.where] if spec.where else [])
+    steps = [(props, z) for z in (spec.min_zoom, spec.min_zoom + 2) for props in (full, small)]
+    for props, z in steps:
+        try:
+            entry = pmtiles.tile(out / f"{name}.parquet", out / f"{name}.pmtiles", layer=name,
+                                 min_zoom=z, max_zoom=TILE_MAX_ZOOM, properties=props,
+                                 coverage=False, extra=extra, timeout_s=TILE_TIMEOUT_S)
+        except SystemExit as e:
+            print(f"    {name}: {len(props)} properties from z{z}: {e}", flush=True)
+            continue
+        return {"name": name, **entry, "where": spec.where}
+    sys.exit(f"{name}.pmtiles: no tile setting fits the size cap")
+
+
+def tile_layers(out: Path, only: list[str] | None = None) -> list[dict]:
+    """Every layer's archive, recorded in _manifest.json's `pmtiles` (the
+    entries GAUL's manifest has: file, layer, zooms, tiles, properties,
+    bytes, sha256), which the catalog reads."""
+    if set(TILES) != {layer.name for layer in LAYERS}:
+        sys.exit(f"TILES and LAYERS differ: {sorted(set(TILES) ^ {l.name for l in LAYERS})}")
+    manifest_path = out / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    done = {t["name"]: t for t in manifest.get("pmtiles", [])}
+    t_all = time.monotonic()
+    for layer in LAYERS:
+        if only and layer.name not in only:
+            continue
+        if not manifest["themes"].get(layer.name):
+            continue
+        t0 = time.monotonic()
+        e = done[layer.name] = tile_layer(out, layer.name)
+        print(f"  {e['file']}: z{e['min_zoom']}-{e['max_zoom']}, {len(e['properties'])} "
+              f"properties, {e['tiles']:,} tiles, {e['bytes'] / 1e6:,.0f} MB, "
+              f"{time.monotonic() - t0:.0f} s", flush=True)
+    manifest["pmtiles"] = [done[l.name] for l in LAYERS if l.name in done]
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"  tiles: {len(done)} archives, "
+          f"{sum(t['bytes'] for t in done.values()) / 1e9:,.2f} GB, "
+          f"{time.monotonic() - t_all:.0f} s", flush=True)
+    return manifest["pmtiles"]
+
 
 def print_added(name: str, coverage: dict) -> None:
     """One line per layer: how many of a source's records OSM lacked."""
@@ -2590,11 +2711,16 @@ def main() -> None:
                    "from the sources whose terms restrict reuse")
     b.add_argument("--eez", required=True,
                    help="Marine Regions eez_land as GeoJSON (path)")
+    t = sub.add_parser("tiles", help="<out>/<layer>.parquet -> <out>/<layer>.pmtiles")
+    t.add_argument("--out-dir", type=Path, required=True)
+    t.add_argument("--layers", nargs="*", help="these layers only (default: all)")
     o = sub.add_parser("fetch-ore", help="download Agence ORE's HTA/BT substations as CSV")
     o.add_argument("dest")
     a = p.parse_args()
     if a.cmd == "filter":
         filter_extract(a.src, a.dest)
+    elif a.cmd == "tiles":
+        tile_layers(a.out_dir, a.layers)
     elif a.cmd == "fetch-ore":
         n = ore_download(a.dest)
         if n < 900_000:   # ~1.03 M in 2026: a short read is a failed download
