@@ -68,7 +68,8 @@ other unit reaches it, so its IDs are deduplicated among its own rows.
 
 The gate also checks each unit's rows against the geodatabase's feature
 count, every ATTRIBUTE against the code table (an unknown code is counted
-and left undecoded, failing the build above 0.1% of rows), and that the
+and left undecoded, failing the build above 0.1% of the release's rows,
+this build's and the published parts it joins), and that the
 state files add up to the IDs kept.
 
 Memory: each unit is staged in a process of its own, streamed (GDAL's
@@ -1003,7 +1004,9 @@ def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None,
     the dedup (work/dedup.json) and the written states (out/entries/*.json),
     with codes.parquet, projects.parquet, ATTRIBUTION.txt, index.json and
     _source.json. Gates: every kept NWI_ID is in a state file, unknown codes
-    under UNKNOWN_CODE_SHARE."""
+    under UNKNOWN_CODE_SHARE of the release's rows: this build's and, with
+    live, the published parts it joins (Alaska alone has 0.9%, its own forms
+    of the codes, the release 0.09%)."""
     rel_name = src["release"]
     rel = out / "nwi" / rel_name
     rel.mkdir(parents=True, exist_ok=True)
@@ -1020,13 +1023,20 @@ def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None,
         sys.exit(f"gate: the state files hold {total:,} rows, {dedup['ids']:,} NWI_IDs were kept")
     unknown = sum(f.pop("rows_with_unknown_code") for f in files)
     codes_seen = sorted({c for f in files for c in f.pop("unknown_codes")})
-    if total and unknown / total > UNKNOWN_CODE_SHARE:
-        sys.exit(f"gate: {unknown:,} of {total:,} rows have an ATTRIBUTE not in the code table: "
+    live_m = live_manifest(rel_name, live)
+    # The published parts this build keeps (merge_live), counted with it.
+    kept = [p for p in (live_m or {}).get("parts", []) if not set(todo) & set(p["units"])]
+    states = {f["state"] for f in files}
+    rel_unknown = unknown + sum(p["gate"]["rows_with_unknown_code"] for p in kept)
+    rel_total = total + sum(f["features"] for f in (live_m or {}).get("files", [])
+                            if f["state"] not in states)
+    if rel_total and rel_unknown / rel_total > UNKNOWN_CODE_SHARE:
+        sys.exit(f"gate: {rel_unknown:,} of the release's {rel_total:,} rows have an ATTRIBUTE "
+                 f"not in the code table ({unknown:,} of {total:,} in this build): "
                  f"{codes_seen[:50]}")
     con = connect(work, memory, threads)
     crs = projjson(con)
     codes = load_codes(con, work, rel, src["codes"])
-    live_m = live_manifest(rel_name, live)
     live_projects = (f"{live}/nwi/{rel_name}/{live_m['projects']['file']}"
                      if live_m and live_m.get("projects") else None)
     projects = write_projects(con, work, rel, crs, todo, live_projects)
@@ -1135,6 +1145,7 @@ def main() -> None:
     a = sub.add_parser("assemble", help="the manifest, codes, projects and source files")
     common(a, out=True)
     a.add_argument("--live", help="merge the published manifest of the same release")
+    a.add_argument("--threads", type=int)
     b = sub.add_parser("build", help="every step on one machine (a test run, or Alaska)")
     common(b, out=True)
     b.add_argument("--unit", action="append",
@@ -1170,7 +1181,7 @@ def main() -> None:
               args.low_disk, args.memory)
     elif args.cmd == "assemble":
         assemble(read_upstream(args.upstream), args.work_dir, args.out_dir, args.memory,
-                 args.live)
+                 args.live, args.threads)
     elif args.cmd == "tiles":
         tiles(args.work_dir, args.out_dir, args.memory, args.live)
     else:

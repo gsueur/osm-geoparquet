@@ -18,6 +18,10 @@
 # DuckDB runs 4 threads, as on a runner: at a workstation's 12 and 6GB,
 # counting Alaska's repaired polygons ran out of memory (THREADS, MEMORY).
 #
+# ASSEMBLE_ONLY=1 reruns the last step on the work dir as a build left it
+# (its state file written, the assemble or an upload failed): the manifest,
+# projects and source files again, then the uploads, minutes instead of hours.
+#
 # For a test: UNIT=HI (a small unit, built the same way), DRY_RUN=1 (prints
 # the uploads instead of running them), PUBLIC=<another published prefix>.
 set -euo pipefail
@@ -42,10 +46,17 @@ if [ "$release" != "$published" ]; then
 fi
 
 out="$work/out"
-rm -rf "$out"
-uv run --project scripts python scripts/datasets/nwi.py build --unit "$unit" \
-  --work-dir "$work/work" --out-dir "$out" --no-tiles --memory "${MEMORY:-6GB}" \
-  --threads "${THREADS:-4}" --live "$public"
+if [ -n "${ASSEMBLE_ONLY:-}" ]; then
+  [ -f "$out/entries/$unit.json" ] || { echo "ASSEMBLE_ONLY: no state written in $out for $unit" >&2; exit 1; }
+  uv run --project scripts python scripts/datasets/nwi.py assemble --upstream "$work/upstream.json" \
+    --work-dir "$work/work" --out-dir "$out" --memory "${MEMORY:-6GB}" \
+    --threads "${THREADS:-4}" --live "$public"
+else
+  rm -rf "$out"
+  uv run --project scripts python scripts/datasets/nwi.py build --unit "$unit" \
+    --work-dir "$work/work" --out-dir "$out" --no-tiles --memory "${MEMORY:-6GB}" \
+    --threads "${THREADS:-4}" --live "$public"
+fi
 rel="nwi/$release"
 # The published _source.json, with this unit's zip as read now: the weekly
 # check then sees Alaska as done, and the other units as the runner left them.
