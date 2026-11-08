@@ -1,0 +1,165 @@
+# NCES school locations (EDGE geocodes): parquetry:parquetry/schools/.
+#
+# One GeoParquet file and one PMTiles archive per survey (public schools,
+# private schools, postsecondary institutions) under schools/latest/, each
+# its latest school year. scripts/datasets/schools.py documents the layout
+# and the gate.
+#
+# NCES puts the school year in the file name (EDGE_GEOCODE_PUBLICSCH_2425),
+# so a new year is a new file, not a changed one. The upstream check looks
+# at two things:
+#   - the pinned files' Last-Modified and ETag against the published
+#     schools/_source.json: NCES correcting a file in place rebuilds;
+#   - the years the page links to (commented-out links, files not released
+#     yet, are ignored): one newer than schools.py's FILES fails the run,
+#     with the year to set. Taking it is a code change, as the layout may
+#     move (the 2023-24 private file renamed two county columns), not a
+#     silent rebuild. If the page cannot be read the run warns and goes on.
+#
+#   build    fetch, convert, gate, tile and verify, upload nothing
+#   publish  the same, then upload, then the Portolan catalog at /schools/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Runs monthly (the 4th, 07:23 UTC) as a publish: NCES releases each survey
+# about once a year. Needs the R2 secrets the nightly uses.
+
+name: dataset-schools
+
+on:
+  schedule:
+    - cron: "23 7 4 * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if no source has moved"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-schools
+  cancel-in-progress: false
+
+env:
+  # A scheduled run has no inputs: it is a publish.
+  STAGE: ${{ inputs.stage || 'publish' }}
+  REMOTE: parquetry:parquetry/schools
+  PUBLIC: https://parquetry.geomermaids.com/schools
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # latest/ is replaced in place when NCES ships a new year: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  schools:
+    runs-on: ubuntu-24.04
+    # About 40 MB of zips; the laptop build takes under a minute.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          # The catalog stage reads only what is published: no call to nces.ed.gov.
+          if [ "$STAGE" = "catalog" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/schools.py upstream > upstream.json
+          jq -c '.files | map_values(.year)' upstream.json
+          if [ "$(jq '.page_years == null' upstream.json)" = "true" ]; then
+            echo "::warning::could not read the school years from NCES's page; checking the pinned files only"
+          fi
+          ahead=$(uv run --project scripts python -c "
+          import json, sys; sys.path.insert(0, 'scripts')
+          from datasets.schools import newer_years
+          print(json.dumps(newer_years(json.load(open('upstream.json')))))")
+          if [ "$ahead" != "{}" ]; then
+            echo "::error::NCES lists newer school years than schools.py builds: $ahead; set the year in FILES (scripts/datasets/schools.py)"
+            exit 1
+          fi
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          now=$(jq -c '.files | map_values([.last_modified, .etag])' upstream.json)
+          was=$(echo "$live" | jq -c '.files // {} | map_values([.last_modified, .etag])')
+          echo "upstream $now"
+          echo "published $was"
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$STAGE" = "publish" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch, convert, gate, tile and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$RUNNER_TEMP"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/schools.py build \
+            --work-dir work --out-dir out 2> >(tee time.txt >&2)
+          grep -E "Maximum resident|Elapsed" time.txt
+          du -sh out; find out -type f | sort
+          jq -c '.files[] | {name, school_year, features, gate}' out/latest/_manifest.json
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.STAGE == 'publish') || env.STAGE == 'catalog'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifest and the repository files that
+      # name it: a reader never finds a path that is not there yet.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.STAGE == 'publish'
+        run: |
+          rclone copy out "$REMOTE" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet"
+          rclone copy out "$REMOTE" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+          rclone copy out "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy out "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.STAGE == 'publish'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json latest/_manifest.json latest/ATTRIBUTION.txt \
+                   latest/public.parquet latest/private.parquet latest/postsecondary.parquet \
+                   latest/public.pmtiles latest/private.pmtiles latest/postsecondary.pmtiles; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/latest/public.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          type=$(curl -sI "$PUBLIC/latest/public.pmtiles" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print $2}')
+          [ "$type" = "application/vnd.pmtiles" ] || { echo "BAD pmtiles Content-Type: $type"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.STAGE == 'publish') || env.STAGE == 'catalog'
+        run: |
+          uv run --project scripts python scripts/datasets/schools_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/public/collection.json \
+                   catalog/public/styles/default.json catalog/private/collection.json \
+                   catalog/postsecondary/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
