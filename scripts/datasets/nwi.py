@@ -849,7 +849,8 @@ def tile_all(con, sources: dict[str, str], rel: Path, work: Path) -> dict:
         shutil.rmtree(lonlat, ignore_errors=True)
 
 
-def tiles(work: Path, out: Path, memory: str, live: str | None = None) -> None:
+def tiles(work: Path, out: Path, memory: str, live: str | None = None,
+          threads: int | None = None) -> None:
     """nwi_tiles_local.sh's step: wetlands.pmtiles from every state file of the
     release, and its entry in the release's _manifest.json. With `live`
     (the published wetlands/ prefix) the manifest and the state files are
@@ -873,7 +874,7 @@ def tiles(work: Path, out: Path, memory: str, live: str | None = None) -> None:
         missing = [s for s, f in sources.items() if not Path(f).is_file()]
         if missing:
             sys.exit(f"tiles: no local file for {missing}")
-    con = connect(work, memory)
+    con = connect(work, memory, threads)
     t0 = time.monotonic()
     manifest["pmtiles"] = tile_all(con, sources, rel, work)
     con.close()
@@ -1159,6 +1160,7 @@ def main() -> None:
     t = sub.add_parser("tiles", help="wetlands.pmtiles from the state files in --out-dir")
     common(t, out=True)
     t.add_argument("--live", help="read the release from here (the published wetlands/ prefix)")
+    t.add_argument("--threads", type=int)
     args = p.parse_args()
     if args.cmd == "upstream":
         print(json.dumps(upstream(), indent=2))
@@ -1183,7 +1185,7 @@ def main() -> None:
         assemble(read_upstream(args.upstream), args.work_dir, args.out_dir, args.memory,
                  args.live, args.threads)
     elif args.cmd == "tiles":
-        tiles(args.work_dir, args.out_dir, args.memory, args.live)
+        tiles(args.work_dir, args.out_dir, args.memory, args.live, args.threads)
     else:
         build(args.work_dir, args.out_dir, args.unit, args.no_tiles, args.low_disk,
               args.memory, args.threads, args.live)
