@@ -12,7 +12,8 @@
 # anything new outside Alaska rebuilds the release (a new month is a new
 # path; the old release stays until removed by hand). Alaska's zip (11.8 GB)
 # does not fit a runner: it is built on a workstation with
-# scripts/datasets/nwi_publish_ak.sh, then the tiles stage is dispatched.
+# scripts/datasets/nwi_publish_ak.sh, then the map on the same workstation
+# with scripts/datasets/nwi_tiles_local.sh, then the catalog stage here.
 # Until Alaska is built from the zip FWS lists (a new zip, or a new release),
 # the weekly check fails with that instruction.
 #
@@ -31,8 +32,10 @@
 #   assemble  the manifest, codes, projects (nwi.py assemble); when publishing,
 #             the state files copied server-side to the release, then the
 #             files that name them; the scratch prefix removed
-#   tiles     the PMTiles map from every published state (Alaska included),
-#             then the catalog
+#
+# The map is not built here: tiling 35 million polygons from z6 to z13 ran a
+# runner's disk full (run 42426219352). The catalog names the map, so it is
+# rendered last, by the catalog stage, once nwi_tiles_local.sh has uploaded it.
 #
 # A failed job can be re-run alone ("Re-run failed jobs"), or the workflow
 # dispatched again: the scratch prefix is kept until assemble, and a staging
@@ -40,8 +43,8 @@
 # (nwi.py STAGE_VERSION). force restages everything.
 #
 # Stages (dispatch): build (everything, publishes nothing), publish (also
-# uploads; a scheduled run publishes), tiles (the map, then the catalog),
-# catalog (the catalog only). Needs the R2 secrets the nightly uses.
+# uploads; a scheduled run publishes), catalog (the catalog only, after
+# Alaska and the map). Needs the R2 secrets the nightly uses.
 
 name: dataset-wetlands
 
@@ -51,9 +54,9 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "build writes and verifies; publish also uploads; tiles the map; catalog only the catalog"
+        description: "build writes and verifies; publish also uploads; catalog only the catalog (after Alaska and the map)"
         type: choice
-        options: [build, publish, tiles, catalog]
+        options: [build, publish, catalog]
         default: build
       force:
         description: "Rebuild even if nothing moved upstream"
@@ -385,15 +388,12 @@ jobs:
       - name: Remove the scratch prefix
         run: rclone purge "$SCRATCH"
 
-  # A job of its own: every published state file streamed into a lon/lat
-  # copy, tiled, uploaded, the manifest updated, then the catalog.
-  tiles:
-    needs: assemble
-    if: >-
-      always() && (inputs.stage == 'tiles' || inputs.stage == 'catalog'
-      || needs.assemble.outputs.published == 'true')
+  # Dispatched once Alaska (nwi_publish_ak.sh) and the map (nwi_tiles_local.sh)
+  # are published: the catalog names both.
+  catalog:
+    if: inputs.stage == 'catalog'
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -404,32 +404,6 @@ jobs:
         run: |
           curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
           rclone version | sed -n 1p
-
-      - name: Work dir on the runner's big disk
-        if: inputs.stage != 'catalog'
-        run: |
-          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
-          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
-          df -h /mnt; free -g
-
-      - name: Tiles
-        if: inputs.stage != 'catalog'
-        run: |
-          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
-          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
-          mkdir -p "$TMPDIR"
-          /usr/bin/time -v uv run --project scripts python scripts/datasets/nwi.py tiles \
-            --work-dir "$WORK/src" --out-dir "$WORK/out" --memory "$MEMORY" --live "$PUBLIC" \
-            2> >(tee "$WORK/time.txt" >&2)
-          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
-          out="$WORK/out"
-          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
-          rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "- *" \
-            --ignore-times --header-upload "Cache-Control: public, max-age=300"
-          rel=$(jq -r '.datasets[0].path' "$out/index.json")
-          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$rel/wetlands.pmtiles")
-          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; exit 1; }
 
       # After the data, so the catalog never links a file that is not there.
       - name: STAC catalog, published

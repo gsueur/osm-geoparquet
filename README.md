@@ -209,8 +209,9 @@ groups of units, one dedup job on the units' indexes, six writing jobs by
 groups of states, then one job that assembles and publishes.
 Alaska (an 11.8 GB zip) does not fit a runner: the workflow builds every other
 unit and `scripts/datasets/nwi_publish_ak.sh` builds Alaska into the same
-release from a workstation, then the workflow's `tiles` stage draws the map
-from every published state. Public domain; not a jurisdictional delineation.
+release from a workstation, then `scripts/datasets/nwi_tiles_local.sh` draws
+the map from every published state on the same workstation (a runner's disk
+is too small for it), then the workflow's `catalog` stage. Public domain; not a jurisdictional delineation.
 Portolan catalog at `https://parquetry.geomermaids.com/wetlands/catalog/catalog.json`
 (`scripts/datasets/nwi_catalog.py`).
 
