@@ -113,6 +113,18 @@ block group to tract to county to state, but for a gap in the published file
 (14 Suffolk County, NY tracts, listed in `acs.py`'s KNOWN_GAPS). Its collections
 are the `acs-2024` sub-catalog of the census catalog (`scripts/datasets/acs_catalog.py`).
 
+The 2020 Census blocks with their counts (`scripts/datasets/blocks.py`, workflow
+`dataset-blocks.yml`, checked monthly against the zips' Last-Modified) sit at
+`https://parquetry.geomermaids.com/census/tiger/2020/block/`: the 8.1 million
+TABBLOCK20 blocks of the 50 states, DC and Puerto Rico with POP20 and
+HOUSING20, one `state=<XX>/blocks.parquet` per state, NAD83 as shipped, and
+`blocks_h3.parquet`/`blocks_h3.pmtiles`, the counts on H3 cells at
+resolutions 4, 6 and 8 with a map. Only the 2020 TIGER/Line blocks carry the
+counts. The build fails unless each state's POP20 adds up to its 2020 resident
+population in the Census Bureau's apportionment table. The Island Areas' block
+files have no counts and are left out. Its collections are the
+`tiger-2020-block` sub-catalog (`scripts/datasets/blocks_catalog.py`).
+
 FEMA's National Risk Index (`scripts/datasets/nri.py`, workflow
 built and published from a workstation with
 `scripts/datasets/nri_publish_local.sh`, because www.fema.gov refuses GitHub's
