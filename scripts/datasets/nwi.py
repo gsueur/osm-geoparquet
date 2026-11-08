@@ -136,6 +136,10 @@ DECODED = ["SYSTEM_NAME", "SUBSYSTEM_NAME", "CLASS_NAME", "SUBCLASS_NAME", "SPLI
            "SPLIT_SUBCLASS_NAME", "WATER_REGIME_NAME", "MODIFIER1_NAME", "MODIFIER2_NAME"]
 COLUMNS = ["NWI_ID", "ATTRIBUTE", "WETLAND_TYPE", "ACRES", *DECODED, "source_unit"]
 UNKNOWN_CODE_SHARE = 0.001
+# 38.7 million polygons, none wide: on a workstation tylertoo converts them
+# in 7 min, writes z6-12 in 10 and z13 in about 15, past pmtiles.py's 30 min
+# guard against continent-wide features.
+TILE_TIMEOUT_S = 2 * 60 * 60
 # An NWI_ID repeated with different rows within one unit: above this share
 # of the unit's rows (and more than one), the build fails.
 DUPLICATE_SHARE = 0.0001
@@ -838,7 +842,7 @@ def tile_all(con, sources: dict[str, str], rel: Path, work: Path) -> dict:
             try:
                 entry = pmtiles.tile(src, rel / "wetlands.pmtiles", layer="wetlands",
                                      min_zoom=lo, max_zoom=TILE_MAX_ZOOM, properties=props,
-                                     coverage=False)
+                                     coverage=False, timeout_s=TILE_TIMEOUT_S)
             except SystemExit as e:
                 print(f"    tiles: {len(props)} properties from z{lo}: {e}", flush=True)
                 continue

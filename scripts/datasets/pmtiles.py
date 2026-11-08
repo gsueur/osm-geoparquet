@@ -115,12 +115,14 @@ TIMEOUT_S = 30 * 60
 
 def tile(src: Path, dest: Path, *, layer: str, min_zoom: int = 0, max_zoom: int = 10,
          properties: list[str] | None = None, verbatim: bool = False,
-         coverage: bool = True, extra: list[str] | None = None) -> dict:
+         coverage: bool = True, extra: list[str] | None = None,
+         timeout_s: int = TIMEOUT_S) -> dict:
     """Tile src into dest; fail if any tile lost features. Returns the
     measurements the catalog needs (size, sha256, zooms, layer). verbatim
     turns simplification off too, for shapes that must keep theirs (H3
     cells). coverage=False keeps the thinning of points and lines; extra
-    passes further tylertoo options (--sort-key...)."""
+    passes further tylertoo options (--sort-key...); timeout_s raises the
+    limit for a dataset that is large rather than wide (NWI)."""
     with tempfile.TemporaryDirectory(prefix="tiles-") as tmp:
         report_path = Path(tmp) / "report.json"
         cmd = [binary(), "tiles", str(src), str(dest),
@@ -132,7 +134,7 @@ def tile(src: Path, dest: Path, *, layer: str, min_zoom: int = 0, max_zoom: int 
             cmd.append("--verbatim")
         for p in properties or []:
             cmd += ["--include-property", p]
-        subprocess.run(cmd, check=True, timeout=TIMEOUT_S)
+        subprocess.run(cmd, check=True, timeout=timeout_s)
         report = json.loads(report_path.read_text())
     zooms = report["export"]["zooms"]
     lossy = [(z["zoom"], z["oversized_tiles"], z["encode_dropped_features"])
