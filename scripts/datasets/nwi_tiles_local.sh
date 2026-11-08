@@ -16,6 +16,9 @@
 # the release. On exFAT (T9) macOS writes ._* files beside every output: the
 # filters below keep them out of the bucket.
 #
+# DuckDB runs 4 threads (THREADS): at a workstation's 12, copying Alaska's
+# state file (polygons up to 221 MB) ran out of 12GB (MEMORY).
+#
 # DRY_RUN=1 tiles and prints the uploads instead of running them.
 set -euo pipefail
 
@@ -35,7 +38,7 @@ curl -fsS "$public/$rel/_manifest.json" | jq -e '[.files[].state] | index("AK")'
 out="$work/out"
 rm -rf "$out"
 TMPDIR="$work/tmp" uv run --project scripts python scripts/datasets/nwi.py tiles \
-  --work-dir "$work/src" --out-dir "$out" --memory "${MEMORY:-8GB}" --live "$public"
+  --work-dir "$work/src" --out-dir "$out" --memory "${MEMORY:-8GB}" --threads "${THREADS:-4}" --live "$public"
 
 run() { if [ -n "$dry" ]; then echo "  \$ $*"; else "$@"; fi; }
 # The archive, then the manifest that names it.
