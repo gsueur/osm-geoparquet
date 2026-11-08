@@ -823,7 +823,10 @@ def tile_all(con, sources: dict[str, str], rel: Path, work: Path) -> dict:
     is in the maximum zoom. (Bands joined by pmtiles.pyramid() do not help:
     a band keeps every polygon at its own top zoom, so a z6-9 band overflows
     at z9.) tylertoo reads lon/lat, so it reads copies tagged CRS84 (NAD83
-    and WGS 84 differ by less than a pixel at these zooms)."""
+    and WGS 84 differ by less than a pixel at these zooms). The copies have
+    small row groups, as every intermediate file here: at DuckDB's default
+    (122,880 rows) Alaska's polygons (up to 221 MB) ran a copy out of 12GB,
+    and a column chunk tylertoo could not decompress (snappy: corrupt input)."""
     pmtiles.binary()
     lonlat = work / "lonlat"
     shutil.rmtree(lonlat, ignore_errors=True)
@@ -834,7 +837,8 @@ def tile_all(con, sources: dict[str, str], rel: Path, work: Path) -> dict:
     for st, f in sorted(sources.items()):
         con.execute(f"""COPY (SELECT {props}, ST_SetCRS(geometry::GEOMETRY, 'OGC:CRS84') AS geometry
                               FROM read_parquet('{f}', hive_partitioning = false))
-                        TO '{lonlat / f"{st}.parquet"}' (FORMAT PARQUET)""")
+                        TO '{lonlat / f"{st}.parquet"}' (FORMAT PARQUET, COMPRESSION ZSTD,
+                            ROW_GROUP_SIZE 20000, ROW_GROUP_SIZE_BYTES '128MB')""")
     # A glob, not the directory: on exFAT (T9) macOS writes ._* files beside each.
     src = lonlat / "[A-Z]*.parquet"
     try:
