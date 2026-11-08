@@ -88,8 +88,10 @@ sits under `https://parquetry.geomermaids.com/census/tiger/<year>/<product>/`:
 one GeoParquet file per GeoPackage layer, named by its TIGER code
 (`legislative/cd120.parquet`, `sldu`, `sldl`), columns and NAD83 unchanged,
 plus a PMTiles archive each with a `color_index` that keeps neighbouring
-districts apart. `census.py`'s PRODUCTS table lists the products built; the
-legislative areas come first. Portolan catalog at
+districts apart. `census.py`'s PRODUCTS table lists the products built:
+legislative, substategeo, nationgeo, school and aiarelated (American Indian,
+Alaska Native and Native Hawaiian areas, Alaska Native Regional Corporations,
+tribal subdivisions, tribal census tracts and block groups). Portolan catalog at
 `https://parquetry.geomermaids.com/census/catalog/catalog.json`
 (`scripts/datasets/census_catalog.py`); page at census.geomermaids.com
 (`census/`, deployed with wrangler like `nfhl/`).

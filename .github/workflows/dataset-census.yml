@@ -56,7 +56,7 @@ env:
 jobs:
   census:
     runs-on: ubuntu-24.04
-    # Four GeoPackages, about 5 GB to download; the laptop build takes 15 min
+    # Five GeoPackages, about 5 GB to download (aiarelated 34 MB); the laptop build takes 15 min
     # (substategeo 10, its 242,748 block groups most of it). Room for a
     # runner two to three times slower.
     timeout-minutes: 180
@@ -133,7 +133,8 @@ jobs:
                    tiger/2026/legislative/ATTRIBUTION.txt \
                    tiger/2026/legislative/cd120.parquet tiger/2026/legislative/sldl.pmtiles \
                    tiger/2026/substategeo/tract.parquet tiger/2026/substategeo/bg.pmtiles \
-                   tiger/2026/nationgeo/zcta520.parquet tiger/2026/school/unsd.pmtiles; do
+                   tiger/2026/nationgeo/zcta520.parquet tiger/2026/school/unsd.pmtiles \
+                   tiger/2026/aiarelated/aiannh.parquet tiger/2026/aiarelated/tbg.pmtiles; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
             echo "ok  $f"
@@ -152,7 +153,8 @@ jobs:
                    catalog/tiger-2026-legislative/sldl/styles/default.json \
                    catalog/tiger-2026-substategeo/tract/collection.json \
                    catalog/tiger-2026-nationgeo/zcta520/collection.json \
-                   catalog/tiger-2026-school/unsd/collection.json; do
+                   catalog/tiger-2026-school/unsd/collection.json \
+                   catalog/tiger-2026-aiarelated/aiannh/collection.json; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
             echo "ok  $f"
