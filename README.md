@@ -398,6 +398,24 @@ at a time and deletes each once counted. Portolan catalog at
 `https://parquetry.geomermaids.com/worldpop/catalog/catalog.json`
 (`scripts/datasets/worldpop_catalog.py`).
 
+NCES school locations (`scripts/datasets/schools.py`, workflow
+`dataset-schools.yml`) sit under `https://parquetry.geomermaids.com/schools/latest/`:
+one GeoParquet file and one PMTiles archive per survey, each its latest school
+year: `public.parquet` (102,178 public schools, Common Core of Data 2024-25,
+key `NCESSCH`), `private.parquet` (22,510, Private School Survey 2023-24, key
+`PPIN`) and `postsecondary.parquet` (6,438, IPEDS 2025-26, key `UNITID`). These
+are NCES's EDGE geocodes: the point, the address and the county, CBSA,
+congressional and legislative districts and locale NCES assigns from it, columns
+as its record layouts name them; enrollment and grades are in the survey files
+the ids join. The build checks rows, keys and coordinates against each shapefile
+and counts the points whose state FIPS differs from the TIGER/Line state they
+fall in, and the public schools whose `LEAID` joins a TIGER/Line school district
+`GEOID` (89%: charter, state-run and regional agencies have no district polygon).
+NCES names files by school year, so the monthly upstream check fails when the
+page lists a newer year rather than rebuilding silently. Public domain. Portolan
+catalog at `https://parquetry.geomermaids.com/schools/catalog/catalog.json`
+(`scripts/datasets/schools_catalog.py`).
+
 The list of repositories GeoPQ Workbench shows under File > Repositories
 is `meta/repositories.json`, published to
 `https://parquetry.geomermaids.com/meta/repositories.json` by `meta.yml` when

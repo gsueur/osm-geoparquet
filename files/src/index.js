@@ -332,6 +332,13 @@ const DATASETS = {
       "R2025A/2025/country=<ISO3>/, the world at resolution 5, and one PMTiles archive.",
     attribution: "worldpop/R2025A/2025/ATTRIBUTION.txt",
   },
+  "schools/": {
+    subtitle: "NCES EDGE school locations, public domain: public schools (CCD), private schools " +
+      "(PSS) and postsecondary institutions (IPEDS) as points under latest/, one GeoParquet file " +
+      "and one PMTiles archive per survey, each its latest school year (_manifest.json), with " +
+      "NCES's ids, county, districts and locale. Checked monthly.",
+    attribution: "schools/latest/ATTRIBUTION.txt",
+  },
   "meta/": {
     subtitle: "Shared files: the inputs the builds read, and repositories.json, the list GeoPQ Workbench shows. Not a dataset of its own.",
   },
