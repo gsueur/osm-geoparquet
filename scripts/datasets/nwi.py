@@ -987,8 +987,8 @@ def stage(src: dict, work: Path, units: list[str], low_disk: bool, memory: str,
 
 
 def write(src: dict, work: Path, out: Path, targets: list[str], low_disk: bool,
-          memory: str) -> dict[str, dict]:
-    con = connect(work, memory)
+          memory: str, threads: int | None = None) -> dict[str, dict]:
+    con = connect(work, memory, threads)
     crs = projjson(con)
     load_states(con, work)
     load_codes(con, work, work / "codes", src["codes"])
@@ -997,7 +997,8 @@ def write(src: dict, work: Path, out: Path, targets: list[str], low_disk: bool,
     return files
 
 
-def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None) -> dict:
+def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None,
+             threads: int | None = None) -> dict:
     """The release's manifest from the staged units (work/stage/<unit>.json),
     the dedup (work/dedup.json) and the written states (out/entries/*.json),
     with codes.parquet, projects.parquet, ATTRIBUTION.txt, index.json and
@@ -1022,7 +1023,7 @@ def assemble(src: dict, work: Path, out: Path, memory: str, live: str | None) ->
     if total and unknown / total > UNKNOWN_CODE_SHARE:
         sys.exit(f"gate: {unknown:,} of {total:,} rows have an ATTRIBUTE not in the code table: "
                  f"{codes_seen[:50]}")
-    con = connect(work, memory)
+    con = connect(work, memory, threads)
     crs = projjson(con)
     codes = load_codes(con, work, rel, src["codes"])
     live_m = live_manifest(rel_name, live)
@@ -1082,15 +1083,15 @@ def build(work: Path, out: Path, units: list[str] | None, no_tiles: bool, low_di
     todo = units or [u for u in src["units"] if u not in WORKSTATION_UNITS]
     print(f"NWI release {src['release']} ({src['last_updated']}), {len(todo)} units", flush=True)
     stage(src, work, todo, low_disk, memory, threads)
-    con = connect(work, memory)
+    con = connect(work, memory, threads)
     d = choose(con, work)
     con.close()
     print(f"  dedup: {d['copies_read']:,} rows read, {d['ids']:,} NWI_IDs kept, "
           f"{d['copies_dropped']:,} copies dropped, {d['kept_from_a_neighbour']:,} "
           f"kept from a neighbour's download, {d['ids_with_several_home_copies']:,} with "
           f"several home copies", flush=True)
-    write(src, work, out, sorted(d["targets"]), low_disk, memory)
-    assemble(src, work, out, memory, live)
+    write(src, work, out, sorted(d["targets"]), low_disk, memory, threads)
+    assemble(src, work, out, memory, live, threads)
     if low_disk:
         shutil.rmtree(work / "stage")
     if not no_tiles:

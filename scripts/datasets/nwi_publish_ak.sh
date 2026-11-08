@@ -15,6 +15,9 @@
 # (the zip, the staged rows, the output). On exFAT (T9) macOS writes ._*
 # files beside every output: the filters below keep them out of the bucket.
 #
+# DuckDB runs 4 threads, as on a runner: at a workstation's 12 and 6GB,
+# counting Alaska's repaired polygons ran out of memory (THREADS, MEMORY).
+#
 # For a test: UNIT=HI (a small unit, built the same way), DRY_RUN=1 (prints
 # the uploads instead of running them), PUBLIC=<another published prefix>.
 set -euo pipefail
@@ -41,7 +44,8 @@ fi
 out="$work/out"
 rm -rf "$out"
 uv run --project scripts python scripts/datasets/nwi.py build --unit "$unit" \
-  --work-dir "$work/work" --out-dir "$out" --no-tiles --memory "${MEMORY:-6GB}" --live "$public"
+  --work-dir "$work/work" --out-dir "$out" --no-tiles --memory "${MEMORY:-6GB}" \
+  --threads "${THREADS:-4}" --live "$public"
 rel="nwi/$release"
 # The published _source.json, with this unit's zip as read now: the weekly
 # check then sees Alaska as done, and the other units as the runner left them.
