@@ -55,6 +55,8 @@ DATASETS = [
               "from OpenStreetMap.", "https://gmwid.geomermaids.com/"),
     ("gaul", "FAO's administrative units for every country: countries, first and "
              "second levels.", SITE),
+    ("worldpop", "WorldPop's 2025 population for every country on H3 cells, with age groups "
+                 "and sex: 8.2 billion people, one file per country and a world file.", SITE),
     ("clc", "The EEA's pan-European land cover inventory, for Europe and per country.", SITE),
     ("natural-earth", "Natural Earth's world basemap layers at three scales: countries, "
                       "states, places, coastlines, rivers, lakes, ports and airports.", SITE),
@@ -66,9 +68,13 @@ DATASETS = [
              "times a day, and MTBS burned areas since 1984.", SITE),
     ("nri", "FEMA's National Risk Index for 18 natural hazards, by census tract and "
             "county: expected annual loss, social vulnerability and resilience.", SITE),
+    ("wetlands", "USFWS's National Wetlands Inventory: wetland and deepwater polygons with "
+                 "their Cowardin class, one file per state, copies across state downloads removed.", SITE),
     ("padus", "USGS's Protected Areas Database: federal, state, local and private "
               "conservation lands, with manager, owner, GAP status and public access.", SITE),
-    ("structures", "FEMA's USA Structures: 144 million US building footprints with their "
+    ("schools", "NCES's school locations: every US public school, private school and college "
+                "as a point with its NCES id, county, districts and locale, one file per survey.", SITE),
+    ("structures", "FEMA's USA Structures: 146 million US building footprints with their "
                    "occupancy class and ORNL's population estimate, one file per state.", SITE),
     ("addresses", "The US National Address Database: 99 million address points, one file "
                   "per state, and a map of where states contribute.", SITE),
@@ -125,9 +131,9 @@ def build_root(children: list[dict], updated: str) -> dict:
         "title": TITLE,
         "description": (
             "Every dataset Geomermaids republishes as GeoParquet: OpenStreetMap for North "
-            "America and its infrastructure worldwide, administrative units, land cover, "
-            "a world basemap, place names, addresses, building footprints, protected areas, "
-            "flood zones, wildfire perimeters, natural hazard risk, water features, "
+            "America and its infrastructure worldwide, administrative units, population, "
+            "land cover, a world basemap, place names, addresses, schools, building footprints, protected areas, "
+            "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
             "census geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
             "under its own licence. Overture Maps is linked to Overture's own catalog, "
             "not copied."),
