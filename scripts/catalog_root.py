@@ -81,7 +81,8 @@ DATASETS = [
     ("gazetteer", "Place names to coordinates: the Census Gazetteer 2026 for US areas and "
                   "GeoNames' 13 million names worldwide.", SITE),
     ("census", "TIGER/Line geography, including the congressional and state legislative "
-               "districts, and the ACS 5-year estimates on it.",
+               "districts, the ACS 5-year estimates on it, the 2020 blocks with their counts "
+               "and LEHD's LODES jobs by block.",
      "https://census.geomermaids.com/"),
     ("massgis", "The statewide vector layers of the Massachusetts Bureau of Geographic "
                 "Information, checked weekly.", SITE),

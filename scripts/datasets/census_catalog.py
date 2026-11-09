@@ -7,6 +7,7 @@ Render, validate and publish the Portolan catalog for the US Census data.
   census/catalog/tiger-2026-legislative/<code>/collection.json   one per layer
   census/catalog/acs-2024/...                     the ACS estimates (acs_catalog.py)
   census/catalog/tiger-2020-block/...             the 2020 blocks with counts (blocks_catalog.py)
+  census/catalog/lodes-2024/...                   LEHD's jobs by block (lodes_catalog.py)
 
 census.py's PRODUCTS drives it: a product added there gets its sub-catalog
 here. Each collection has the layer's GeoParquet (`data`, NAD83 declared
@@ -38,7 +39,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from datasets import acs_catalog, blocks_catalog
+from datasets import acs_catalog, blocks_catalog, lodes_catalog
 from datasets.census import (
     LAYOUTS, PLACEHOLDERS, PRODUCTS, SOURCE_PAGE, YEAR, color_index, real_areas,
 )
@@ -451,7 +452,11 @@ def build_root(products: list[dict], updated: str) -> dict:
                            if any(p["id"] == acs_catalog.CATALOG_ID for p in products) else "")
                         + (" And the 2020 Census tabulation blocks with their population and "
                            "housing units, one file per state, with the counts on H3 cells."
-                           if any(p["id"] == blocks_catalog.CATALOG_ID for p in products) else "")),
+                           if any(p["id"] == blocks_catalog.CATALOG_ID for p in products) else "")
+                        + (" And LEHD's LODES jobs by 2020 block: where people work, where "
+                           "workers live and the commutes between, with tract and county "
+                           "rollups."
+                           if any(p["id"] == lodes_catalog.CATALOG_ID for p in products) else "")),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
@@ -635,7 +640,8 @@ def root_readme(root: dict, products: list[dict]) -> str:
 
 Files: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`, the ACS
 estimates at `{PUBLIC_DATA}/acs/<year>/<geo>.parquet`, and the 2020 blocks at
-`{PUBLIC_DATA}/tiger/2020/block/state=<XX>/blocks.parquet`. On a map: {PAGE_URL}.
+`{PUBLIC_DATA}/tiger/2020/block/state=<XX>/blocks.parquet`, LODES jobs at
+`{PUBLIC_DATA}/lodes/<year>/state=<XX>/<wac|rac|od>.parquet`. On a map: {PAGE_URL}.
 
 ## License
 
@@ -659,7 +665,10 @@ TIGER/Line national GeoPackages as GeoParquet, one sub-catalog per product.
 Layout: `{PUBLIC_DATA}/tiger/<year>/<product>/<layer>.parquet`; ACS estimates at
 `{PUBLIC_DATA}/acs/<year>/<geo>.parquet` (join on GEOID) and `<geo>_geo.parquet`
 (with outlines); 2020 blocks with POP20 and HOUSING20 at
-`{PUBLIC_DATA}/tiger/2020/block/state=<XX>/blocks.parquet`. Anonymous S3 at
+`{PUBLIC_DATA}/tiger/2020/block/state=<XX>/blocks.parquet`; LODES jobs by 2020
+block at `{PUBLIC_DATA}/lodes/<year>/state=<XX>/<wac|rac|od>.parquet` (read
+`year`: some states fall back to an earlier one), with tract and county
+rollups. Anonymous S3 at
 `s3://{BUCKET}/{DATASET_PREFIX}/` on `{S3_ENDPOINT}`. NAD83 (EPSG:4269).
 Credit: {ATTRIBUTION}.
 """
@@ -712,6 +721,9 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     blocks = blocks_catalog.build(out_dir, dest, THUMBS, updated, footer)
     if blocks:
         products.append(blocks)
+    lodes = lodes_catalog.build(out_dir, dest, THUMBS, updated, footer, layer_extent)
+    if lodes:
+        products.append(lodes)
     root = build_root(products, updated)
     write_json(dest / "catalog.json", root)
     shutil.copyfile(LOGO, dest / "logo.png")
@@ -842,6 +854,8 @@ def main() -> None:
     t.add_argument("--acs", action="store_true", help="the ACS maps instead (acs.py's files)")
     t.add_argument("--blocks", action="store_true",
                    help="the 2020 blocks maps instead (blocks.py's files)")
+    t.add_argument("--lodes", action="store_true",
+                   help="the LODES maps instead (lodes.py's files, local or published)")
     args = p.parse_args()
     if args.cmd == "build":
         print(f"wrote {args.dest}/ ({build(args.out_dir, args.dest):,} rows)")
@@ -849,6 +863,8 @@ def main() -> None:
         sys.exit(check(args.tree))
     elif args.cmd == "publish":
         publish(args.out_dir, args.remote, dry_run=args.dry_run)
+    elif args.cmd == "thumbnails" and args.lodes:
+        lodes_catalog.thumbnails(args.out_dir, THUMBS)
     elif args.cmd == "thumbnails" and args.blocks:
         blocks_catalog.thumbnails(args.out_dir, THUMBS)
     elif args.cmd == "thumbnails" and args.acs:
