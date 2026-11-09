@@ -125,6 +125,21 @@ population in the Census Bureau's apportionment table. The Island Areas' block
 files have no counts and are left out. Its collections are the
 `tiger-2020-block` sub-catalog (`scripts/datasets/blocks_catalog.py`).
 
+LEHD's LODES jobs, 2024 (`scripts/datasets/lodes.py`, workflow
+`dataset-lodes.yml`, checked monthly against the files' Last-Modified and data
+vintages) sit at `https://parquetry.geomermaids.com/census/lodes/2024/`: the
+All Jobs (JT00) workplace (WAC), residence (RAC) and origin-destination (OD)
+tables of the 50 states and DC, per 2020 Census block, one
+`state=<XX>/<wac|rac|od>.parquet` per state, LODES's columns unchanged plus
+`year` (and `interstate` for the OD aux rows), and the WAC and RAC summed per
+2020 tract and county with their TIGER/Line 2020 outlines
+(`<wac|rac>_<tract|county>.parquet`), the tracts with PMTiles. LEHD has no OD
+and WAC for Alaska after 2016 and Michigan after 2021: those two states come
+from their latest year, all three tables, and `year` says so in every row.
+The build fails unless each state's WAC jobs equal its OD jobs, and each 2024
+state's RAC equals its residents' jobs across every 2024 state's OD. Its
+collections are the `lodes-2024` sub-catalog (`scripts/datasets/lodes_catalog.py`).
+
 FEMA's National Risk Index (`scripts/datasets/nri.py`, workflow
 built and published from a workstation with
 `scripts/datasets/nri_publish_local.sh`, because www.fema.gov refuses GitHub's

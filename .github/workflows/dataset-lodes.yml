@@ -1,0 +1,165 @@
+# LEHD's LODES jobs by 2020 block: parquetry:parquetry/census/lodes/2024/.
+#
+# The All Jobs (JT00) WAC, RAC and OD files of the 50 states and DC, one
+# Parquet file per state and table, and the jobs per 2020 tract and county
+# with outlines and a map. scripts/datasets/lodes.py documents the layout,
+# the states that fall back to an earlier year (Alaska, Michigan) and the
+# gates (WAC jobs equal OD jobs per state; RAC equals OD by residence across
+# the states of the year).
+#
+# LEHD releases LODES once a year and corrects it in place now and then. A
+# monthly run compares the fingerprint of the files' Last-Modified, sizes
+# and data vintages with the published _source.json and stops when nothing
+# moved.
+#
+#   build    fetch, gate, write, roll up and tile, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            census Portolan catalog at /census/catalog/ (its lodes-2024/ part)
+#   catalog  only the catalog, rendered from the files already published
+#
+# Its own workflow, as dataset-blocks.yml: one source, its own cycle. All
+# three render the same census catalog, from what is published.
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-lodes
+
+on:
+  schedule:
+    - cron: "47 9 4 * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild even if no source has moved"
+        type: boolean
+        default: false
+
+# One catalog for all census workflows: never render it from two at once.
+concurrency:
+  group: dataset-census
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/census
+  PUBLIC: https://parquetry.geomermaids.com/census
+  LODES: lodes/2024
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Replaced in place when LEHD corrects a release: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  lodes:
+    runs-on: ubuntu-24.04
+    # About 1 GB of gzipped CSV, one state at a time (each deleted once
+    # written), and 51 TIGER/Line 2020 tract zips. On a workstation RI, DE,
+    # AK and MI (5.3 million jobs, 4.8 million OD rows) take 45 s at 4
+    # threads, 1.4 GB of memory; the 50 states and DC hold about 30 times that.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+      - name: Anything new upstream?
+        id: check
+        run: |
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "no build"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/lodes.py upstream > upstream.json
+          now=$(jq -r .fingerprint upstream.json)
+          was=$(curl -fsS "$PUBLIC/$LODES/_source.json" | jq -r .fingerprint || echo none)
+          echo "upstream $now, published $was; fallback $(jq -c .fallback upstream.json)"
+          if [ "$now" = "$was" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+      - name: Fetch, gate, write, roll up and tile
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts python scripts/datasets/lodes.py build \
+            --work-dir "$WORK" --out-dir "$WORK/out" --threads 4 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; df -h /mnt
+          jq '{complete, fallback, jobs, jobs_by_residence, rows, gate,
+               rollups: [.rollups[] | {name, features, bytes}],
+               pmtiles: [.pmtiles[] | {name, min_zoom, bytes, tiles}]}' \
+            "$WORK/out/$LODES/_manifest.json"
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+      # The data first, then the manifest and the files that name it: a
+      # reader never finds a path that is not there yet. Only lodes/2024/:
+      # census/'s own index.json and _source.json belong to dataset-census.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out/$LODES"
+          rclone copy "$out" "$REMOTE/$LODES" --include "*.parquet" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+            --transfers 8 --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/$LODES" --include "*.pmtiles" \
+            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
+            --stats 30s --stats-one-line
+          rclone copy "$out" "$REMOTE/$LODES" --include "_manifest.json" \
+            --include "ATTRIBUTION.txt" --include "_source.json" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in _manifest.json _source.json ATTRIBUTION.txt wac_tract.parquet rac_tract.parquet \
+                   wac_county.parquet rac_county.parquet wac_tract.pmtiles rac_tract.pmtiles \
+                   state=CA/od.parquet state=TX/wac.parquet state=AK/rac.parquet state=MI/od.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$LODES/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          n=$(curl -fsS "$PUBLIC/$LODES/_manifest.json" | jq '.files | length')
+          [ "$n" = "51" ] || { echo "BAD the manifest lists $n states, want 51"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-3 "$PUBLIC/$LODES/state=CA/od.parquet")
+          [ "$range" = "206" ] || { echo "BAD parquet range request -> $range"; fail=1; }
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/$LODES/wac_tract.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          type=$(curl -sI "$PUBLIC/$LODES/wac_tract.pmtiles" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print $2}')
+          [ "$type" = "application/vnd.pmtiles" ] || { echo "BAD pmtiles Content-Type: $type"; fail=1; }
+          exit $fail
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/census_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/lodes-2024/catalog.json \
+                   catalog/lodes-2024/lodes2024-wac/collection.json \
+                   catalog/lodes-2024/lodes2024-od/collection.json \
+                   catalog/lodes-2024/lodes2024-wac-tract/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
