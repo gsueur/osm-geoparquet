@@ -103,6 +103,12 @@ TECHDOC = f"{BASE}/LODESTechDoc8.5.pdf"
 SOURCE_PAGE = "https://lehd.ces.census.gov/data/"
 TIGER = "https://www2.census.gov/geo/tiger/TIGER2020"
 COUNTY_ZIP = f"{TIGER}/COUNTY/tl_2020_us_county.zip"
+# The tracts from the redistricting release (TIGER2020PL): the same 2020
+# tracts, outlines and areas equal to TIGER2020/TRACT/ (checked on RI and CT),
+# which census.gov's firewall rejects for New York (tl_2020_36_tract.zip, a
+# "Request Rejected" page, November 2026). Its NAMELSAD20 is cut to
+# "Census Tract": rebuilt from NAME20, as TIGER2020 writes it.
+TRACT_DIR = "https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/TRACT/2020"
 PREFIX = f"lodes/{YEAR}"
 GLOB = f"s3://parquetry/census/{PREFIX}/state=*/{{table}}.parquet"
 UA = {"User-Agent": "geomermaids-parquetry"}
@@ -384,11 +390,13 @@ def outlines(con, work: Path, states: list[tuple[str, str]]) -> None:
     the temp tables tiger_tract and tiger_county (GEOID, NAMELSAD, ALAND,
     AWATER, NAD83 geometry)."""
     cols = "GEOID, NAMELSAD, ALAND, AWATER, ST_SetCRS(ST_Force2D(geom), '{CRS}') AS geometry"
+    tract_cols = ("GEOID20 AS GEOID, 'Census Tract ' || NAME20 AS NAMELSAD, ALAND20 AS ALAND, "
+                  f"AWATER20 AS AWATER, ST_SetCRS(ST_Force2D(geom), '{CRS}') AS geometry")
     parts = []
     for fips, _ in states:
-        name = f"tl_2020_{fips}_tract"
-        archive = tiger_zip(work, f"{TIGER}/TRACT/{name}.zip")
-        parts.append(f"SELECT {cols.format(CRS=CRS)} FROM ST_Read('/vsizip/{archive}/{name}.shp')")
+        name = f"tl_2020_{fips}_tract20"
+        archive = tiger_zip(work, f"{TRACT_DIR}/{name}.zip")
+        parts.append(f"SELECT {tract_cols} FROM ST_Read('/vsizip/{archive}/{name}.shp')")
     con.execute(f"CREATE OR REPLACE TEMP TABLE tiger_tract AS {' UNION ALL '.join(parts)}")
     archive = tiger_zip(work, COUNTY_ZIP)
     fips = ", ".join(f"'{f}'" for f, _ in states)
@@ -456,7 +464,7 @@ Republished as Parquet by Geomermaids: https://parquetry.geomermaids.com/census/
 Source: {BASE}/<st>/{{wac,rac,od}}/ (All Jobs, JT00)
 Technical document: {TECHDOC}
 About LEHD: {SOURCE_PAGE}
-Outlines: TIGER/Line 2020 tracts and counties, {TIGER}/
+Outlines: TIGER/Line 2020 counties, {TIGER}/, and tracts, {TRACT_DIR}/
 
 Licence: a work of the US federal government, not subject to copyright in the
 United States (17 U.S.C. 105). Credit "U.S. Census Bureau, LEHD
