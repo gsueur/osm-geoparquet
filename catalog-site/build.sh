@@ -50,6 +50,11 @@ rm -f "$here/public/CNAME"
 # Source maps are two thirds of the build and no use to a reader.
 find "$here/public" -name "*.map" -delete
 echo "$BROWSER_SHA" > "$here/public/BROWSER_VERSION"
+# Cloudflare Web Analytics (cookieless) on the page, before </head>.
+BEACON="<!-- Cloudflare Web Analytics --><script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{\"token\": \"0a3120ddb2ca44efb4f7001c708a897f\"}'></script><!-- End Cloudflare Web Analytics -->"
+BEACON="$BEACON" perl -0pi -e 's|</head>|$ENV{BEACON}</head>|' "$here/public/index.html"
+grep -q "static.cloudflareinsights.com/beacon.min.js" "$here/public/index.html" \
+  || { echo "build.sh: analytics beacon not injected" >&2; exit 1; }
 
 cd "$repo"
 uv run --project scripts python scripts/catalog_root.py build --dest "$here/public"
