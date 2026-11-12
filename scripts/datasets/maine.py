@@ -68,7 +68,9 @@ import datetime as dt
 import hashlib
 import html
 import http.client
+import itertools
 import json
+import math
 import re
 import sys
 import time
@@ -298,23 +300,64 @@ def upstream(only: list[str] | None = None) -> dict:
     return out
 
 
+# A page the server cannot answer (DEP's biomonitoring drainages: 50
+# full-resolution basins are 30 MB of JSON, 500 fail) is asked again in
+# halves, down to this many features.
+MIN_PAGE = 25
+
+
+def finite(c) -> bool:
+    """Every number in a geometry's coordinates is a finite number."""
+    if isinstance(c, list):
+        return all(finite(x) for x in c)
+    return isinstance(c, (int, float)) and not isinstance(c, bool) and math.isfinite(c)
+
+
+def clean_geometry(f: dict) -> None:
+    """A geometry with a non-numeric coordinate ("NaN" for an unlocated
+    point: DEP's lake sample stations) becomes null, so it is left out and
+    counted like a feature without one, instead of failing the layer."""
+    g = f.get("geometry")
+    if not g:
+        return
+    coords = [g[k] for k in ("x", "y", "points", "paths", "rings") if k in g]
+    if not finite(coords):
+        f["geometry"] = None
+
+
 def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None = None) -> int:
     """One source layer into `table` (created on the first page), walked on
     its object id, in target_crs (default: its own). Returns the rows
     fetched."""
     target_crs = target_crs or info["crs"]
-    page_file = work / "page.json"
     last, n, created = -1, 0, con.execute(
         f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'").fetchone()[0] > 0
     oid = info["oid"]
-    while True:
+    page = info["page"]
+    for k in itertools.count():
         params = {"where": f"{oid} > {last}", "outFields": "*", "orderByFields": f"{oid} ASC",
-                  "resultRecordCount": info["page"], "outSR": target_crs.split(":")[1],
+                  "resultRecordCount": page, "outSR": target_crs.split(":")[1],
                   "returnZ": "false", "returnM": "false"}
-        doc = get(info["url"] + "/query", params)
+        while True:
+            try:
+                # Two tries before halving; the smallest page gets them all.
+                doc = get(info["url"] + "/query", params, attempts=2 if page > MIN_PAGE else 6)
+                break
+            except RuntimeError as e:
+                if page <= MIN_PAGE:
+                    raise
+                page = params["resultRecordCount"] = max(MIN_PAGE, page // 2)
+                print(f"    {table}: {e}; pages of {page}", flush=True)
         feats = doc.get("features") or []
         if not feats:
             break
+        if "NaN" in json.dumps([f.get("geometry") for f in feats]):
+            for f in feats:
+                clean_geometry(f)
+        # A page file of its own: a page GDAL failed to open stays marked as
+        # open in this thread, and any later read of that path fails
+        # ("GDALOpen() called recursively"), every layer after it.
+        page_file = work / f"page-{table}-{k}.json"
         page_file.write_text(json.dumps(doc))
         names = info.get("fold_names") or {}
         extra = "".join(
@@ -322,14 +365,16 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
             else f", '{str(v).replace(chr(39), chr(39) * 2)}'::VARCHAR AS {names.get(c, c)}"
             for c, v in (info.get("fold") or {}).items())
         sel = f"SELECT *{extra} FROM ST_Read('{page_file}')"
-        if created:
-            con.execute(f"INSERT INTO {table} BY NAME {sel}")
-        else:
-            con.execute(f"CREATE TABLE {table} AS {sel}")
-            created = True
+        try:
+            if created:
+                con.execute(f"INSERT INTO {table} BY NAME {sel}")
+            else:
+                con.execute(f"CREATE TABLE {table} AS {sel}")
+                created = True
+        finally:
+            page_file.unlink(missing_ok=True)
         n += len(feats)
         last = max(f["attributes"][oid] for f in feats)
-    page_file.unlink(missing_ok=True)
     return n
 
 
