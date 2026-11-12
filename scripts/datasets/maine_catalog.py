@@ -301,7 +301,7 @@ def build_root(themes: list[dict], total: int, updated: str) -> dict:
 
 # ---------- markdown ----------
 
-EXAMPLE = (436_000, 4_919_000)  # Augusta, State House, in EPSG:26919
+EXAMPLE = (437_652, 4_906_290)  # the State House in Augusta, in EPSG:26919
 
 
 def access_md(theme: str, entry: dict) -> str:

@@ -416,6 +416,12 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
         if r["id"] in built:
             by_theme.setdefault(r["theme"], []).append(built[r["id"]])
             continue
+        # Built here by an earlier --layer run (a local build in steps).
+        local = out / r["theme"] / f"{r['id']}.entry.json"
+        if local.is_file() and (out / r["theme"] / f"{r['id']}.parquet").is_file():
+            built[r["id"]] = json.loads(local.read_text())
+            by_theme.setdefault(r["theme"], []).append(built[r["id"]])
+            continue
         prev = {f["name"]: f for f in get_json(f"{public}/{r['theme']}/_manifest.json", {})
                 .get("files", [])}
         if r["id"] in prev:
@@ -446,7 +452,7 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
     # A layer not built keeps its published fingerprint, so the next run
     # tries it again.
     (out / "_source.json").write_text(json.dumps(
-        {r["id"]: {k: v for k, v in source[r["id"]].items() if k != "sources"}
+        {r["id"]: {k: built[r["id"]]["source"][k] for k in ("fingerprint", "last_modified", "count")}
          if r["id"] in built else published[r["id"]]
          for r in rows if r["id"] in built or r["id"] in published}, indent=2) + "\n")
     (out / "failed.json").write_text(json.dumps(failed, indent=2) + "\n")

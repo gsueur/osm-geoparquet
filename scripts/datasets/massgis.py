@@ -414,7 +414,13 @@ def write_layer(con, dest: Path, crs: str | None) -> dict:
     verify(con, dest.parent, [dest.stem])
     typ = con.execute(f"SELECT any_value(typeof(geometry)) FROM read_parquet('{dest}')").fetchone()[0]
     if crs not in typ:
-        sys.exit(f"{dest.name}: CRS lost in the rewrite ({typ}, want {crs})")
+        # DuckDB reads EPSG:4326 back as a plain GEOMETRY (it takes WGS 84 for
+        # the default): check the footer's PROJJSON id instead.
+        footer = json.loads(con.execute(f"SELECT decode(value) FROM parquet_kv_metadata('{dest}') "
+                                        "WHERE key = 'geo'").fetchone()[0])
+        ident = (footer["columns"]["geometry"].get("crs") or {}).get("id") or {}
+        if f"{ident.get('authority')}:{ident.get('code')}" != crs:
+            sys.exit(f"{dest.name}: CRS lost in the rewrite ({typ}, want {crs})")
     groups = con.execute(f"SELECT count(DISTINCT row_group_id) FROM parquet_metadata('{dest}')").fetchone()[0]
     return {"file": dest.name, "features": n, "bytes": dest.stat().st_size, "row_groups": groups,
             "geometry_types": sorted(GEOMETRY_TYPE_NAMES[t] for t in types), "crs": crs,
