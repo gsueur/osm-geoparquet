@@ -14,14 +14,21 @@ GeoParquet file per layer, and its PMTiles archive, grouped by theme:
   <out>/<theme>/_manifest.json      rows, sizes, sha256, titles, sources, tile settings
   <out>/<theme>/ATTRIBUTION.txt
 
-maine_layers.csv says which layers: one row per source layer, its theme, the
-feature service and layer number. Rows sharing an id are one published
-layer: the Department of Marine Resources publishes its shellfish P90 scores
-and NSSP classifications as one layer a year, folded here into one file
-each, with a `year` column from the CSV. The GeoLibrary also lists label
-layers, catalogue footprints, imagery indexes, tables and copies, none of
-which are published here; the 2-ft contours (about 1,000 tiles on
-gis.maine.gov) and DEP's own services are not part of it yet.
+The Maine Department of Environmental Protection publishes its own layers
+on the state's ArcGIS Server (https://gis.maine.gov/mapservices/rest/services/dep,
+map services), most of which the GeoLibrary does not list: they are the
+`dep` theme, read the same way.
+
+maine_layers.csv says which layers: one row per source layer, its theme, its
+server (empty: the GeoLibrary's feature services; `dep`: DEP's map
+services), the service and layer number. Rows sharing an id are one
+published layer, each source told apart by a column the CSV gives: `year`
+(DMR's yearly shellfish P90 scores and NSSP classifications, DEP's seagrass
+surveys and water classification networks), `category` (DEP's recycling
+layers) or `from_year` and `to_year` (DEP's water classification changes).
+The GeoLibrary also lists label layers, catalogue footprints, imagery
+indexes, tables and copies, none of which are published here; nor are the
+2-ft contours (about 1,000 tiles on gis.maine.gov).
 
 Fetching: pages of the layer's maxRecordCount (at most 2,000), walked on the
 object id (`OBJECTID > last`, ordered on it), in the layer's own spatial
@@ -39,9 +46,13 @@ and thumbnails are massgis.py's.
 
 A build reads the published _source.json and rebuilds only the layers whose
 fingerprint moved (each source's last data and schema edit and its count),
-or the ones named with --layer; a layer whose service gives no edit date is
-rebuilt every run, and scripts/filedates.py keeps its date and its files on
-the bucket as they were when its bytes did not change.
+or the ones named with --layer. A GeoLibrary layer whose service gives no
+edit date is rebuilt every run. DEP's map services give none at all: their
+fingerprint is the count, the highest object id, the fields and the month,
+so a DEP layer is rebuilt when rows are added or removed or its schema
+changes, and at least once a month for edits in place. Either way
+scripts/filedates.py keeps a file's date, and the file on the bucket, as
+they were when its bytes did not change.
 
 Usage:
   python3 scripts/datasets/maine.py upstream
@@ -74,6 +85,18 @@ from datasets.massgis import (BBOX, close_rings, get_json, thumbnail, tile_layer
 
 ORG = "https://services1.arcgis.com/RbMX0mRVOFNTdLzd/arcgis/rest/services"
 HUB = "https://mainegeolibrary-maine.hub.arcgis.com"
+DEP = "https://gis.maine.gov/mapservices/rest/services/dep"
+DEP_SITE = "https://www.maine.gov/dep/gis/datamaps/"
+# Where a CSV row's layer is read: its `server` column.
+SERVERS = {
+    "": {"url": ORG + "/{service}/FeatureServer/{layer}", "kind": "feature service",
+         "publisher": "the Maine GeoLibrary"},
+    "dep": {"url": DEP + "/{service}/MapServer/{layer}", "kind": "map service",
+            "publisher": "the Maine Department of Environmental Protection"},
+}
+# The columns that tell a folded layer's sources apart, and their types.
+FOLD_COLUMNS = {"year": "SMALLINT", "category": "VARCHAR", "from_year": "SMALLINT",
+                "to_year": "SMALLINT"}
 PUBLIC = "https://parquetry.geomermaids.com/maine"
 LAYERS_CSV = Path(__file__).with_name("maine_layers.csv")
 # The state outline the thumbnails are drawn over.
@@ -92,11 +115,19 @@ THEMES = {
     "marine": "Marine Resources and Fisheries",
     "coast": "Coastal Geology and Hazards",
     "geology": "Geology, Minerals and Groundwater",
+    "dep": "Environmental Protection (Maine DEP)",
 }
 COLORS = {
     "boundaries": "#8e44ad", "places": "#d35400", "land": "#5aa02c", "habitat": "#3f8a4a",
-    "marine": "#2f7fc1", "coast": "#1b8a8a", "geology": "#9a6b3a",
+    "marine": "#2f7fc1", "coast": "#1b8a8a", "geology": "#9a6b3a", "dep": "#c0392b",
 }
+
+
+def theme_title(theme: str) -> str:
+    """A theme's title with its publisher: the GeoLibrary, or the DEP."""
+    if theme == "dep":
+        return "Maine DEP: Environmental Protection"
+    return f"Maine GeoLibrary: {THEMES[theme]}"
 
 
 def layers() -> list[dict]:
@@ -109,23 +140,31 @@ def layers() -> list[dict]:
         sys.exit(f"{LAYERS_CSV.name}: themes not in THEMES: {sorted(unknown)}")
     out: dict[str, dict] = {}
     for r in rows:
+        server = r.get("server") or ""
+        if server not in SERVERS:
+            sys.exit(f"{LAYERS_CSV.name}: {r['id']}: unknown server {server!r}")
         e = out.setdefault(r["id"], {"id": r["id"], "theme": r["theme"], "title": r["title"],
-                                     "note": r["note"], "sources": []})
-        if e["theme"] != r["theme"]:
-            sys.exit(f"{LAYERS_CSV.name}: {r['id']} is in two themes")
-        e["sources"].append({"service": r["service"], "layer": int(r["layer"]),
-                             "year": int(r["year"]) if r["year"] else None})
+                                     "note": r["note"], "server": server, "sources": []})
+        if e["theme"] != r["theme"] or e["server"] != server:
+            sys.exit(f"{LAYERS_CSV.name}: {r['id']} is in two themes or on two servers")
+        fold = {c: (r[c] if t == "VARCHAR" else int(r[c]))
+                for c, t in FOLD_COLUMNS.items() if r.get(c)}
+        e["sources"].append({"server": server, "service": r["service"],
+                             "layer": int(r["layer"]), "fold": fold,
+                             "year": fold.get("year")})
     for e in out.values():
-        years = [s["year"] for s in e["sources"]]
-        if len(e["sources"]) > 1 and (None in years or len(set(years)) != len(years)):
-            sys.exit(f"{LAYERS_CSV.name}: {e['id']} folds several layers: each needs its own year")
+        keys = [tuple(sorted(s["fold"].items())) for s in e["sources"]]
+        cols = {tuple(sorted(s["fold"])) for s in e["sources"]}
+        if len(e["sources"]) > 1 and (() in keys or len(set(keys)) != len(keys) or len(cols) != 1):
+            sys.exit(f"{LAYERS_CSV.name}: {e['id']} folds several layers: each needs its own "
+                     f"value in the same fold columns ({', '.join(FOLD_COLUMNS)})")
     ordered = list(out.values())
     ordered.sort(key=lambda e: (e["theme"], e["id"]) != OUTLINE)
     return ordered
 
 
 def url(src: dict) -> str:
-    return f"{ORG}/{src['service']}/FeatureServer/{src['layer']}"
+    return SERVERS[src.get("server") or ""]["url"].format(**src)
 
 
 def get(u: str, params: dict | None = None, attempts: int = 6) -> dict:
@@ -164,10 +203,27 @@ def source_info(src: dict) -> dict:
     if not wkid:
         raise RuntimeError(f"{url(src)}: no spatial reference")
     edits = info.get("editingInfo") or {}
+    # A map service layer names its object id only among its fields.
+    oid = info.get("objectIdField") or next(
+        (f["name"] for f in info.get("fields") or [] if f["type"] == "esriFieldTypeOID"), None)
+    if not oid:
+        raise RuntimeError(f"{url(src)}: no object id field")
     count = get(url(src) + "/query", {"where": "1=1", "returnCountOnly": "true"})["count"]
+    max_oid = None
+    if not edits:
+        # No edit dates (DEP's map services): the highest object id and the
+        # fields stand in for them in the fingerprint.
+        stats = get(url(src) + "/query", {"where": "1=1", "outStatistics": json.dumps(
+            [{"statisticType": "max", "onStatisticField": oid, "outStatisticFieldName": "m"}])})
+        feats = stats.get("features") or [{}]
+        max_oid = (feats[0].get("attributes") or {}).get("m")
+    fields = hashlib.sha256(json.dumps(
+        [(f["name"], f["type"]) for f in info.get("fields") or []]).encode()).hexdigest()[:12]
     return {
-        "url": url(src), "year": src["year"], "name": info.get("name"),
-        "crs": f"EPSG:{wkid}", "oid": info["objectIdField"],
+        "url": url(src), "server": src.get("server") or "", "fold": src["fold"],
+        "year": src["year"], "name": info.get("name"),
+        "crs": f"EPSG:{wkid}", "oid": oid, "max_oid": max_oid, "fields": fields,
+        "field_names": sorted({f["name"].lower() for f in info.get("fields") or []}),
         "page": min(PAGE, info.get("maxRecordCount") or PAGE),
         "geometry_type": info.get("geometryType"),
         "data_edited": ms_iso(edits.get("dataLastEditDate") or edits.get("lastEditDate")),
@@ -209,6 +265,17 @@ def upstream(only: list[str] | None = None) -> dict:
     today = dt.date.today().isoformat()
     for (layer_id, _), info in zip(flat, infos):
         out.setdefault(layer_id, {"sources": []})["sources"].append(info)
+    month = today[:7]
+
+    def state(s: dict) -> str:
+        if s["data_edited"]:
+            return f"{s['url']}:{s['data_edited']}:{s['schema_edited']}:{s['count']}"
+        if s["server"] == "dep":
+            # No edit dates on DEP's map services: rows added or removed, a
+            # new field, or a new month.
+            return f"{s['url']}:{month}:{s['max_oid']}:{s['fields']}:{s['count']}"
+        return f"{s['url']}:{today}:{s['schema_edited']}:{s['count']}"
+
     for e in out.values():
         errors = [s["error"] for s in e["sources"] if "error" in s]
         if errors:
@@ -217,8 +284,7 @@ def upstream(only: list[str] | None = None) -> dict:
             e.update({"error": "; ".join(errors), "fingerprint": None,
                       "last_modified": None, "count": None})
             continue
-        key = "|".join(f"{s['url']}:{s['data_edited'] or today}:{s['schema_edited']}:{s['count']}"
-                       for s in e["sources"])
+        key = "|".join(state(s) for s in e["sources"])
         e["fingerprint"] = hashlib.sha256(key.encode()).hexdigest()[:16]
         edited = [s["data_edited"] for s in e["sources"] if s["data_edited"]]
         e["last_modified"] = max(edited) if edited else None
@@ -226,25 +292,30 @@ def upstream(only: list[str] | None = None) -> dict:
     return out
 
 
-def fetch_source(con, info: dict, work: Path, table: str) -> int:
+def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None = None) -> int:
     """One source layer into `table` (created on the first page), walked on
-    its object id. Returns the rows fetched."""
+    its object id, in target_crs (default: its own). Returns the rows
+    fetched."""
+    target_crs = target_crs or info["crs"]
     page_file = work / "page.json"
     last, n, created = -1, 0, con.execute(
         f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'").fetchone()[0] > 0
     oid = info["oid"]
     while True:
         params = {"where": f"{oid} > {last}", "outFields": "*", "orderByFields": f"{oid} ASC",
-                  "resultRecordCount": info["page"], "outSR": info["crs"].split(":")[1],
+                  "resultRecordCount": info["page"], "outSR": target_crs.split(":")[1],
                   "returnZ": "false", "returnM": "false"}
         doc = get(info["url"] + "/query", params)
         feats = doc.get("features") or []
         if not feats:
             break
         page_file.write_text(json.dumps(doc))
-        sel = f"SELECT * FROM ST_Read('{page_file}')"
-        if info["year"] is not None:
-            sel = f"SELECT *, {info['year']}::SMALLINT AS year FROM ST_Read('{page_file}')"
+        names = info.get("fold_names") or {}
+        extra = "".join(
+            f", {v}::{FOLD_COLUMNS[c]} AS {names.get(c, c)}" if FOLD_COLUMNS[c] != "VARCHAR"
+            else f", '{str(v).replace(chr(39), chr(39) * 2)}'::VARCHAR AS {names.get(c, c)}"
+            for c, v in (info.get("fold") or {}).items())
+        sel = f"SELECT *{extra} FROM ST_Read('{page_file}')"
         if created:
             con.execute(f"INSERT INTO {table} BY NAME {sel}")
         else:
@@ -260,10 +331,23 @@ def load(con, sources: list[dict], work: Path) -> tuple[str, int]:
     """The layer's sources into the temp table src, geometry 2D in the
     sources' CRS, with its bbox. Returns the CRS and the rows dropped for
     having no geometry."""
-    crs = {s["crs"] for s in sources}
-    if len(crs) != 1:
-        sys.exit(f"sources in several CRS: {sorted(crs)}")
-    crs = crs.pop()
+    # A folded layer's sources can differ in CRS (one of DEP's seagrass
+    # surveys is in NAD83(2011) / UTM 19N, EPSG:6348, the others in NAD83 /
+    # UTM 19N): the server projects the others to the most common one.
+    counts: dict[str, int] = {}
+    for s in sources:
+        counts[s["crs"]] = counts.get(s["crs"], 0) + 1
+    crs = max(counts, key=lambda c: (counts[c], c))
+    for s in sources:
+        if s["crs"] != crs:
+            s["projected_from"] = s["crs"]
+    # A fold column whose name a source already uses (DEP's 2013 and 2018
+    # seagrass surveys have a text `Year`, its redemption centers a
+    # `CATEGORY`) becomes source_<name>: the publisher's field stays as is.
+    names = {c: (f"source_{c}" if any(c in s.get("field_names", []) for s in sources) else c)
+             for c in sources[0]["fold"]}
+    for s in sources:
+        s["fold_names"] = names
     # One table per source, unioned by name: DMR's yearly layers do not all
     # have the same columns.
     tables = [f"raw_{i}" for i in range(len(sources))]
@@ -271,7 +355,7 @@ def load(con, sources: list[dict], work: Path) -> tuple[str, int]:
         for t in tables:
             con.execute(f"DROP TABLE IF EXISTS {t}")
         short = [(s, got) for s, t in zip(sources, tables)
-                 if (got := fetch_source(con, s, work, t)) != s["count"]]
+                 if (got := fetch_source(con, s, work, t, crs)) != s["count"]]
         if not short:
             break
         if attempt == 2:
@@ -320,13 +404,20 @@ def build_layer(con, r: dict, info: dict, work: Path, out: Path, no_tiles: bool)
                       outline if outline.exists() else None, color=COLORS[r["theme"]],
                       outline_crs="EPSG:26919")
     first = info["sources"][0]
-    e = {"name": r["id"], "theme": r["theme"], "title": r["title"],
+    folds = {c: [s["fold"][c] for s in info["sources"]] for c in first["fold"]}
+    names = first.get("fold_names") or {c: c for c in folds}
+    e = {"name": r["id"], "theme": r["theme"], "title": r["title"], "server": r["server"],
          "description": first["description"], "copyright": first["copyright"],
-         **({"years": [s["year"] for s in info["sources"]]} if first["year"] is not None else {}),
+         # `years` when the column is `year` (DMR's yearly layers); any fold
+         # adds `folds` (values per fold column) and `fold_columns` (each
+         # one's name in the file).
+         **({"years": folds["year"]} if names.get("year") == "year" else {}),
+         **({"folds": folds, "fold_columns": names} if folds else {}),
          **entry, "dropped_without_geometry": dropped,
          "source": {k: v for k, v in info.items() if k != "sources"} | {
              "urls": [s["url"] for s in info["sources"]],
-             "sources": [{k: s[k] for k in ("url", "name", "year", "data_edited", "count")}
+             "sources": [{k: s[k] for k in ("url", "name", "year", "fold", "data_edited",
+                                            "count", "projected_from") if k in s}
                          for s in info["sources"]]},
          "pmtiles": tiles, "thumbnail": thumb,
          "built": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -337,6 +428,8 @@ def build_layer(con, r: dict, info: dict, work: Path, out: Path, no_tiles: bool)
 
 def attribution(theme: str, entries: list[dict]) -> str:
     lines = "\n".join(f"  {e['name']:<44} {e['source']['urls'][0]}" for e in entries)
+    if theme == "dep":
+        return dep_attribution(lines)
     return f"""\
 # Data attribution
 
@@ -377,9 +470,54 @@ This data is packaged and hosted by Geomermaids:
 """
 
 
+def dep_attribution(lines: str) -> str:
+    return f"""\
+# Data attribution
+
+These layers are published by the Maine Department of Environmental
+Protection (DEP) on the State of Maine's ArcGIS Server:
+
+  Services:   {DEP}
+  Data page:  {DEP_SITE}
+  Producer:   Maine Department of Environmental Protection
+
+{THEMES["dep"]}: each layer and the map service layer it is read from (each
+one's count, highest object id and the producer named in its copyright text
+are in _manifest.json):
+
+{lines}
+
+Terms: DEP's map services state no terms of use and no licence; their
+copyright text names the producer (the Maine DEP, with partners for some
+layers, such as the seagrass surveys). The Maine GeoLibrary's items,
+including the DEP layers it lists, state "{TERMS}" Credit the Maine
+Department of Environmental Protection, and the partners a layer names, when
+you use it. The data is provided as is, without warranty.
+
+## What was changed here
+
+One GeoParquet 2.0 file per layer. Folded into one file each: the seagrass
+and eelgrass surveys (2013 to 2025, a `year` column), the recycling and
+redemption locations (eight layers, a `category` column: the layer's name),
+the water classification of rivers and streams (eleven years from 1965 to
+2019, `year`) and its changes between two classifications (`from_year`,
+`to_year`). Columns and values are DEP's, unchanged; features without a
+geometry are left out (counted in _manifest.json). The geometry is 2D, in
+the layer's own CRS as published (UTM zone 19N or WGS 84), with a `bbox`
+column declared as the GeoParquet covering, rows sorted along a Hilbert
+curve. The PMTiles archives beside them are derived for web maps, in
+lon/lat.
+
+This data is packaged and hosted by Geomermaids:
+  https://geoparquet.geomermaids.com/
+  contact: gsueur@geomermaids.com
+"""
+
+
 def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: bool,
-          no_tiles: bool) -> None:
+          no_tiles: bool, max_minutes: float | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)  # written to even when nothing is built
     rows = layers()
     if only and (unknown := set(only) - {r["id"] for r in rows}):
         sys.exit(f"not in {LAYERS_CSV.name}: {sorted(unknown)}")
@@ -432,7 +570,13 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
             todo.remove(r)
     print(f"  {len(rows)} layers, {len(todo)} to build"
           + (f", {len(built)} already built here" if built else ""), flush=True)
+    deferred: list[str] = []
     for r in todo:
+        if max_minutes and time.monotonic() - t0 > max_minutes * 60:
+            # The rest waits for the next run: not in _source.json, so it
+            # counts as moved then (a first build is longer than a job may run).
+            deferred.append(r["id"])
+            continue
         try:
             built[r["id"]] = build_layer(con, r, source[r["id"]], work, out, no_tiles)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - one layer must not stop the others
@@ -488,7 +632,7 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
         (folder / "ATTRIBUTION.txt").write_text(attribution(theme, entries))
         crs = {e["crs"] for e in entries}
         (folder / "_manifest.json").write_text(json.dumps({
-            "state_name": f"Maine GeoLibrary: {THEMES[theme]}",
+            "state_name": theme_title(theme),
             **({"crs": crs.pop()} if len(crs) == 1 else {}),
             "total_features": sum(e["features"] for e in entries),
             "themes": {e["name"]: e["features"] for e in entries},
@@ -497,8 +641,8 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
             "pmtiles": [{"name": e["name"], **e["pmtiles"]} for e in entries if e.get("pmtiles")],
         }, indent=2) + "\n")
     (out / "index.json").write_text(json.dumps({"datasets": [
-        {"path": theme, "code": theme, "name": f"Maine GeoLibrary: {title}"}
-        for theme, title in THEMES.items() if theme in by_theme]}, indent=2) + "\n")
+        {"path": theme, "code": theme, "name": theme_title(theme)}
+        for theme in THEMES if theme in by_theme]}, indent=2) + "\n")
     (out / "snapshots.json").write_text(json.dumps({"latest": "", "snapshots": []}) + "\n")
     # A layer not built keeps its published fingerprint, so the next run
     # tries it again.
@@ -507,6 +651,9 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
          if r["id"] in built else published[r["id"]]
          for r in rows if r["id"] in built or r["id"] in published}, indent=2) + "\n")
     (out / "failed.json").write_text(json.dumps(failed, indent=2) + "\n")
+    if deferred:
+        print(f"  time budget of {max_minutes:.0f} min reached: {len(deferred)} layers left for "
+              f"the next run: {', '.join(deferred)}", flush=True)
     if failed:
         print(f"  {len(failed)} layers failed (failed.json): {', '.join(failed)}", flush=True)
 
@@ -523,6 +670,8 @@ def main() -> None:
     b.add_argument("--layer", action="append", help="build this layer (repeatable)")
     b.add_argument("--force", action="store_true", help="build every layer")
     b.add_argument("--no-tiles", action="store_true", help="GeoParquet only (a test run)")
+    b.add_argument("--max-minutes", type=float, default=None,
+                   help="start no layer after this many minutes; the rest waits for the next run")
     args = p.parse_args()
     if args.cmd == "upstream":
         src = upstream(args.layer)
@@ -533,7 +682,7 @@ def main() -> None:
                           for k, v in src.items() if not v.get("error")}, indent=2))
         return
     build(args.work_dir, args.out_dir, public=args.public, only=args.layer, force=args.force,
-          no_tiles=args.no_tiles)
+          no_tiles=args.no_tiles, max_minutes=args.max_minutes)
 
 
 if __name__ == "__main__":

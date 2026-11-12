@@ -311,15 +311,24 @@ The Maine GeoLibrary (`scripts/datasets/maine.py`, workflow
 one PMTiles archive per statewide vector layer, 240 layers in 7 themes
 (boundaries and parcels, places, land, habitat, marine, coast, geology), read
 page by page from the GeoLibrary's ArcGIS Online feature services, the rows
-checked against each service's count. `maine_layers.csv` lists them, one row
-per source layer; the Department of Marine Resources' yearly shellfish P90
-scores and NSSP classifications are folded into one file each with a `year`
-column. Label layers, catalogue footprints, imagery indexes, tables and
-copies are left out, and so are the 2-ft contours and DEP's own services for
-now. Columns are the GeoLibrary's and each layer keeps its CRS (UTM zone 19N,
-EPSG:26919, for most). The only terms stated are "Access: Public. Use: User
-accepts risk." A weekly run rebuilds the layers whose last edit or count
-moved, and uploads only the files whose bytes changed. Portolan catalog at
+checked against each service's count, and 75 layers in an eighth, `dep`: the
+Maine Department of Environmental Protection's own map services on
+gis.maine.gov (sites and spills, tanks, landfills, wastewater discharges,
+PFAS, water quality assessment and classification, lakes, biomonitoring,
+seagrass, dams, natural drainageways). `maine_layers.csv` lists them, one row
+per source layer with its server; layers published one per year or per kind
+are folded into one file each: the Department of Marine Resources' shellfish
+P90 scores and NSSP classifications and DEP's seagrass surveys and water
+classification networks (`year`), DEP's water classification changes
+(`from_year`, `to_year`) and recycling locations (`category`). Label layers,
+catalogue footprints, imagery indexes, tables and copies are left out, and so
+are the 2-ft contours. Columns are the publishers' and each layer keeps its
+CRS (UTM zone 19N, EPSG:26919, for most). The only terms stated are "Access:
+Public. Use: User accepts risk." (the GeoLibrary's); DEP's services state
+none. A weekly run rebuilds the layers whose last edit or count moved (DEP's
+give no edit dates: count, highest object id, fields, and once a month), and
+uploads only the files whose bytes changed; a run starts no layer after 4.5
+hours and leaves the rest to the next. Portolan catalog at
 `https://parquetry.geomermaids.com/maine/catalog/catalog.json`
 (`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
 

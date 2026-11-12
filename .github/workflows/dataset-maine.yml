@@ -4,7 +4,8 @@
 # maine/<theme>/. scripts/datasets/maine.py documents the layout and the
 # fetch; scripts/datasets/maine_layers.csv says which layers are built.
 #
-# The layers are ArcGIS Online feature services. A weekly run compares each
+# The layers are the GeoLibrary's ArcGIS Online feature services and, for the
+# dep theme, the Maine DEP's map services on gis.maine.gov. A weekly run compares each
 # layer's fingerprint (its sources' last data and schema edits and counts)
 # with the published maine/_source.json and rebuilds only the layers that
 # moved; the manifests keep the others' published entries. Of what is
@@ -59,9 +60,12 @@ jobs:
   maine:
     runs-on: ubuntu-24.04
     # A weekly run rebuilds a few layers in minutes. A forced run reads all
-    # 240 layers (4.5 million features) from ArcGIS Online page by page:
-    # about two hours, the 1.07 million nearshore bathymetry points, the
-    # E911 addresses and the parcels most of it.
+    # 240 GeoLibrary layers (4.5 million features) from ArcGIS Online page by
+    # page: about two hours, the 1.07 million nearshore bathymetry points, the
+    # E911 addresses and the parcels most of it. The 75 dep layers (2.3
+    # million features, a slower server) add about as much again. A first,
+    # full build can outlast the job: --max-minutes starts no layer after
+    # 4.5 hours, publishes what is built and leaves the rest to the next run.
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
@@ -106,7 +110,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           mkdir -p "$TMPDIR"
           /usr/bin/time -v uv run --project scripts --with matplotlib python scripts/datasets/maine.py build \
-            --work-dir "$WORK/tmp" --out-dir "$WORK/out" \
+            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 270 \
             ${{ inputs.force && '--force' || '' }} 2> >(tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
           du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"

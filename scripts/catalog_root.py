@@ -89,7 +89,8 @@ DATASETS = [
     ("massgis", "The statewide vector layers of the Massachusetts Bureau of Geographic "
                 "Information, checked weekly.", SITE),
     ("maine", "The Maine GeoLibrary's statewide layers: parcels, E911 addresses and roads, "
-              "conserved lands, habitat, marine fisheries, coastal hazards and geology, "
+              "conserved lands, habitat, marine fisheries, coastal hazards and geology, and "
+              "the Maine DEP's sites, spills, PFAS, water quality and lakes layers, "
               "checked weekly.", SITE),
 ]
 
