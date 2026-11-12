@@ -105,18 +105,35 @@ jobs:
           retention-days: 3
 
       # Order matters: the delivery files, then the index and manifests that
-      # name them, then the repository files. A reader never finds a path
-      # that is not there yet. copy, never sync: out/ holds only what changed.
+      # name them, then the repository files, then the stamp. A reader never
+      # finds a path that is not there yet. copy, never sync: out/ holds only
+      # what changed.
+      #
+      # The stamp (scripts/filedates.py, nfhl/_files/nfhl.json) gives each
+      # delivery its `updated`, when its bytes last changed, and `checked`.
+      # out/ holds only the deliveries this run rebuilt, so the stamp keeps
+      # the published entries of the others. A delivery FEMA republished with
+      # the same content keeps its date and is not uploaded again.
       - name: Publish
         if: env.PUBLISH == 'true'
         run: |
           out="$WORK/out"
-          rclone copy "$out/latest" "$REMOTE/latest" --include "state=*/*.parquet" \
-            --header-upload "$CACHE" --transfers 8 --stats-one-line
+          uv run --project scripts python scripts/filedates.py stamp --out-dir "$out" \
+            --name nfhl --public "$PUBLIC" --since "$(date -u +%F)"
+          deliveries=$(mktemp)
+          grep -E '^latest/state=[^/]+/[^/]+\.parquet$' "$out/_files/nfhl.upload" > "$deliveries" || true
+          if [ -s "$deliveries" ]; then
+            rclone copy "$out" "$REMOTE" --files-from "$deliveries" --no-traverse --ignore-times \
+              --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
+              --transfers 8 --stats-one-line
+          fi
           rclone copy "$out/latest" "$REMOTE/latest" --exclude "state=*/*.parquet" --ignore-times \
             --header-upload "$CACHE" --transfers 16 --stats-one-line
           rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --ignore-times --header-upload "$CACHE"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: counts and the index checksum

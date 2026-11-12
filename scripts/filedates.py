@@ -171,6 +171,56 @@ def stamp(out: Path, name: str, published: dict | None, since: str, now: str, *,
     }
 
 
+def stamp_digests(files: dict[str, dict], name: str, published: dict | None, since: str,
+                  now: str, *, complete: bool = False) -> dict:
+    """stamp() for files no single machine holds, from the sha256 and size
+    the build's manifests record (the wetlands release: written by many jobs
+    and copied server-side, 70 GB). Same rules and output, `upload` included.
+
+    files maps each path (relative to the dataset root) to {"sha256",
+    "bytes"}, and optionally "built", that file's build time (default now:
+    a re-run then gives the same dates), or "follows", the GeoParquet path
+    a PMTiles is drawn from (it takes that file's dates)."""
+    before = (published or {}).get("files", {})
+    entries: dict[str, dict] = {}
+    upload: set[str] = set()
+    for rel, f in sorted(files.items()):
+        if f.get("follows"):
+            continue
+        t = f.get("built") or now
+        old = before.get(rel)
+        if old is None:
+            updated = since if published is None else t
+        else:
+            updated = (old.get("updated") or since) if old["sha256"] == f["sha256"] else t
+        entries[rel] = {"sha256": f["sha256"], "bytes": f["bytes"], "updated": updated,
+                        "checked": t}
+        if updated == t or old is None:
+            upload.add(rel)
+    if not complete:
+        entries = {**{k: v for k, v in before.items() if k.endswith(DATA)}, **entries}
+    for rel, f in sorted(files.items()):
+        twin = f.get("follows")
+        if not twin:
+            continue
+        if twin not in entries:
+            sys.exit(f"{rel} follows {twin}, which is not stamped")
+        entries[rel] = {"sha256": f["sha256"], "bytes": f["bytes"], "follows": twin,
+                        "updated": entries[twin]["updated"], "checked": entries[twin]["checked"]}
+        if twin in upload or rel not in before:
+            upload.add(rel)
+    if not complete:
+        entries = {**before, **entries}
+    return {
+        "name": name,
+        "checked": now,
+        "updated": max((e["updated"] for e in entries.values()), default=since),
+        "since": (published or {}).get("since", since),
+        "files": entries,
+        "upload": sorted(upload),
+    }
+
+
 def walk(url: str):
     """Every collection of a published catalog tree, by its child links."""
     doc = fetch_json(url)

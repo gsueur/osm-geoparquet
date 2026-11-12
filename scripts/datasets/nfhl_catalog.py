@@ -43,6 +43,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import filedates
 from datasets.nfhl import ATTRIBUTION, INDEX, LATEST, ROW_GROUP_ROWS, STEM, state_name
 
 import catalog as shared  # scripts/catalog.py
@@ -76,6 +77,12 @@ CATALOG_ID = "fema-nfhl-geoparquet"
 COLLECTION_ID = STEM.replace("_", "-")
 PARTITION_KEY = "state"
 THUMB = REPO / "catalog" / "thumbnails" / "nfhl" / f"{STEM}.png"
+# The workflow stamps what it uploads (scripts/filedates.py): each delivery's
+# `updated` is when its bytes last changed, `checked` the last run.
+STAMP = "_files/nfhl.json"
+DATES = (filedates.DATES_MD + "\n\nEvery run compares every delivery with FEMA's list, so the "
+         "collection's and the catalog's `checked` is the last run; a delivery's own "
+         "`checked` is the last run that rebuilt it.")
 PIPELINE_URL = "https://github.com/gsueur/nfhl-geoparquet-workshop"
 FEMA_NFHL_URL = "https://hazards.fema.gov/femaportal/NFHL/searchResult"
 MSC_URL = "https://msc.fema.gov/portal/home"
@@ -499,6 +506,8 @@ def collection_readme(col: dict, manifest: dict) -> str:
 
 {provenance(manifest)}
 
+{DATES}
+
 ## License
 
 {LICENSE_MD}
@@ -571,6 +580,8 @@ shows the queries.
 
 {provenance(manifest)}
 
+{DATES}
+
 ## License
 
 {LICENSE_MD}
@@ -610,6 +621,8 @@ republishes it (checked daily, last {manifest['updated']}).
 - `bbox` is a per-row box declared as the GeoParquet `covering`; filter on
   it before touching geometry.
 - Public domain (FEMA). Not for official flood zone determinations.
+
+{DATES}
 """
 
 
@@ -653,7 +666,29 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, col, manifest))
     (dest / "AGENTS.md").write_text(root_agents(col, manifest))
+    stamp_dates(out_dir, dest)
     return manifest
+
+
+def stamp_dates(out_dir: Path | None, dest: Path) -> None:
+    """The stamp's dates on the rendered tree (filedates.apply): the run's own
+    stamp when there is one, else the published one. A run compares every
+    delivery with FEMA's list, so the collection and the catalog were
+    checked by this run, not only when a delivery was last rebuilt; a run
+    that could not reach FEMA checked nothing."""
+    local = out_dir / STAMP if out_dir is not None else None
+    dates = filedates.load(PUBLIC_DATA, local if local and local.is_file()
+                           else f"{PUBLIC_DATA}/{STAMP}")
+    filedates.apply(dest, dates)
+    run = out_dir / "run.json" if out_dir is not None else None
+    if not dates.meta or (run and run.is_file() and json.loads(run.read_text()).get("unreachable")):
+        return
+    checked = dates.meta[0]["checked"]
+    for path in (dest / COLLECTION_ID / "collection.json", dest / "catalog.json"):
+        doc = json.loads(path.read_text())
+        if "checked" in doc:
+            doc["checked"] = max(doc["checked"], checked)
+            write_json(path, doc)
 
 
 def check(tree: Path, *, remote_data: bool) -> int:

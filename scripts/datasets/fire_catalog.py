@@ -47,6 +47,7 @@ from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
@@ -74,6 +75,13 @@ PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "us-wildfire"
+# Each group's upload stamps what it uploads (scripts/filedates.py): a file's
+# `updated` is when its bytes last changed, `checked` the last build.
+GROUPS = ("wfigs", "mtbs")
+
+
+def stamp_path(group: str) -> str:
+    return f"{group}/latest/_files/fire-{group}.json"
 TITLE = "US wildfire perimeters: NIFC WFIGS and MTBS"
 THUMBS = REPO / "catalog" / "thumbnails" / "fire"
 XML_TYPE = "application/xml"
@@ -644,6 +652,8 @@ Files under `{PUBLIC_DATA}/`: `wfigs/latest/` (rebuilt several times a day) and
 `ATTRIBUTION.txt`. Join to people and buildings with the other parquetry
 datasets: census/ (TIGER/Line, ACS), padus/, nfhl/, addresses/.
 
+{filedates.DATES_MD}
+
 ## License
 
 {LICENSE_MD}
@@ -669,6 +679,8 @@ Layout: `{PUBLIC_DATA}/wfigs/latest/<layer>.parquet` and
 the layer by time: `current` burning now, `year_to_date` this year,
 `all_since_2016` WFIGS's history, `mtbs_perimeters` large fires since 1984.
 The IRWIN id joins them. {NOT_FOR_SAFETY} Credit: {WFIGS_CREDIT}; {MTBS_CREDIT}.
+
+{filedates.DATES_MD}
 """
 
 
@@ -679,7 +691,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    manifests = {g: read_manifest(g, out_dir) for g in ("wfigs", "mtbs")}
+    manifests = {g: read_manifest(g, out_dir) for g in GROUPS}
     if not any(manifests.values()):
         sys.exit("neither group is built or published: nothing to catalog")
     collections, total = [], 0
@@ -714,6 +726,9 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections))
     (dest / "AGENTS.md").write_text(root_agents(collections))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *(
+        out_dir / stamp_path(g) if out_dir and (out_dir / stamp_path(g)).is_file()
+        else f"{PUBLIC_DATA}/{stamp_path(g)}" for g in GROUPS)))
     return total
 
 
