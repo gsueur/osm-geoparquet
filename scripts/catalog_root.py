@@ -36,6 +36,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import filedates  # noqa: E402
 from catalog import (CONTACT_EMAIL, LOGO, PORTOLAN_SCHEMA, PUBLIC_BASE, REPO,  # noqa: E402
                      REPO_URL, check, md_link, now_rfc3339, write_json)
 
@@ -119,7 +120,8 @@ def read_children() -> list[dict]:
         cat = fetch(child_url(prefix))
         lic = next((link for link in cat["links"] if link["rel"] == "license"), {})
         out.append({"url": child_url(prefix), "title": cat["title"], "summary": summary,
-                    "license": lic.get("title", "see the catalog"), "page": page})
+                    "license": lic.get("title", "see the catalog"), "page": page,
+                    "updated": cat.get("updated"), "checked": cat.get("checked")})
     return out + [dict(e) for e in EXTERNAL]
 
 
@@ -223,7 +225,12 @@ per layer).
 
 def render(dest: Path) -> int:
     children = read_children()
-    root = build_root(children, now_rfc3339())
+    # When the data last changed anywhere below, and the last check
+    # (scripts/filedates.py); not when this root was rendered.
+    dated = [c for c in children if c.get("updated")]
+    updated, checked = filedates.rollup(dated) if dated else (now_rfc3339(), now_rfc3339())
+    root = build_root(children, updated)
+    root["checked"] = checked
     dest.mkdir(parents=True, exist_ok=True)
     write_json(dest / "catalog.json", root)
     (dest / "README.md").write_text(root_readme(root, children))
