@@ -61,7 +61,8 @@ from catalog import (
 )
 from datasets.gaul import GROUP_BYTES
 from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
-from datasets.maine import COLORS, HUB, ORG, TERMS, THEMES, layers
+from datasets.maine import (COLORS, DEP, DEP_SITE, HUB, ORG, SERVERS, TERMS, THEMES,  # noqa: E402
+                            layers, theme_title)
 from datasets.massgis_catalog import PROJ_EXT, footer, lonlat_extent, short, style
 from datasets.pmtiles import PMTILES_TYPE
 
@@ -111,6 +112,81 @@ LICENSE_MD = (
     "Credit the State of Maine, the Maine GeoLibrary and the agency each layer names when "
     "you use it. The data is provided as is, without warranty.")
 
+# The dep theme: the Maine DEP's own map services.
+DEP_ATTRIBUTION = "Maine Department of Environmental Protection"
+DEP_LICENSE_LINK = {
+    "rel": "license",
+    "href": DEP_SITE,
+    "type": "text/html",
+    "title": (f'Maine DEP: no terms stated on its map services; the GeoLibrary\'s items state '
+              f'"{TERMS}"'),
+}
+DEP_VIA_LINK = {
+    "rel": "via",
+    "href": DEP_SITE,
+    "type": "text/html",
+    "title": "Maine DEP GIS data and maps, where the layers are published",
+}
+DEP_PROVIDERS = [
+    {
+        "name": "Maine Department of Environmental Protection",
+        "description": "Maine's environmental regulator. Publishes its sites, permits, "
+                       "water quality, lakes, PFAS and seagrass layers as map services on "
+                       "the State of Maine's ArcGIS Server.",
+        "url": DEP_SITE,
+        "roles": ["producer", "licensor"],
+    },
+    PROVIDERS[1],
+]
+DEP_LICENSE_MD = (
+    "The Maine DEP's map services state no terms of use and no licence; their copyright text "
+    "names the producer. The Maine GeoLibrary's items, including the DEP layers it lists, "
+    f'state: "{TERMS}" Credit the Maine Department of Environmental Protection, and the '
+    "partners a layer names, when you use it. The data is provided as is, without warranty.")
+
+
+def terms(theme: str) -> dict:
+    """Who publishes a theme and on what terms: the GeoLibrary, or the DEP."""
+    if theme == "dep":
+        return {"attribution": DEP_ATTRIBUTION, "license": DEP_LICENSE_LINK,
+                "via": DEP_VIA_LINK, "providers": DEP_PROVIDERS, "license_md": DEP_LICENSE_MD,
+                "keyword": "Maine DEP", "sources": DEP}
+    return {"attribution": ATTRIBUTION, "license": LICENSE_LINK, "via": VIA_LINK,
+            "providers": PROVIDERS, "license_md": LICENSE_MD, "keyword": "Maine GeoLibrary",
+            "sources": ORG}
+
+
+def folds_of(entry: dict) -> tuple[dict, dict]:
+    """A folded layer's values per fold column, and each column's name in
+    the file (source_<name> where the publisher already uses the name)."""
+    folds = entry.get("folds") or ({"year": entry["years"]} if entry.get("years") else {})
+    return folds, entry.get("fold_columns") or {c: c for c in folds}
+
+
+def fold_text(entry: dict) -> str:
+    """How a folded layer's sources are told apart, for its description."""
+    folds, col = folds_of(entry)
+    n = len(entry["source"]["urls"])
+    if "from_year" in folds:
+        return (f", one per pair of classifications in the `{col['from_year']}` and "
+                f"`{col['to_year']}` columns, {min(folds['from_year'])} to "
+                f"{max(folds['to_year'])}")
+    if "year" in folds:
+        return (f", one a year: {min(folds['year'])} to {max(folds['year'])}, in the "
+                f"`{col['year']}` column")
+    if "category" in folds:
+        return f", one per category, in the `{col['category']}` column ({n} categories)"
+    return ""
+
+
+def fold_years(entry: dict) -> tuple[int, int] | None:
+    folds, _ = folds_of(entry)
+    if "from_year" in folds:
+        return min(folds["from_year"]), max(folds["to_year"])
+    if "year" in folds:
+        return min(folds["year"]), max(folds["year"])
+    return None
+
 
 # ---------- measured inputs ----------
 
@@ -149,18 +225,23 @@ def build_collection(theme: str, entry: dict, extent: list[float],
     src = entry["source"]
     lm = src.get("last_modified") or entry["built"]
     tiles = entry.get("pmtiles")
-    years = entry.get("years")
+    years = fold_years(entry)
+    t = terms(theme)
+    server = SERVERS[entry.get("server") or ""]
     first_url = src["urls"][0]
+    projected = [x for x in src.get("sources", []) if x.get("projected_from")]
     description = (
         f"{short(entry.get('description')) or title}\n\n"
-        f"The Maine GeoLibrary's layer, {entry['features']:,} rows, read from its feature "
-        f"service ({first_url}"
-        + (f" and {len(src['urls']) - 1} more, one a year: {min(years)} to {max(years)}, "
-           f"in the `year` column" if years else "")
+        f"{server['publisher'][0].upper()}{server['publisher'][1:]}'s layer, "
+        f"{entry['features']:,} rows, read from its {server['kind']} ({first_url}"
+        + (f" and {len(src['urls']) - 1} more{fold_text(entry)}" if len(src["urls"]) > 1 else "")
         + f"). Columns and values unchanged; one GeoParquet 2.0 file, 2D geometry in "
-        f"{entry['crs']} as published, with a bbox covering, Hilbert-sorted, and a PMTiles "
+        f"{entry['crs']} as published"
+        + (f" (the server projected {len(projected)} of the sources from "
+           f"{', '.join(sorted({x['projected_from'] for x in projected}))})" if projected else "")
+        + f", with a bbox covering, Hilbert-sorted, and a PMTiles "
         f"archive for web maps, read in place over HTTPS or the anonymous S3 endpoint "
-        f"{S3_ENDPOINT}. Credit: {ATTRIBUTION}.")
+        f"{S3_ENDPOINT}. Credit: {t['attribution']}.")
     assets = {
         "data": {
             "href": f"{PUBLIC_BASE}/{path}",
@@ -210,16 +291,16 @@ def build_collection(theme: str, entry: dict, extent: list[float],
         "id": name,
         "title": title,
         "description": description,
-        "keywords": ["Maine", "Maine GeoLibrary", THEMES[theme], "GeoParquet",
+        "keywords": ["Maine", t["keyword"], THEMES[theme], "GeoParquet",
                      *(["PMTiles"] if tiles else [])],
         "license": "other",
-        "attribution": ATTRIBUTION,
+        "attribution": t["attribution"],
         "updated": updated,
-        "providers": PROVIDERS,
+        "providers": t["providers"],
         "extent": {
             "spatial": {"bbox": [extent]},
-            "temporal": {"interval": [[f"{min(years)}-01-01T00:00:00Z",
-                                       f"{max(years)}-12-31T23:59:59Z"] if years else [lm, lm]]},
+            "temporal": {"interval": [[f"{years[0]}-01-01T00:00:00Z",
+                                       f"{years[1]}-12-31T23:59:59Z"] if years else [lm, lm]]},
         },
         "table:row_count": entry["features"],
         "table:primary_geometry": "geometry",
@@ -230,10 +311,10 @@ def build_collection(theme: str, entry: dict, extent: list[float],
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             md_link("describedby", "./README.md", f"{title}: README"),
             md_link("agents", "./AGENTS.md", f"{title}: agent guide"),
-            LICENSE_LINK,
-            VIA_LINK,
+            t["license"],
+            t["via"],
             *({"rel": "derived_from", "href": u, "type": "text/html",
-               "title": f"The feature service layer this was read from ({u.split('/services/')[1]})"}
+               "title": f"The {server['kind']} layer this was read from ({u.split('/services/')[1]})"}
               for u in src["urls"]),
             {"rel": "alternate", "href": f"{theme_url(theme)}/", "type": "text/html",
              "title": "Browse the files"},
@@ -243,15 +324,23 @@ def build_collection(theme: str, entry: dict, extent: list[float],
 
 
 def build_theme(theme: str, collections: list[dict], updated: str) -> dict:
+    t = terms(theme)
+    if theme == "dep":
+        about = ("The Maine Department of Environmental Protection's own layers, read from its "
+                 "map services: regulated sites and spills, storage tanks, landfills, "
+                 "wastewater discharges, PFAS investigation, water quality assessment and "
+                 "classification, lakes, biomonitoring, seagrass surveys, dams and natural "
+                 "drainageways")
+    else:
+        about = f"The Maine GeoLibrary's statewide layers on {THEMES[theme].lower()}"
     return {
         "type": "Catalog",
         "stac_version": "1.1.0",
         "stac_extensions": [PORTOLAN_SCHEMA],
         "id": f"maine-{theme}",
-        "title": f"Maine GeoLibrary: {THEMES[theme]}",
-        "description": (f"The Maine GeoLibrary's statewide layers on {THEMES[theme].lower()}, "
-                        f"one collection per layer ({len(collections)}). Credit: "
-                        f"{ATTRIBUTION}."),
+        "title": theme_title(theme),
+        "description": (f"{about}, one collection per layer ({len(collections)}). Credit: "
+                        f"{t['attribution']}."),
         "updated": updated,
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
@@ -260,7 +349,7 @@ def build_theme(theme: str, collections: list[dict], updated: str) -> dict:
                "title": c["title"]} for c in collections),
             md_link("describedby", "./README.md", f"{THEMES[theme]}: README"),
             md_link("agents", "./AGENTS.md", f"{THEMES[theme]}: agent guide"),
-            LICENSE_LINK,
+            t["license"],
             {"rel": "related", "href": f"{theme_url(theme)}/ATTRIBUTION.txt",
              "type": "text/plain", "title": "Attribution, sources and what was changed"},
         ],
@@ -278,9 +367,14 @@ def build_root(themes: list[dict], total: int, updated: str) -> dict:
             f"Statewide vector layers of the State of Maine, from the Maine GeoLibrary's "
             f"feature services, republished as GeoParquet and PMTiles: {total} collections in "
             f"{len(themes)} themes, from parcels, E911 addresses and roads to conserved lands, "
-            f"wildlife habitat, marine fisheries, coastal hazards and geology. Columns and "
-            f"values unchanged, in each layer's own CRS (UTM zone 19N, EPSG:26919, for most). "
-            f"Credit: {ATTRIBUTION}."),
+            f"wildlife habitat, marine fisheries, coastal hazards and geology"
+            + (", and the Maine Department of Environmental Protection's own layers (sites, "
+               "spills, tanks, PFAS, water quality, lakes, seagrass) from its map services"
+               if any(t["_theme"] == "dep" for t in themes) else "")
+            + f". Columns and values unchanged, in each layer's own CRS (UTM zone 19N, "
+            f"EPSG:26919, for most). Credit: {ATTRIBUTION}"
+            + (f"; {DEP_ATTRIBUTION} for its layers" if any(t["_theme"] == "dep" for t in themes)
+               else "") + "."),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{CATALOG_URL}/catalog.json", "type": "application/json"},
@@ -358,7 +452,7 @@ def collection_readme(col: dict, theme: str, entry: dict) -> str:
 
 ## Provenance
 
-The Maine GeoLibrary's feature service, read page by page on the object id in
+{SERVERS[entry.get("server") or ""]["publisher"][0].upper()}{SERVERS[entry.get("server") or ""]["publisher"][1:]}'s {SERVERS[entry.get("server") or ""]["kind"]}, read page by page on the object id in
 its own spatial reference, the rows checked against the service's count.
 [maine.py]({REPO_URL}/blob/main/scripts/datasets/maine.py) keeps every column
 and value, makes the geometry 2D, keeps its CRS, adds the `bbox` covering,
@@ -370,7 +464,7 @@ Copyright, from the service: "{short(entry["copyright"], 300)}"''' if entry.get(
 
 ## License
 
-{LICENSE_MD}
+{terms(theme)["license_md"]}
 """
 
 
@@ -379,7 +473,7 @@ def collection_agents(col: dict, theme: str, entry: dict) -> str:
     return f"""\
 # {col['title']}: agent guide
 
-{entry['features']:,} rows; geometry column `geometry` in {crs}, `bbox` covering in the same units.{" Column `year`: the DMR layer the row comes from." if entry.get("years") else ""}
+{entry['features']:,} rows; geometry column `geometry` in {crs}, `bbox` covering in the same units.{fold_note(entry)}
 
 ## Access
 
@@ -389,8 +483,25 @@ def collection_agents(col: dict, theme: str, entry: dict) -> str:
 
 - Filter on `bbox` before an exact predicate; the file is Hilbert-sorted, so a small area reads few row groups. Coordinates are in the layer's CRS, not lon/lat unless it is EPSG:4326 or EPSG:4269: transform your point first, e.g. `ST_Transform(ST_Point(lon, lat), 'OGC:CRS84', '{crs}', always_xy := true)`.
 - For a map, use the `rel: pmtiles` link and the `default` style asset.
-- Credit: {ATTRIBUTION}.
+- Credit: {terms(theme)["attribution"]}.
 """
+
+
+def fold_note(entry: dict) -> str:
+    """The agent guide's line on a folded layer's extra columns."""
+    folds, col = folds_of(entry)
+    same = (" (named source_ because the publisher's own field already has the name)"
+            if any(v != c for c, v in col.items()) else "")
+    if "from_year" in folds:
+        return (f" Columns `{col['from_year']}` and `{col['to_year']}`: the two classifications "
+                f"a row's change is between; filter on them for one period{same}.")
+    if "year" in folds:
+        return (f" Column `{col['year']}`: the yearly source layer the row comes from; filter on "
+                f"it for one year{same}.")
+    if "category" in folds:
+        return (f" Column `{col['category']}`: the source layer the row comes from; filter on it "
+                f"for one category{same}.")
+    return ""
 
 
 def theme_readme(cat: dict, collections: list[dict]) -> str:
@@ -407,7 +518,7 @@ def theme_readme(cat: dict, collections: list[dict]) -> str:
 
 ## License
 
-{LICENSE_MD}
+{terms(cat["id"].removeprefix("maine-"))["license_md"]}
 """
 
 
@@ -440,7 +551,9 @@ For these layers the record of changes starts with this republication: their
 
 ## License
 
-{LICENSE_MD}
+{LICENSE_MD}{f"""
+
+The `dep` theme: {DEP_LICENSE_MD}""" if any(t["_theme"] == "dep" for t in themes) else ""}
 
 ## Maintainer
 
@@ -454,14 +567,16 @@ def root_agents(themes: list[dict]) -> str:
     return f"""\
 # {CATALOG_ID}: agent guide
 
-The Maine GeoLibrary's statewide layers as GeoParquet, one sub-catalog per theme.
+The Maine GeoLibrary's statewide layers as GeoParquet, one sub-catalog per theme;
+the `dep` theme is the Maine DEP's own layers, from its map services.
 
 {listing}
 
 Layout: `{PUBLIC_DATA}/<theme>/<layer>.parquet`, anonymous S3 at
 `s3://{BUCKET}/{DATASET_PREFIX}/` on `{S3_ENDPOINT}`. Coordinates are in each
 layer's CRS (EPSG:26919, UTM zone 19N metres, for most): transform a lon/lat
-point before filtering on `bbox`. Sources: {ORG}. Credit: {ATTRIBUTION}.
+point before filtering on `bbox`. Sources: {ORG} and, for `dep`, {DEP}. Credit:
+{ATTRIBUTION}; for `dep`, {DEP_ATTRIBUTION}.
 
 {filedates.DATES_MD}
 """
@@ -499,7 +614,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None,
             if entry.get("pmtiles"):
                 write_json(cdir / "styles" / "default.json",
                            style(theme, entry, color=COLORS[theme], url=theme_url(theme),
-                                 attribution=ATTRIBUTION))
+                                 attribution=terms(theme)["attribution"]))
             thumbnail_file(out_dir, theme, entry, cdir / "thumbnail.png")
             for asset in col["assets"].values():
                 if asset["href"].startswith("./"):
