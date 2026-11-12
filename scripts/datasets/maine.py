@@ -67,6 +67,7 @@ import csv
 import datetime as dt
 import hashlib
 import html
+import http.client
 import json
 import re
 import sys
@@ -106,6 +107,10 @@ TERMS = "Access: Public. Use: User accepts risk."
 PAGE = 2000
 # Esri's own codes for Web Mercator.
 WKID_ALIASES = {102100: 3857, 102113: 3857, 900913: 3857}
+# Points too dense for one tile at MassGIS's zoom 14, even with one
+# property and a 4 MB cap (MGS nearshore survey: about 1.07M soundings
+# along survey tracks). Tiles go deeper so zoom 14 can be thinned.
+TILE_MAX_ZOOM = {"nearshore_survey_bathymetric_elevation_points": 16}
 
 THEMES = {
     "boundaries": "Boundaries, Districts and Parcels",
@@ -170,7 +175,7 @@ def url(src: dict) -> str:
 def get(u: str, params: dict | None = None, attempts: int = 6) -> dict:
     """An ArcGIS REST call as JSON, retried with backoff: ArcGIS answers an
     overloaded request with HTTP 200 and an `error` object as often as with a
-    5xx."""
+    5xx. A response cut off midway (IncompleteRead) is retried too."""
     full = u + "?" + urllib.parse.urlencode({**(params or {}), "f": "json"})
     for attempt in range(1, attempts + 1):
         try:
@@ -179,7 +184,8 @@ def get(u: str, params: dict | None = None, attempts: int = 6) -> dict:
             if "error" not in doc:
                 return doc
             err = doc["error"]
-        except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError,
+                json.JSONDecodeError) as e:
             err = e
         if attempt == attempts:
             raise RuntimeError(f"{u}: {err}")
@@ -398,7 +404,8 @@ def build_layer(con, r: dict, info: dict, work: Path, out: Path, no_tiles: bool)
     entry = write_layer(con, dest, crs)
     tiles = None
     if not no_tiles:
-        tiles = tile_layer(con, dest, r["id"], crs, entry["geometry_types"], 0)
+        tiles = tile_layer(con, dest, r["id"], crs, entry["geometry_types"], 0,
+                           **({"max_zoom": TILE_MAX_ZOOM[r["id"]]} if r["id"] in TILE_MAX_ZOOM else {}))
     outline = out / OUTLINE[0] / f"{OUTLINE[1]}.parquet"
     thumb = thumbnail(con, dest, crs, folder / f"{r['id']}.png", r["theme"], r["title"],
                       outline if outline.exists() else None, color=COLORS[r["theme"]],
