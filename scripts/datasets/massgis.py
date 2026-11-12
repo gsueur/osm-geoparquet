@@ -438,10 +438,12 @@ def lonlat_copy(con, parquet: Path, crs: str) -> Path:
 
 
 def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
-               start: int = 0) -> dict:
+               start: int = 0, max_zoom: int = MAX_ZOOM) -> dict:
     """PMTiles from a lon/lat copy, down the ladder: every attribute, then
     the naming columns, then later minimum zooms, then a larger tile size
-    cap (BIG_TILES). pmtiles.tile() fails when
+    cap (BIG_TILES). A layer denser than one tile at MAX_ZOOM holds (survey
+    soundings) takes a higher max_zoom: points are thinned below it, never
+    at it. pmtiles.tile() fails when
     a tile goes over the size cap; that failure moves to the next step."""
     cols = [c for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{parquet}')").fetchall()
             if c not in ("geometry", "bbox") and not t.startswith(("BLOB", "STRUCT", "GEOMETRY"))]
@@ -463,7 +465,7 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
         for props, min_zoom, cap in steps:
             try:
                 entry = {**pmtiles.tile(lonlat, dest, layer=layer_id, min_zoom=min_zoom,
-                                        max_zoom=MAX_ZOOM, properties=props, coverage=coverage,
+                                        max_zoom=max_zoom, properties=props, coverage=coverage,
                                         extra=["--max-tile-size", cap, *(EVERY_SEGMENT if every_segment else [])]),
                          "max_tile_size": cap,
                          "all_properties": props is cols}
