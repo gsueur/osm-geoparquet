@@ -143,11 +143,17 @@ jobs:
             [ -d "$d" ] || continue
             du -sh "$d"; df -h /mnt | tail -1
             if [ "$PUBLISH" = "true" ]; then
-              rclone copy "$d" "$REMOTE/latest/state=$st" --filter "+ *.parquet" --filter "- *" \
-                --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-                --transfers 4 --stats 60s --stats-one-line
-              rclone copy "$d" "$REMOTE/latest/state=$st" --filter "+ *.pmtiles" --filter "- *" \
-                --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+              # Only the GeoParquet that changed, and the PMTiles made from
+              # them (scripts/filedates.py). One stamp for every state,
+              # structures/_files/structures.json: PUBLIC is the dataset root
+              # so each state reads the stamp the previous one uploaded, and
+              # the state's stamp goes up right after its data.
+              retile=()
+              [ "$TILES_ONLY" = "true" ] && retile=(-- --retile)
+              scripts/upload_changed.sh "$d" "$REMOTE/latest/state=$st" "$PUBLIC" structures \
+                "latest/state=$st" "${retile[@]}"
+              rclone copy "$d/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+                --header-upload "Cache-Control: public, max-age=300"
               rm -rf "$d"
             fi
           done

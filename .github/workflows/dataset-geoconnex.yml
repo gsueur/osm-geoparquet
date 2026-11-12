@@ -124,14 +124,11 @@ jobs:
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
         run: |
           out="$WORK/out"
-          rclone copy "$out/latest" "$REMOTE/latest" --include "*.parquet" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 30s --stats-one-line
-          rclone copy "$out/latest" "$REMOTE/latest" --include "*.pmtiles" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 8 --stats 30s --stats-one-line
+          # Only the GeoParquet that changed, and the PMTiles made from them
+          # (scripts/filedates.py, stamp geoconnex/latest/_files/geoconnex.json).
+          scripts/upload_changed.sh "$out/latest" "$REMOTE/latest" "$PUBLIC/latest" geoconnex latest
           rclone copy "$out/latest" "$REMOTE/latest" --exclude "*.parquet" --exclude "*.pmtiles" \
-            --ignore-times --header-upload "$CACHE"
+            --exclude "_files/**" --ignore-times --header-upload "$CACHE"
           rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --ignore-times --header-upload "$CACHE"
           for dir in reference providers; do
@@ -142,6 +139,9 @@ jobs:
               rclone deletefile "$REMOTE/latest/$dir/$gone"
             done
           done
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/latest/_files" "$REMOTE/latest/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'

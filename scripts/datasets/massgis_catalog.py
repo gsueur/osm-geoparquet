@@ -37,6 +37,7 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -63,6 +64,9 @@ from datasets.pmtiles import PMTILES_TYPE
 
 DATASET_PREFIX = "massgis"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/massgis.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "massgis"
@@ -605,6 +609,10 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, themes))
     (dest / "AGENTS.md").write_text(root_agents(themes))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return count
 
 

@@ -121,11 +121,9 @@ jobs:
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
         run: |
           out="$WORK/out"
-          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 60s --stats-one-line
-          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles"
+          # Only the GeoParquet that changed, and the PMTiles made from them
+          # (scripts/filedates.py, stamp addresses/_files/addresses.json).
+          scripts/upload_changed.sh "$out" "$REMOTE" "$PUBLIC" addresses ""
           rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ _coverage.json" \
             --filter "+ ATTRIBUTION.txt" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
@@ -147,6 +145,9 @@ jobs:
           rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
             --filter "+ _source.json" --filter "- *" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'

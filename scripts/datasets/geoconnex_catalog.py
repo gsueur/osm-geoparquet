@@ -47,6 +47,7 @@ from datasets.geoconnex import GROUP_BYTES, LABELS
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
@@ -71,6 +72,9 @@ from catalog import (
 
 DATASET_PREFIX = "geoconnex"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/latest/_files/geoconnex.json"]
 DATA_URL = f"{PUBLIC_DATA}/latest"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
@@ -906,6 +910,10 @@ def build(base: str, dest: Path, *, updated: str | None = None) -> dict:
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections, layers, span))
     (dest / "AGENTS.md").write_text(root_agents(collections, layers))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return layers
 
 

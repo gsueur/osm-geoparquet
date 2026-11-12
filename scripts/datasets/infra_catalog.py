@@ -48,6 +48,7 @@ from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -75,6 +76,9 @@ from catalog import (
 
 DATASET_PREFIX = "gmwid"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/gmwid.json", f"{PUBLIC_DATA}/_files/gmwid-nsta.json"]
 DATA_URL = f"{PUBLIC_DATA}/latest"
 PAGE_URL = "https://gmwid.geomermaids.com"
 CATALOG_PREFIX = "catalog"
@@ -970,6 +974,10 @@ def build(out_dir: Path, dest: Path, *, attribution: str | None = None,
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections, aggs, interval))
     (dest / "AGENTS.md").write_text(root_agents(collections))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return aggs
 
 

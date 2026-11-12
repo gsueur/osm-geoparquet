@@ -123,12 +123,9 @@ jobs:
         if: steps.check.outputs.parts != '' && env.PUBLISH == 'true'
         run: |
           out="$WORK/out"
-          rclone copy "$out" "$REMOTE" --filter "+ *.parquet" --filter "- *" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 16 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE" --filter "+ *.pmtiles" --filter "- *" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 6 --stats 30s --stats-one-line
+          # Only the GeoParquet that changed, and the PMTiles made from them
+          # (scripts/filedates.py, stamp gazetteer/_files/gazetteer.json).
+          scripts/upload_changed.sh "$out" "$REMOTE" "$PUBLIC" gazetteer ""
           rclone copy "$out" "$REMOTE" --filter "+ _manifest.json" --filter "+ ATTRIBUTION.txt" \
             --filter "- *" --ignore-times --header-upload "Cache-Control: public, max-age=300"
           rclone copy "$out" "$REMOTE" --max-depth 1 --filter "+ index.json" \
@@ -146,6 +143,9 @@ jobs:
               rclone purge "$REMOTE/geonames/latest/country=$cc"
             done
           fi
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.parts != '' && env.PUBLISH == 'true'
