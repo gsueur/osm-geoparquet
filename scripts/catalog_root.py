@@ -137,7 +137,8 @@ def build_root(children: list[dict], updated: str) -> dict:
             "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
             "census geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
             "under its own licence. Overture Maps is linked to Overture's own catalog, "
-            "not copied."),
+            "not copied. With [Geobox](https://geobox.cloud) you can add any of them to your "
+            "own box, or query them in place from DuckDB, QGIS or an AI assistant."),
         "updated": updated,
         "links": [
             {"rel": "self", "href": f"{ROOT_URL}/catalog.json", "type": "application/json"},
