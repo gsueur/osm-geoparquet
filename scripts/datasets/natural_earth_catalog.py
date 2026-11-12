@@ -362,7 +362,9 @@ def build_root(scales: list[dict], total: int, updated: str) -> dict:
         "id": CATALOG_ID,
         "title": TITLE,
         "description": (
-            f"Natural Earth {VERSION}, the public domain world map data, as GeoParquet and "
+            f"Natural Earth {VERSION}, the public domain world map data made by volunteer "
+            f"cartographers with the support of NACIS, the North American Cartographic "
+            f"Information Society, as GeoParquet and "
             f"PMTiles: countries, states and provinces, populated places, urban areas, "
             f"airports, ports, time zones, coastline, land, ocean, rivers, lakes and "
             f"graticules at 1:10m, 1:50m and 1:110m. {total} collections in {len(scales)} "

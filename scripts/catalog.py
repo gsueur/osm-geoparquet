@@ -459,11 +459,12 @@ def build_root(collections: list[dict], date: str, updated: str, countries: list
         "id": CATALOG_ID,
         "title": "OpenStreetMap for North America",
         "description": (
-            f"OpenStreetMap for {names}, split into {len(collections)} thematic "
+            f"Data (c) OpenStreetMap contributors, ODbL 1.0. OpenStreetMap for {names}, "
+            f"split into {len(collections)} thematic "
             f"collections and partitioned by country and admin region, as "
             f"Hilbert-ordered GeoParquet 2.0, rebuilt nightly from Geofabrik "
             f"extracts. Its collections read latest/, which the nightly build "
-            f"replaces, and it was generated from the {date} build. Data (c) OpenStreetMap contributors, ODbL 1.0."
+            f"replaces, and it was generated from the {date} build."
         ),
         "version": date,
         "updated": updated,
