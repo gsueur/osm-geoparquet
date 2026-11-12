@@ -46,6 +46,7 @@ from datasets.gazetteer import (
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT, BUCKET, CONTACT_EMAIL, FILE_EXT, LOGO, PARQUET_TYPE, PARTITION_EXT,
@@ -55,6 +56,9 @@ from catalog import (
 
 DATASET_PREFIX = "gazetteer"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/gazetteer.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "gazetteer"
@@ -736,6 +740,10 @@ statistical areas (mountains, lakes, buildings).
 Filter on `bbox` before any spatial test. Credit each source as its
 catalog says: "{CENSUS_ATTRIBUTION}"; "{GEONAMES_ATTRIBUTION}".
 """)
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return total
 
 

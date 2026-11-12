@@ -40,6 +40,7 @@ from datasets.pmtiles import PMTILES_TYPE
 from datasets.schools import FILES, RELEASE, SOURCE_PAGE
 
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
@@ -64,6 +65,9 @@ from catalog import (
 
 DATASET_PREFIX = "schools"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/schools.json"]
 RELEASE_URL = f"{PUBLIC_DATA}/{RELEASE}"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
@@ -587,6 +591,10 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections))
     (dest / "AGENTS.md").write_text(root_agents(collections))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return total
 
 

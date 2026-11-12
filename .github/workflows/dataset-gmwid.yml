@@ -445,24 +445,37 @@ jobs:
             *:*) ;;
             *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
           esac
-          # latest/ is the only version: sync replaces it, removing files the
-          # new build no longer has. Data first, then the files that
-          # point at it. The archives go first with their own Content-Type
-          # (rclone would send application/octet-stream); the sync leaves
-          # them alone (excluded files are not deleted).
-          rclone copy "$WORK/out/latest" "$REMOTE/latest" --max-depth 1 --include '*.pmtiles' \
-            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
-            --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 8 --stats 60s --stats-one-line
-          rclone sync "$WORK/out/latest" "$REMOTE/latest" --exclude '*.pmtiles' \
-            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
-            --transfers 16 --checkers 32 --stats 60s --stats-one-line
-          rclone sync "$WORK/out/nsta" "$REMOTE/nsta" \
-            --header-upload "Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400" \
-            --transfers 4 --stats-one-line
+          # latest/ is the only version: the new build replaces it, removing
+          # files it no longer has. Data first, then the files that point at
+          # it. Only the GeoParquet that changed, and the PMTiles made from
+          # them, are uploaded (scripts/filedates.py, stamps
+          # gmwid/_files/gmwid.json and gmwid-nsta.json): an unchanged file
+          # keeps its ETag and Last-Modified. The syncs after it only remove
+          # what the build no longer has and add what is missing
+          # (--ignore-existing: a sync would re-upload every file, their
+          # modification times are new); the archives are left alone
+          # (excluded files are not deleted).
+          long="Cache-Control: public, max-age=300, s-maxage=86400, stale-while-revalidate=86400"
+          CACHE="$long" scripts/upload_changed.sh "$WORK/out/latest" "$REMOTE/latest" "$PUBLIC" \
+            gmwid latest
+          CACHE="$long" scripts/upload_changed.sh "$WORK/out/nsta" "$REMOTE/nsta" "$PUBLIC" \
+            gmwid-nsta nsta
+          for part in latest nsta; do
+            rclone sync "$WORK/out/$part" "$REMOTE/$part" --ignore-existing \
+              --filter "- _files/**" --filter "- *.pmtiles" --header-upload "$long" \
+              --transfers 16 --checkers 32 --stats 60s --stats-one-line
+            rclone copy "$WORK/out/$part" "$REMOTE/$part" --ignore-times \
+              --filter "- _files/**" --filter "- *.pmtiles" --filter "- *.parquet" \
+              --header-upload "$long" --transfers 16 --stats-one-line
+          done
           rclone copy "$WORK/out" "$REMOTE" --max-depth 1 \
             --include index.json --include ATTRIBUTION.txt --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
+          # The stamps last: the catalog step reads them.
+          for part in latest nsta; do
+            rclone copy "$WORK/out/$part/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+              --header-upload "Cache-Control: public, max-age=300"
+          done
 
       # After the data, so the catalog never links a file that is not there.
       # Rendered from the files just published: rows and sizes match them.

@@ -122,16 +122,16 @@ jobs:
             *) echo "REMOTE=${REMOTE:-<empty>} is not an rclone remote. Refusing."; exit 1 ;;
           esac
           out="$WORK/out"
-          rclone copy "$out" "$REMOTE" --include "*.parquet" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE" --include "*.pmtiles" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --stats 30s --stats-one-line
+          # Only the GeoParquet that changed, and the PMTiles made from them
+          # (scripts/filedates.py, stamp worldpop/_files/worldpop.json).
+          scripts/upload_changed.sh "$out" "$REMOTE" "$PUBLIC" worldpop ""
           rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
           rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: env.STAGE == 'publish'

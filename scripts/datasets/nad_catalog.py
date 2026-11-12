@@ -41,6 +41,7 @@ from datasets.nad import H3_BANDS, PAGE, SOCRATA, TXT_ID  # noqa: E402
 from datasets.pmtiles import PMTILES_TYPE  # noqa: E402
 
 import catalog as shared  # noqa: E402  scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from catalog import (  # noqa: E402
     ALTERNATE_EXT,
     BUCKET,
@@ -65,6 +66,9 @@ from catalog import (  # noqa: E402
 
 DATASET_PREFIX = "addresses"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/addresses.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "us-national-address-database"
@@ -689,6 +693,10 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, coverage))
     (dest / "AGENTS.md").write_text(root_agents(rel, manifest))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return manifest["total_features"]
 
 

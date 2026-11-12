@@ -43,6 +43,7 @@ from datasets.worldpop import (
 )
 
 import catalog as shared  # scripts/catalog.py
+import filedates  # noqa: E402  scripts/filedates.py
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -67,6 +68,9 @@ from catalog import (
 
 DATASET_PREFIX = "worldpop"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# The workflow stamps what it uploads (scripts/filedates.py): `updated` is
+# when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/worldpop.json"]
 RELEASE_PATH = f"{RELEASE}/{YEAR}"
 RELEASE_URL = f"{PUBLIC_DATA}/{RELEASE_PATH}"
 CATALOG_PREFIX = "catalog"
@@ -539,6 +543,10 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, col))
     (dest / "AGENTS.md").write_text(root_agents(col))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
+    for doc in ("README.md", "AGENTS.md"):
+        path = dest / doc
+        path.write_text(f"{path.read_text().rstrip()}\n\n{filedates.DATES_MD}\n")
     return m["total_features"]
 
 
