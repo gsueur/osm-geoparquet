@@ -305,6 +305,24 @@ of the whole state still shows them. Portolan catalog at
 `https://parquetry.geomermaids.com/massgis/catalog/catalog.json`
 (`scripts/datasets/massgis_catalog.py`), one sub-catalog per theme.
 
+The Maine GeoLibrary (`scripts/datasets/maine.py`, workflow
+`dataset-maine.yml`, checked weekly) sits under
+`https://parquetry.geomermaids.com/maine/<theme>/`: one GeoParquet file and
+one PMTiles archive per statewide vector layer, 240 layers in 7 themes
+(boundaries and parcels, places, land, habitat, marine, coast, geology), read
+page by page from the GeoLibrary's ArcGIS Online feature services, the rows
+checked against each service's count. `maine_layers.csv` lists them, one row
+per source layer; the Department of Marine Resources' yearly shellfish P90
+scores and NSSP classifications are folded into one file each with a `year`
+column. Label layers, catalogue footprints, imagery indexes, tables and
+copies are left out, and so are the 2-ft contours and DEP's own services for
+now. Columns are the GeoLibrary's and each layer keeps its CRS (UTM zone 19N,
+EPSG:26919, for most). The only terms stated are "Access: Public. Use: User
+accepts risk." A weekly run rebuilds the layers whose last edit or count
+moved, and uploads only the files whose bytes changed. Portolan catalog at
+`https://parquetry.geomermaids.com/maine/catalog/catalog.json`
+(`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
+
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
 `https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,

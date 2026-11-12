@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -87,6 +88,9 @@ DATASETS = [
      "https://census.geomermaids.com/"),
     ("massgis", "The statewide vector layers of the Massachusetts Bureau of Geographic "
                 "Information, checked weekly.", SITE),
+    ("maine", "The Maine GeoLibrary's statewide layers: parcels, E911 addresses and roads, "
+              "conserved lands, habitat, marine fisheries, coastal hazards and geology, "
+              "checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
@@ -117,7 +121,14 @@ def fetch(url: str) -> dict:
 def read_children() -> list[dict]:
     out = []
     for prefix, summary, page in DATASETS:
-        cat = fetch(child_url(prefix))
+        try:
+            cat = fetch(child_url(prefix))
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            # A dataset added here before its first publish: left out until then.
+            print(f"  {prefix}: no catalog published yet, left out", file=sys.stderr)
+            continue
         lic = next((link for link in cat["links"] if link["rel"] == "license"), {})
         out.append({"url": child_url(prefix), "title": cat["title"], "summary": summary,
                     "license": lic.get("title", "see the catalog"), "page": page,
@@ -137,7 +148,7 @@ def build_root(children: list[dict], updated: str) -> dict:
             "America and its infrastructure worldwide, administrative units, population, "
             "land cover, a world basemap, place names, addresses, schools, building footprints, protected areas, "
             "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
-            "census geography and estimates, and the Massachusetts statewide layers. One sub-catalog per dataset, each kept current by its own build and "
+            "census geography and estimates, and the Massachusetts and Maine statewide layers. One sub-catalog per dataset, each kept current by its own build and "
             "under its own licence. Overture Maps is linked to Overture's own catalog, "
             "not copied. With [Geobox](https://geobox.cloud) you can add any of them to your "
             "own box, or query them in place from DuckDB, QGIS or an AI assistant."),

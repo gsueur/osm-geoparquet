@@ -692,9 +692,11 @@ DRAW_BELOW = 60_000
 
 
 def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title: str,
-              outline: Path | None) -> dict:
+              outline: Path | None, *, color: str | None = None,
+              outline_crs: str = MASS_CRS) -> dict:
     """A 600 x 400 PNG: the layer over the state outline, framed on its
-    extent; a table without geometry gets a card with its row count."""
+    extent; a table without geometry gets a card with its row count. maine.py
+    passes its own theme colour and its outline's CRS."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -705,7 +707,7 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
 
     from thumbnails import BACKGROUND, REGION_EDGE, REGION_FILL, frame
 
-    color = COLORS[theme]
+    color = color or COLORS[theme]
     fig = plt.figure(figsize=(6, 4), dpi=100)
     ax = fig.add_axes((0, 0, 1, 1))
     ax.axis("off")
@@ -726,7 +728,7 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
         tol = (x1 - x0) / 1200
         if outline is not None and outline.exists():
             for (wkb,) in con.execute(f"""SELECT ST_AsWKB(ST_Simplify(
-                    ST_Transform(geometry, '{MASS_CRS}', 'OGC:CRS84', always_xy := true), {tol}))
+                    ST_Transform(geometry, '{outline_crs}', 'OGC:CRS84', always_xy := true), {tol}))
                     FROM read_parquet('{outline}')""").fetchall():
                 g = shapely.from_wkb(bytes(wkb))
                 for poly in getattr(g, "geoms", [g]):
