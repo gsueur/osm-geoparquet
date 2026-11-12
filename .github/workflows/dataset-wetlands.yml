@@ -406,6 +406,9 @@ jobs:
           rclone version | sed -n 1p
 
       # After the data, so the catalog never links a file that is not there.
+      # It also stamps the release (wetlands/_files/nwi.json, uploaded after
+      # the catalog): each file's `updated` is when its bytes last changed,
+      # from the sha256 in the manifest (nwi_catalog.py, scripts/filedates.py).
       - name: STAC catalog, published
         run: |
           uv run --project scripts python scripts/datasets/nwi_catalog.py publish --remote "$REMOTE"

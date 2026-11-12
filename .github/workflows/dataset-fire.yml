@@ -114,12 +114,13 @@ jobs:
         if: env.STAGE == 'publish' && steps.build.outputs.changed == 'true'
         run: |
           out="out/fire/$GROUP/latest"
-          rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.parquet" --ignore-times \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 4 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.pmtiles" --ignore-times \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 4 --stats 30s --stats-one-line
+          # Only the GeoParquet whose bytes changed, and the PMTiles drawn
+          # from them (scripts/filedates.py): a WFIGS run where only the
+          # current fires moved leaves the files since 2016 as they are.
+          # --complete: a build writes the whole group, so a file it no
+          # longer writes leaves the stamp.
+          scripts/upload_changed.sh "$out" "$REMOTE/$GROUP/latest" "$PUBLIC/$GROUP/latest" \
+            "fire-$GROUP" "$GROUP/latest" -- --complete
           rclone copy "$out" "$REMOTE/$GROUP/latest" --include "*.xml" --include "ATTRIBUTION.txt" \
             --ignore-times --header-upload "$CACHE"
           # A perimeter layer that came out empty (no fire burning) has no
@@ -136,6 +137,9 @@ jobs:
             --ignore-times --header-upload "$CACHE" --header-upload "Content-Type: application/json"
           rclone copy out/fire "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
             --ignore-times --header-upload "$CACHE"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/$GROUP/latest/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       # After the data, so the catalog never links a file that is not there.
       - name: STAC catalog, published

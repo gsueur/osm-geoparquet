@@ -16,6 +16,15 @@ checksums, extents, the dedup and the gate come from the release's
 _manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.2.0.
 Validator: rashid, through scripts/catalog.py.
 
+Dates (scripts/filedates.py): each GeoParquet's `updated` is when its bytes
+last changed, `checked` when it was last built. The release's files are
+written by many jobs and copied server-side, so no machine holds them: the
+stamp (wetlands/_files/nwi.json) is made here, at the catalog stage, from the
+sha256 the manifest records, compared with the published stamp; a changed
+file takes the build time of the part that wrote it, so rendering again gives
+the same dates. publish uploads it after the catalog. The map is drawn on a
+workstation on its own schedule: it is not stamped.
+
 Usage:
   python3 scripts/datasets/nwi_catalog.py build --dest build/nwi-catalog [--out-dir out/wetlands]
   python3 scripts/datasets/nwi_catalog.py check build/nwi-catalog
@@ -27,8 +36,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -37,6 +48,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import filedates
 from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT  # noqa: E402
 from datasets.nwi import (  # noqa: E402
     CODES_PAGE,
@@ -77,6 +89,7 @@ PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "usfws-national-wetlands-inventory"
+STAMP = "_files/nwi.json"
 TITLE = "USFWS National Wetlands Inventory: wetlands of the United States"
 THUMBS = REPO / "catalog" / "thumbnails" / "wetlands"
 ATTRIBUTION = "U.S. Fish and Wildlife Service, National Wetlands Inventory"
@@ -528,6 +541,8 @@ def collection_readme(col: dict, body: str) -> str:
 
 {body}
 
+{filedates.DATES_MD}
+
 ## License
 
 Public domain: a work of the US federal government, not subject to copyright in
@@ -619,12 +634,53 @@ def root_agents(rel: str, manifest: dict) -> str:
 
 Release {manifest['release']} at `{PUBLIC_DATA}/{rel}/`. Public domain; credit
 "{ATTRIBUTION}". Not a jurisdictional delineation.
+
+{filedates.DATES_MD}
 """
+
+
+# ---------- dates ----------
+
+def http_date(value: str) -> str:
+    """An HTTP Last-Modified as RFC 3339 UTC."""
+    return email.utils.parsedate_to_datetime(value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def release_files(rel: str, manifest: dict) -> dict[str, dict]:
+    """The release's GeoParquet files with the sha256 and size the manifest
+    records, each with the build time of the part that wrote it (a state's
+    rows come from the units listing it; codes and projects from every part)."""
+    built_by_unit = {u: part["built"] for part in manifest["parts"] for u in part["units"]}
+    latest = max(part["built"] for part in manifest["parts"])
+    files = {}
+    for f in manifest["files"]:
+        units = [u["unit"] for u in manifest["units"] if f["state"] in u.get("states", [])]
+        files[f"{rel}/{f['path']}"] = {
+            "sha256": f["sha256"], "bytes": f["bytes"],
+            "built": max((built_by_unit[u] for u in units if u in built_by_unit), default=latest)}
+    for key in ("codes", "projects"):
+        x = manifest[key]
+        files[f"{rel}/{x['file']}"] = {"sha256": x["sha256"], "bytes": x["bytes"], "built": latest}
+    return files
+
+
+def release_stamp(rel: str, manifest: dict) -> dict:
+    """The stamp of this release against the published one. With no stamp
+    published yet, a file's first date is FWS's: the newest Last-Modified of
+    the release's downloads."""
+    published = filedates.fetch_json(f"{PUBLIC_DATA}/{STAMP}")
+    source = max(http_date(u["last_modified"]) for u in manifest["units"]
+                 if u.get("last_modified"))
+    latest = max(part["built"] for part in manifest["parts"])
+    doc = filedates.stamp_digests(release_files(rel, manifest), "nwi", published, source, latest)
+    doc.pop("upload")
+    return doc
 
 
 # ---------- build ----------
 
-def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> int:
+def build(out_dir: Path | None, dest: Path, *, updated: str | None = None,
+          stamp_out: Path | None = None) -> int:
     updated = updated or now_rfc3339()
     if dest.exists():
         shutil.rmtree(dest)
@@ -668,6 +724,11 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, manifest))
     (dest / "AGENTS.md").write_text(root_agents(rel, manifest))
+    doc = release_stamp(rel, manifest)
+    filedates.apply(dest, filedates.Dates(PUBLIC_DATA, doc["files"], [doc]))
+    if stamp_out is not None:
+        stamp_out.parent.mkdir(parents=True, exist_ok=True)
+        stamp_out.write_text(json.dumps(doc, indent=1) + "\n")
     return manifest["total_features"]
 
 
@@ -678,11 +739,23 @@ def check(tree: Path) -> int:
 def publish(out_dir: Path | None, remote: str, *, dry_run: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="nwi-catalog-") as tmp:
         tree = Path(tmp) / "catalog"
-        total = build(out_dir, tree)
+        stamp = Path(tmp) / STAMP
+        total = build(out_dir, tree, stamp_out=stamp)
         print(f"  rendered 2 collections, {total:,} wetland polygons")
         if check(tree):
             sys.exit("catalog failed rashid; not uploading")
         shared.upload(tree, remote, CATALOG_PREFIX, dry_run=dry_run)
+        # The stamp after the catalog. If this upload fails, the next
+        # catalog stage compares with the previous stamp and gives the same
+        # dates: each file's build time comes from the manifest.
+        cmd = ["rclone", "copyto", "--ignore-times",
+               "--header-upload", "Cache-Control: public, max-age=300",
+               "--header-upload", "Content-Type: application/json",
+               str(stamp), f"{remote}/{STAMP}"]
+        if dry_run:
+            print(f"  $ {' '.join(cmd)}")
+        else:
+            subprocess.run(cmd, check=True)
 
 
 # ---------- thumbnails ----------
