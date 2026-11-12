@@ -120,15 +120,15 @@ jobs:
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
         run: |
           out="$WORK/out/$LODES"
-          rclone copy "$out" "$REMOTE/$LODES" --include "*.parquet" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE/$LODES" --include "*.pmtiles" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --stats 30s --stats-one-line
+          # Only the GeoParquet that changed, and the PMTiles made from them.
+          scripts/upload_changed.sh "$out" "$REMOTE/$LODES" "$PUBLIC/$LODES" census-lodes "$LODES"
           rclone copy "$out" "$REMOTE/$LODES" --include "_manifest.json" \
             --include "ATTRIBUTION.txt" --include "_source.json" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/$LODES/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
         run: |

@@ -47,6 +47,7 @@ from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
@@ -72,6 +73,12 @@ from catalog import (
 DATASET_PREFIX = "census"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 CATALOG_PREFIX = "catalog"
+# Each census workflow stamps what it uploads (scripts/filedates.py): the
+# catalog's `updated` is when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/census-tiger.json",
+          f"{PUBLIC_DATA}/acs/{acs_catalog.YEAR}/_files/census-acs.json",
+          f"{PUBLIC_DATA}/tiger/2020/block/_files/census-blocks.json",
+          f"{PUBLIC_DATA}/lodes/2024/_files/census-lodes.json"]
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "us-census-tiger"
 TITLE = "US Census Bureau TIGER/Line"
@@ -643,6 +650,8 @@ estimates at `{PUBLIC_DATA}/acs/<year>/<geo>.parquet`, and the 2020 blocks at
 `{PUBLIC_DATA}/tiger/2020/block/state=<XX>/blocks.parquet`, LODES jobs at
 `{PUBLIC_DATA}/lodes/<year>/state=<XX>/<wac|rac|od>.parquet`. On a map: {PAGE_URL}.
 
+{filedates.DATES_MD}
+
 ## License
 
 {LICENSE_MD}
@@ -671,6 +680,8 @@ block at `{PUBLIC_DATA}/lodes/<year>/state=<XX>/<wac|rac|od>.parquet` (read
 rollups. Anonymous S3 at
 `s3://{BUCKET}/{DATASET_PREFIX}/` on `{S3_ENDPOINT}`. NAD83 (EPSG:4269).
 Credit: {ATTRIBUTION}.
+
+{filedates.DATES_MD}
 """
 
 
@@ -729,6 +740,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, products))
     (dest / "AGENTS.md").write_text(root_agents(products))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
     return total
 
 

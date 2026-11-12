@@ -129,15 +129,14 @@ jobs:
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
         run: |
           out="$WORK/out/acs/$YEAR"
-          rclone copy "$out" "$REMOTE/acs/$YEAR" --include "*.parquet" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 6 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE/acs/$YEAR" --include "*.pmtiles" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 6 --stats 30s --stats-one-line
+          # Only the GeoParquet that changed, and the PMTiles made from them.
+          scripts/upload_changed.sh "$out" "$REMOTE/acs/$YEAR" "$PUBLIC/acs/$YEAR" census-acs "acs/$YEAR"
           rclone copy "$out" "$REMOTE/acs/$YEAR" --include "_manifest.json" \
             --include "ATTRIBUTION.txt" --include "_source.json" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/acs/$YEAR/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
@@ -169,11 +168,13 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           uv run --project scripts python scripts/datasets/acs.py tiles --out-dir "$WORK/out"
           jq -c '.pmtiles[] | {name, min_zoom, all_properties, properties}' "$out/_manifest.json"
-          rclone copy "$out" "$REMOTE/acs/$YEAR" --include "*.pmtiles" \
-            --header-upload "$CACHE" --header-upload "Content-Type: application/vnd.pmtiles" \
-            --transfers 6 --stats 30s --stats-one-line
+          # New tiles for the same data: every PMTiles goes up, `updated` stays.
+          scripts/upload_changed.sh "$out" "$REMOTE/acs/$YEAR" "$PUBLIC/acs/$YEAR" census-acs \
+            "acs/$YEAR" -- --retile
           rclone copy "$out" "$REMOTE/acs/$YEAR" --include "_manifest.json" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out/_files" "$REMOTE/acs/$YEAR/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
           set +e
           fail=0
           for g in state county place tract bg zcta520; do
