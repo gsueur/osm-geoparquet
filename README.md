@@ -311,11 +311,14 @@ The Maine GeoLibrary (`scripts/datasets/maine.py`, workflow
 one PMTiles archive per statewide vector layer, 240 layers in 7 themes
 (boundaries and parcels, places, land, habitat, marine, coast, geology), read
 page by page from the GeoLibrary's ArcGIS Online feature services, the rows
-checked against each service's count, and 75 layers in an eighth, `dep`: the
+checked against each service's count, and 72 layers in an eighth, `dep`: the
 Maine Department of Environmental Protection's own map services on
 gis.maine.gov (sites and spills, tanks, landfills, wastewater discharges,
 PFAS, water quality assessment and classification, lakes, biomonitoring,
-seagrass, dams, natural drainageways). `maine_layers.csv` lists them, one row
+seagrass, dams). Left out: the Chapter 500 natural drainageways (940,000
+full-resolution lines, about 36 GB of JSON to read) and the 1,000 and 2,000 ft
+public water supply buffers (their service returns no geometry).
+`maine_layers.csv` lists the published layers, one row
 per source layer with its server; layers published one per year or per kind
 are folded into one file each: the Department of Marine Resources' shellfish
 P90 scores and NSSP classifications and DEP's seagrass surveys and water
