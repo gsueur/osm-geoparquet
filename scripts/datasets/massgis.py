@@ -414,7 +414,13 @@ def write_layer(con, dest: Path, crs: str | None) -> dict:
     verify(con, dest.parent, [dest.stem])
     typ = con.execute(f"SELECT any_value(typeof(geometry)) FROM read_parquet('{dest}')").fetchone()[0]
     if crs not in typ:
-        sys.exit(f"{dest.name}: CRS lost in the rewrite ({typ}, want {crs})")
+        # DuckDB reads EPSG:4326 back as a plain GEOMETRY (it takes WGS 84 for
+        # the default): check the footer's PROJJSON id instead.
+        footer = json.loads(con.execute(f"SELECT decode(value) FROM parquet_kv_metadata('{dest}') "
+                                        "WHERE key = 'geo'").fetchone()[0])
+        ident = (footer["columns"]["geometry"].get("crs") or {}).get("id") or {}
+        if f"{ident.get('authority')}:{ident.get('code')}" != crs:
+            sys.exit(f"{dest.name}: CRS lost in the rewrite ({typ}, want {crs})")
     groups = con.execute(f"SELECT count(DISTINCT row_group_id) FROM parquet_metadata('{dest}')").fetchone()[0]
     return {"file": dest.name, "features": n, "bytes": dest.stat().st_size, "row_groups": groups,
             "geometry_types": sorted(GEOMETRY_TYPE_NAMES[t] for t in types), "crs": crs,
@@ -692,9 +698,11 @@ DRAW_BELOW = 60_000
 
 
 def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title: str,
-              outline: Path | None) -> dict:
+              outline: Path | None, *, color: str | None = None,
+              outline_crs: str = MASS_CRS) -> dict:
     """A 600 x 400 PNG: the layer over the state outline, framed on its
-    extent; a table without geometry gets a card with its row count."""
+    extent; a table without geometry gets a card with its row count. maine.py
+    passes its own theme colour and its outline's CRS."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -705,7 +713,7 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
 
     from thumbnails import BACKGROUND, REGION_EDGE, REGION_FILL, frame
 
-    color = COLORS[theme]
+    color = color or COLORS[theme]
     fig = plt.figure(figsize=(6, 4), dpi=100)
     ax = fig.add_axes((0, 0, 1, 1))
     ax.axis("off")
@@ -726,7 +734,7 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
         tol = (x1 - x0) / 1200
         if outline is not None and outline.exists():
             for (wkb,) in con.execute(f"""SELECT ST_AsWKB(ST_Simplify(
-                    ST_Transform(geometry, '{MASS_CRS}', 'OGC:CRS84', always_xy := true), {tol}))
+                    ST_Transform(geometry, '{outline_crs}', 'OGC:CRS84', always_xy := true), {tol}))
                     FROM read_parquet('{outline}')""").fetchall():
                 g = shapely.from_wkb(bytes(wkb))
                 for poly in getattr(g, "geoms", [g]):

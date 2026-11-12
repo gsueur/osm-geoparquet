@@ -159,13 +159,14 @@ def thumbnail_file(out_dir: Path | None, theme: str, entry: dict, dest: Path) ->
 
 # ---------- styles ----------
 
-def style(theme: str, entry: dict) -> dict:
+def style(theme: str, entry: dict, *, color: str | None = None, url: str | None = None,
+          attribution: str = ATTRIBUTION) -> dict:
     """One MapLibre layer per kind of geometry the file holds, after the
     overview's cells when it has some (massgis.py, OVERVIEWS): coloured by
     dominant class, more opaque the more of the cell the layer covers, or
     by count per km2. The polygons of a class overview take its colours."""
     tiles = entry["pmtiles"]
-    color = COLORS[theme]
+    color = color or COLORS[theme]
     types = set(entry["geometry_types"])
     ov = tiles.get("overview") or {}
     by_class = (["match", ["get", ov["column"]], *(x for pair in ov["classes"] for x in pair),
@@ -211,8 +212,8 @@ def style(theme: str, entry: dict) -> dict:
     return {
         "version": 8, "name": entry["title"],
         "sources": {"data": {"type": "vector",
-                             "url": f"pmtiles://{theme_url(theme)}/{tiles['file']}",
-                             "attribution": ATTRIBUTION}},
+                             "url": f"pmtiles://{url or theme_url(theme)}/{tiles['file']}",
+                             "attribution": attribution}},
         "layers": out,
     }
 
