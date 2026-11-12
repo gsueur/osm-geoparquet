@@ -9,6 +9,7 @@ export default {
   allowExternalAccess: true,
   historyMode: "hash",
   footerLinks: [
+    { label: "Geobox: add these datasets to your box", url: "https://geobox.cloud/" },
     { label: "geoparquet.geomermaids.com", url: "https://geoparquet.geomermaids.com/" },
     { label: "Source and issues", url: "https://github.com/gsueur/osm-geoparquet" },
   ],
