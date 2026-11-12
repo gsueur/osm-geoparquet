@@ -470,7 +470,9 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
                 built[r["id"]] = e
                 by_theme.setdefault(r["theme"], []).append(e)
                 continue
-            discard(r)
+        # Nothing local is published for this layer: whatever an earlier or
+        # interrupted run left here (with or without an entry) goes.
+        discard(r)
         prev = {f["name"]: f for f in get_json(f"{public}/{r['theme']}/_manifest.json", {})
                 .get("files", [])}
         if r["id"] in prev:
