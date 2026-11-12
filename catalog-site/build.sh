@@ -34,6 +34,9 @@ for p in "$here"/patches/*.patch; do
   git -C "$work" apply "$p" || { echo "build.sh: $(basename "$p") does not apply" >&2; exit 1; }
 done
 
+# Our widgets (the Geobox banner) replace the browser's empty set.
+cp "$here/widgets.config.js" "$work/widgets.config.js"
+
 # The accent colour is a compile-time SCSS variable, not an option.
 sed -i.bak -E "s/^\\\$primary:[[:space:]]+#[0-9a-fA-F]+;/\$primary:   $ACCENT;/" \
   "$work/src/theme/variables.scss"
