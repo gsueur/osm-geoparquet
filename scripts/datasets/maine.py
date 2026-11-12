@@ -391,20 +391,28 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
     con.execute(f"INSTALL spatial; LOAD spatial; SET temp_directory = '{work}'; "
                 "SET memory_limit = '6GB'")
 
+    def complete(r: dict, e: dict) -> bool:
+        """The entry's files are all here, the PMTiles too unless --no-tiles."""
+        if not (out / r["theme"] / e["file"]).is_file():
+            return False
+        return no_tiles or bool(e.get("pmtiles")
+                                and (out / r["theme"] / e["pmtiles"]["file"]).is_file())
+
     def done(r: dict) -> dict | None:
         """This out dir's entry for the layer, if built from the same
-        upstream state and with what this run asks for (tiles unless
-        --no-tiles): a rerun after a failure resumes."""
+        upstream state and with what this run asks for: a rerun after a
+        failure resumes."""
         f = out / r["theme"] / f"{r['id']}.entry.json"
         e = json.loads(f.read_text()) if f.is_file() else None
         if not e or e["source"]["fingerprint"] != source[r["id"]]["fingerprint"]:
             return None
-        if not (out / r["theme"] / e["file"]).is_file():
-            return None
-        if not no_tiles and not (e.get("pmtiles")
-                                 and (out / r["theme"] / e["pmtiles"]["file"]).is_file()):
-            return None
-        return e
+        return e if complete(r, e) else None
+
+    def discard(r: dict) -> None:
+        """A local build this run will not publish: its files go, so the
+        upload (every file under the out dir) cannot carry them."""
+        for f in (out / r["theme"]).glob(f"{r['id']}.*"):
+            f.unlink(missing_ok=True)
 
     failed: dict[str, str] = {}
     for r in rows:
@@ -454,13 +462,15 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
         # full build only if it is the current upstream state: an older
         # local entry must not replace a newer published one.
         local = out / r["theme"] / f"{r['id']}.entry.json"
-        if local.is_file() and (out / r["theme"] / f"{r['id']}.parquet").is_file():
+        if local.is_file():
             e = json.loads(local.read_text())
             current = source.get(r["id"], {}).get("fingerprint")
-            if only or (current and e["source"]["fingerprint"] == current):
+            if (r["id"] not in failed and complete(r, e)
+                    and (only or (current and e["source"]["fingerprint"] == current))):
                 built[r["id"]] = e
                 by_theme.setdefault(r["theme"], []).append(e)
                 continue
+            discard(r)
         prev = {f["name"]: f for f in get_json(f"{public}/{r['theme']}/_manifest.json", {})
                 .get("files", [])}
         if r["id"] in prev:
