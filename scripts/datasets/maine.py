@@ -195,13 +195,28 @@ def upstream(only: list[str] | None = None) -> dict:
     the build day in its fingerprint, so its layer is rebuilt every run."""
     rows = [r for r in layers() if not only or r["id"] in only]
     flat = [(r["id"], s) for r in rows for s in r["sources"]]
+
+    def safe(src: dict) -> dict:
+        # One unreachable service must not stop the healthy layers.
+        try:
+            return source_info(src)
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            return {"error": f"{url(src)}: {type(e).__name__}: {e}"[:500]}
+
     with ThreadPoolExecutor(8) as ex:
-        infos = list(ex.map(lambda x: source_info(x[1]), flat))
+        infos = list(ex.map(lambda x: safe(x[1]), flat))
     out: dict[str, dict] = {}
     today = dt.date.today().isoformat()
     for (layer_id, _), info in zip(flat, infos):
         out.setdefault(layer_id, {"sources": []})["sources"].append(info)
     for e in out.values():
+        errors = [s["error"] for s in e["sources"] if "error" in s]
+        if errors:
+            # Unknown upstream state: no fingerprint, the layer keeps what
+            # is published and is reported as failed.
+            e.update({"error": "; ".join(errors), "fingerprint": None,
+                      "last_modified": None, "count": None})
+            continue
         key = "|".join(f"{s['url']}:{s['data_edited'] or today}:{s['schema_edited']}:{s['count']}"
                        for s in e["sources"])
         e["fingerprint"] = hashlib.sha256(key.encode()).hexdigest()[:16]
@@ -265,9 +280,15 @@ def load(con, sources: list[dict], work: Path) -> tuple[str, int]:
         # A layer edited while it was read: count again, and read it again.
         for s in sources:
             s["count"] = get(s["url"] + "/query", {"where": "1=1", "returnCountOnly": "true"})["count"]
+    # A source with no rows (a verified empty year) has no table.
+    present = [t for (t,) in con.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'raw\\_%' ESCAPE '\\'"
+    ).fetchall() if t in tables]
+    if not present:
+        sys.exit("every source is empty")
     con.execute("CREATE OR REPLACE TABLE raw AS "
-                + " UNION ALL BY NAME ".join(f"SELECT * FROM {t}" for t in tables))
-    for t in tables:
+                + " UNION ALL BY NAME ".join(f"SELECT * FROM {t}" for t in present))
+    for t in present:
         con.execute(f"DROP TABLE {t}")
     cols = con.execute("DESCRIBE raw").fetchall()
     g = next(c for c, t, *_ in cols if t.startswith("GEOMETRY"))
@@ -372,24 +393,37 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
 
     def done(r: dict) -> dict | None:
         """This out dir's entry for the layer, if built from the same
-        upstream state: a rerun after a failure resumes."""
+        upstream state and with what this run asks for (tiles unless
+        --no-tiles): a rerun after a failure resumes."""
         f = out / r["theme"] / f"{r['id']}.entry.json"
         e = json.loads(f.read_text()) if f.is_file() else None
-        return e if e and e["source"]["fingerprint"] == source[r["id"]]["fingerprint"] else None
+        if not e or e["source"]["fingerprint"] != source[r["id"]]["fingerprint"]:
+            return None
+        if not (out / r["theme"] / e["file"]).is_file():
+            return None
+        if not no_tiles and not (e.get("pmtiles")
+                                 and (out / r["theme"] / e["pmtiles"]["file"]).is_file()):
+            return None
+        return e
 
+    failed: dict[str, str] = {}
+    for r in rows:
+        if source.get(r["id"], {}).get("error"):
+            failed[r["id"]] = source[r["id"]]["error"]
+            print(f"  FAIL {r['theme']}/{r['id']}: {failed[r['id']]}", flush=True)
     if only:
-        todo = [r for r in rows if r["id"] in only]
+        todo = [r for r in rows if r["id"] in only and r["id"] not in failed]
     else:
-        todo = [r for r in rows if force or published.get(r["id"], {}).get("fingerprint")
-                != source[r["id"]]["fingerprint"]]
+        todo = [r for r in rows if r["id"] not in failed and (
+            force or published.get(r["id"], {}).get("fingerprint")
+            != source[r["id"]]["fingerprint"])]
     built: dict[str, dict] = {}
     for r in list(todo):
-        if not only and (e := done(r)):
+        if not only and not force and (e := done(r)):
             built[r["id"]] = e
             todo.remove(r)
     print(f"  {len(rows)} layers, {len(todo)} to build"
           + (f", {len(built)} already built here" if built else ""), flush=True)
-    failed: dict[str, str] = {}
     for r in todo:
         try:
             built[r["id"]] = build_layer(con, r, source[r["id"]], work, out, no_tiles)
@@ -416,12 +450,17 @@ def build(work: Path, out: Path, *, public: str, only: list[str] | None, force: 
         if r["id"] in built:
             by_theme.setdefault(r["theme"], []).append(built[r["id"]])
             continue
-        # Built here by an earlier --layer run (a local build in steps).
+        # Built here by an earlier --layer run (a local build in steps). On a
+        # full build only if it is the current upstream state: an older
+        # local entry must not replace a newer published one.
         local = out / r["theme"] / f"{r['id']}.entry.json"
         if local.is_file() and (out / r["theme"] / f"{r['id']}.parquet").is_file():
-            built[r["id"]] = json.loads(local.read_text())
-            by_theme.setdefault(r["theme"], []).append(built[r["id"]])
-            continue
+            e = json.loads(local.read_text())
+            current = source.get(r["id"], {}).get("fingerprint")
+            if only or (current and e["source"]["fingerprint"] == current):
+                built[r["id"]] = e
+                by_theme.setdefault(r["theme"], []).append(e)
+                continue
         prev = {f["name"]: f for f in get_json(f"{public}/{r['theme']}/_manifest.json", {})
                 .get("files", [])}
         if r["id"] in prev:
@@ -475,8 +514,11 @@ def main() -> None:
     args = p.parse_args()
     if args.cmd == "upstream":
         src = upstream(args.layer)
+        for k, v in src.items():
+            if v.get("error"):
+                print(f"unreachable, left out: {k}: {v['error']}", file=sys.stderr)
         print(json.dumps({k: {x: v[x] for x in ("fingerprint", "last_modified", "count")}
-                          for k, v in src.items()}, indent=2))
+                          for k, v in src.items() if not v.get("error")}, indent=2))
         return
     build(args.work_dir, args.out_dir, public=args.public, only=args.layer, force=args.force,
           no_tiles=args.no_tiles)

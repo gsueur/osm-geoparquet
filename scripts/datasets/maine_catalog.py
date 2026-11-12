@@ -482,7 +482,11 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None,
     for theme in THEMES:
         try:
             manifest = read_manifest(out_dir, theme)
-        except (FileNotFoundError, urllib.error.HTTPError):
+        except FileNotFoundError:
+            continue
+        except urllib.error.HTTPError as e:
+            if e.code != 404:  # a 403 or 500 must not publish a catalog without the theme
+                raise
             continue
         tdir = dest / theme
         collections = []
