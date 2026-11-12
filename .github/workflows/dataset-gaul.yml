@@ -161,26 +161,33 @@ jobs:
           # A static release, so the data is immutable; the manifest and the
           # attribution are the two a correction would touch, and they get the
           # short max-age the other datasets use for their metadata.
-          rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
-            --include "*.parquet" --include "*.pdf" \
-            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
-            --transfers 4 --stats 30s --stats-one-line
-          rclone copy "out/$VERSION" "$REMOTE/$VERSION" --max-depth 1 --include "*.pmtiles" \
-            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
-            --header-upload "Content-Type: application/vnd.pmtiles" --transfers 3
+          # Only the GeoParquet that changed (stamp gaul/2024/_files/gaul.json),
+          # and the PMTiles made from them.
+          CACHE="Cache-Control: public, max-age=31536000, immutable" \
+            scripts/upload_changed.sh "out/$VERSION" "$REMOTE/$VERSION" "$PUBLIC/$VERSION" gaul "$VERSION"
+          rclone copy "out/$VERSION" "$REMOTE/$VERSION" --max-depth 1 --include "*.pdf" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable"
           rclone copy "out/$VERSION" "$REMOTE/$VERSION" \
             --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "out/$VERSION/_files" "$REMOTE/$VERSION/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
-      # The archives first, then the manifest that names them.
+      # The archives first, then the manifest that names them, then the
+      # stamp. --retile uploads every archive without moving `updated`: the
+      # whole-world files were read back from the bucket, so their checksums
+      # match the stamp and they are not uploaded again.
       - name: Upload the PMTiles
         if: inputs.stage == 'tiles'
         run: |
-          rclone copy "out/$VERSION" "$REMOTE/$VERSION" --max-depth 1 --include "*.pmtiles" \
-            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
-            --header-upload "Content-Type: application/vnd.pmtiles" --transfers 3
+          CACHE="Cache-Control: public, max-age=31536000, immutable" \
+            scripts/upload_changed.sh "out/$VERSION" "$REMOTE/$VERSION" "$PUBLIC/$VERSION" gaul "$VERSION" \
+            -- --retile
           rclone copyto "out/$VERSION/_manifest.json" "$REMOTE/$VERSION/_manifest.json" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "out/$VERSION/_files" "$REMOTE/$VERSION/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
 
       # After the data, so the catalog never links a file that is not there.
       - name: STAC catalog, published

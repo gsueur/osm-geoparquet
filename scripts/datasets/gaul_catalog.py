@@ -52,6 +52,7 @@ from datasets.gaul import ACCESS_URL, PARTITION_KEY, SOURCE_ZIPS, VERSION
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -79,6 +80,9 @@ PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 DATA_URL = f"{PUBLIC_DATA}/{VERSION}"
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
+# Each publish stamps what it uploads (scripts/filedates.py): the catalog's
+# `updated` is when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/{VERSION}/_files/gaul.json"]
 CATALOG_ID = "gaul-geoparquet"
 THUMBS = REPO / "catalog" / "thumbnails" / "gaul"
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
@@ -685,6 +689,8 @@ collection's README shows the queries.
 
 {PROVENANCE}
 
+{filedates.DATES_MD}
+
 ## License
 
 {license_md(manifest['accessed'])}
@@ -734,6 +740,8 @@ under `{PARTITION_KEY}=<iso3>/`. Static release, immutable files.
 - `L0_derived` is ours, dissolved from L1; L1 and L2 are FAO's, unchanged.
 - Data (c) FAO, CC BY 4.0. Attribution and the UN boundary disclaimer are
   required; FAO does not endorse this redistribution or any use of it.
+
+{filedates.DATES_MD}
 """
 
 
@@ -790,6 +798,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections, manifest))
     (dest / "AGENTS.md").write_text(root_agents(collections))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
     return manifest
 
 

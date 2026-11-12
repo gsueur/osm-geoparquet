@@ -45,6 +45,7 @@ from datasets.gaul_catalog import STYLE_TYPE, WEB_MAP_LINKS_EXT
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -70,6 +71,9 @@ from catalog import (
 DATASET_PREFIX = "clc"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 DATA_URL = f"{PUBLIC_DATA}/{RELEASE}"
+# Each publish stamps what it uploads (scripts/filedates.py): the catalog's
+# `updated` is when the data last changed, `checked` the last build.
+STAMPS = [f"{DATA_URL}/_files/clc.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "corine-land-cover-2018"
@@ -685,6 +689,8 @@ file, one file per country and the map tiles.
 CLC 2018 is a static release: a later CLC inventory would be published beside
 it under its own year.
 
+{filedates.DATES_MD}
+
 ## License
 
 {LICENSE_MD}
@@ -708,6 +714,8 @@ country, and PMTiles for maps. Static release.
   through the anonymous S3 endpoint `{S3_ENDPOINT}`.
 - Map: the collection's `rel: pmtiles` link and `default` style.
 - Credit: {ATTRIBUTION}.
+
+{filedates.DATES_MD}
 """
 
 
@@ -747,6 +755,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, col))
     (dest / "AGENTS.md").write_text(root_agents(col))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
     return main
 
 
