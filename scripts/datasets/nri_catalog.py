@@ -45,6 +45,7 @@ from datasets.nri import (
 from datasets.pmtiles import PMTILES_TYPE
 
 import catalog as shared  # scripts/catalog.py
+import filedates
 from extent import lon_intervals, wrapped_bbox
 from catalog import (
     ALTERNATE_EXT,
@@ -71,6 +72,9 @@ DATASET_PREFIX = "nri"
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
 RELEASE = f"v{VERSION}"
 RELEASE_URL = f"{PUBLIC_DATA}/{RELEASE}"
+# Each publish stamps what it uploads (scripts/filedates.py): the catalog's
+# `updated` is when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/_files/nri.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "fema-nri"
@@ -572,6 +576,8 @@ Files: `{RELEASE_URL}/<level>.parquet`, with `hazards.parquet` (the 18
 hazards and their column prefixes) and `NRIDataDictionary.csv` (FEMA's field
 dictionary). FEMA's documentation: {DOCS['technical']}.
 
+{filedates.DATES_MD}
+
 ## License
 
 {LICENSE_MD}
@@ -595,6 +601,8 @@ Layout: `{RELEASE_URL}/<level>.parquet`, anonymous S3 at
 `s3://{BUCKET}/{DATASET_PREFIX}/{RELEASE}/` on `{S3_ENDPOINT}`. Lon/lat. Hazard
 columns share a prefix listed in `hazards.parquet`. Keys join with census/TIGER
 (tract and county GEOID). Credit: {ATTRIBUTION}.
+
+{filedates.DATES_MD}
 """
 
 
@@ -633,6 +641,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, collections))
     (dest / "AGENTS.md").write_text(root_agents(collections))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
     return total
 
 

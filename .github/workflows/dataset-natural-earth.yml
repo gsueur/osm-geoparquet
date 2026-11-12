@@ -109,18 +109,19 @@ jobs:
         if: inputs.stage == 'publish'
         run: |
           out="out/$VERSION"
-          rclone copy "$out" "$REMOTE/$VERSION" --include "*.parquet" \
-            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
-            --header-upload "Content-Type: application/vnd.apache.parquet" \
-            --transfers 8 --stats 30s --stats-one-line
-          rclone copy "$out" "$REMOTE/$VERSION" --include "*.pmtiles" \
-            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
-            --header-upload "Content-Type: application/vnd.pmtiles" --transfers 3
+          # Only the GeoParquet that changed (stamp
+          # natural-earth/v5.1.2/_files/natural-earth.json) and the PMTiles
+          # made from them; a scale's basemap follows the newest of its layers.
+          CACHE="Cache-Control: public, max-age=31536000, immutable" \
+            scripts/upload_changed.sh "$out" "$REMOTE/$VERSION" "$PUBLIC/$VERSION" natural-earth "$VERSION"
           rclone copy "$out" "$REMOTE/$VERSION" --include "*/basemap-style.json" \
             --ignore-times --header-upload "Cache-Control: public, max-age=300" \
             --header-upload "Content-Type: application/json"
           rclone copy "$out" "$REMOTE/$VERSION" --max-depth 1 \
             --include "_manifest.json" --include "ATTRIBUTION.txt" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/$VERSION/_files" --include "*.json" --ignore-times \
             --header-upload "Cache-Control: public, max-age=300"
 
       # After the data, so the catalog never links a file that is not there.

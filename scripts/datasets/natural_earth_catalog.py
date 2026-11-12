@@ -36,6 +36,7 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import catalog as shared  # scripts/catalog.py
+import filedates
 from catalog import (
     ALTERNATE_EXT,
     BUCKET,
@@ -75,6 +76,9 @@ from datasets.pmtiles import PMTILES_TYPE
 from extent import lon_intervals, wrapped_bbox
 
 PUBLIC_DATA = f"{PUBLIC_BASE}/{DATASET_PREFIX}"
+# Each publish stamps what it uploads (scripts/filedates.py): the catalog's
+# `updated` is when the data last changed, `checked` the last build.
+STAMPS = [f"{PUBLIC_DATA}/v{VERSION}/_files/natural-earth.json"]
 CATALOG_PREFIX = "catalog"
 CATALOG_URL = f"{PUBLIC_DATA}/{CATALOG_PREFIX}"
 CATALOG_ID = "natural-earth"
@@ -568,6 +572,8 @@ Files: `{PUBLIC}/<scale>/<layer>.parquet`, its tiles `<scale>/<layer>.pmtiles`
 `<scale>/basemap-style.json`. {manifest['total_features']:,} rows in all.
 Which scale: 110m for a world view, 50m for a continent, 10m for a country.
 
+{filedates.DATES_MD}
+
 ## License
 
 {LICENSE_MD}
@@ -594,6 +600,8 @@ S3 at `s3://{BUCKET}/{DATASET_PREFIX}/v{VERSION}/` on `{S3_ENDPOINT}`. Lon/lat.
 Countries: join on `ISO_A2_EH` / `ISO_A3_EH` or `ADM0_A3`, not `ISO_A2`
 (-99 for France and Norway). States and provinces are worldwide at 10m only.
 Public domain; credit "{CREDIT}".
+
+{filedates.DATES_MD}
 """
 
 
@@ -650,6 +658,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> di
     shutil.copyfile(LOGO, dest / "logo.png")
     (dest / "README.md").write_text(root_readme(root, scales, manifest))
     (dest / "AGENTS.md").write_text(root_agents(scales))
+    filedates.apply(dest, filedates.load(PUBLIC_DATA, *STAMPS))
     return manifest
 
 
