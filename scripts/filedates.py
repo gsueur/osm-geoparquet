@@ -101,11 +101,16 @@ def fetch_json(url: str) -> dict | None:
 
 
 def stamp(out: Path, name: str, published: dict | None, since: str, now: str, *,
-          prefix: str = "", complete: bool = False, retile: bool = False) -> dict:
-    """The new stamp for every data and tile file under out."""
+          prefix: str = "", complete: bool = False, retile: bool = False,
+          only: list[Path] | None = None, first: bool | None = None) -> dict:
+    """The new stamp for every data and tile file under out, or only those
+    in `only` (a build that publishes each layer as it is built: `published`
+    is then the stamp so far, and `first` says whether the run started with
+    no published stamp at all)."""
     before = (published or {}).get("files", {})
+    first = published is None if first is None else first
     pre = prefix.strip("/") + "/" if prefix.strip("/") else ""
-    files = sorted(p for p in out.rglob("*") if p.is_file()
+    files = sorted(p for p in (only if only is not None else out.rglob("*")) if p.is_file()
                    and p.suffix in DATA + TILES and not p.name.startswith("._"))
     entries: dict[str, dict] = {}
     upload: set[str] = set()
@@ -115,7 +120,7 @@ def stamp(out: Path, name: str, published: dict | None, since: str, now: str, *,
         if old is None:
             # Not on the bucket yet: new data now, unless there is no stamp
             # at all (first run), where the file is very likely already live.
-            return since if published is None else now
+            return since if first else now
         if old["sha256"] == digest:
             return old.get("updated") or since
         return now

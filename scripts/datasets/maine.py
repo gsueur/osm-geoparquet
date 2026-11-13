@@ -78,7 +78,9 @@ SERVERS = {
     "": {"url": ORG + "/{service}/FeatureServer/{layer}", "kind": "feature service",
          "publisher": "the Maine GeoLibrary", "undated": "daily"},
     "dep": {"url": DEP + "/{service}/MapServer/{layer}", "kind": "map service",
-            "publisher": "the Maine Department of Environmental Protection", "undated": "monthly"},
+            "publisher": "the Maine Department of Environmental Protection", "undated": "monthly",
+            # Its map services fail on large pages already: one reader.
+            "workers": 1},
 }
 PUBLIC = "https://parquetry.geomermaids.com/maine"
 LAYERS_CSV = Path(__file__).with_name("maine_layers.csv")
