@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-A state's ArcGIS REST layers as GeoParquet and PMTiles: the engine maine.py
-and nh.py share. Each of them is a Profile (its servers, layer CSV, themes,
+A state's ArcGIS REST layers as GeoParquet and PMTiles: the engine maine.py,
+nh.py and ny.py share. Each of them is a Profile (its servers, layer CSV, themes,
 colours, outline and attribution); this reads each layer from its query
 endpoint and writes one GeoParquet file per layer, and its PMTiles archive,
 grouped by theme:
@@ -25,7 +25,9 @@ read by GDAL, which keeps the field types (dates as timestamps). The rows
 fetched must equal the layer's returnCountOnly count, or the layer fails.
 Features without a geometry are dropped and counted in the manifest.
 
-Columns and values are the publisher's, unchanged. The geometry is 2D, with
+Columns and values are the publisher's, unchanged, but for the columns a
+profile drops (drop_columns: New York's parcel owner names and mailing
+addresses), listed in the manifest entry. The geometry is 2D, with
 a `bbox` column declared as the GeoParquet covering; rows are sorted on a
 Hilbert curve and cut into row groups of at most 4 MiB of geometry. Writing,
 tiling and thumbnails are massgis.py's.
@@ -102,6 +104,8 @@ class Profile:
     attribution: Callable[[str, list[dict]], str]
     crs: str | None = None         # every layer in this CRS; None: each its own
     tile_max_zoom: dict[str, int] = field(default_factory=dict)
+    # Layer id -> the publisher's columns left out of the file.
+    drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def layers(p: Profile) -> list[dict]:
@@ -419,6 +423,10 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     folder = out / r["theme"]
     folder.mkdir(parents=True, exist_ok=True)
     crs, dropped = load(p, con, info["sources"], work)
+    have = {c for (c,) in con.execute("SELECT column_name FROM (DESCRIBE src)").fetchall()}
+    left_out = [c for c in p.drop_columns.get(r["id"], ()) if c in have]
+    for c in left_out:
+        con.execute(f'ALTER TABLE src DROP COLUMN "{c}"')
     dest = folder / f"{r['id']}.parquet"
     entry = write_layer(con, dest, crs)
     tiles = None
@@ -441,6 +449,7 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
          **({"years": folds["year"]} if names.get("year") == "year" else {}),
          **({"folds": folds, "fold_columns": names} if folds else {}),
          **entry, "dropped_without_geometry": dropped,
+         **({"columns_left_out": left_out} if left_out else {}),
          "source": {k: v for k, v in info.items() if k != "sources"} | {
              "urls": [s["url"] for s in info["sources"]],
              "sources": [{k: s[k] for k in ("url", "name", "year", "fold", "data_edited",
