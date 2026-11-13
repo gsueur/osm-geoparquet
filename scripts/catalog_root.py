@@ -92,6 +92,9 @@ DATASETS = [
               "conserved lands, habitat, marine fisheries, coastal hazards and geology, and "
               "the Maine DEP's sites, spills, PFAS, water quality and lakes layers, "
               "checked weekly.", SITE),
+    ("nh", "NH GRANIT's statewide layers: the parcel mosaic, districts, roads and "
+           "facilities, hydrography, soils, conserved lands, wildlife habitat and the "
+           "coast's sea-level-rise and groundwater scenarios, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored

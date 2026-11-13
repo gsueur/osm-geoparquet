@@ -1,0 +1,128 @@
+id,theme,title,service,layer,year,note,server,category,from_year,to_year,scenario
+congressional_district_2022,boundaries,New Hampshire Congressional District Boundaries - 2022,Hosted/APB_ElectoralDistricts,6,,,,,,,
+county_boundaries,boundaries,New Hampshire County Boundaries,Hosted/GV_BaseLayers,7,,,,,,,
+executive_council_district_2022,boundaries,New Hampshire Executive Council District Boundaries - 2022,Hosted/APB_ElectoralDistricts,7,,,,,,,
+geodetic_control_points_database,boundaries,New Hampshire Geodetic Control Points Database,Hosted/LGN_GeodeticControl,0,,,,,,,
+house_of_representatives_district_2022,boundaries,New Hampshire House of Representatives District Boundaries - 2022,Hosted/APB_ElectoralDistricts,8,,,,,,,
+house_of_representatives_floterial_district_2022,boundaries,New Hampshire House of Representatives Floterial District Boundaries - 2022,Hosted/APB_ElectoralDistricts,9,,,,,,,
+political_boundaries,boundaries,New Hampshire Political Boundaries,Hosted/GV_BaseLayers,8,,,,,,,
+political_districts_voting_wards_2022,boundaries,New Hampshire Political Districts (Voting Wards) - 2022,Hosted/APB_ElectoralDistricts,11,,,,,,,
+senate_district_2022,boundaries,New Hampshire Senate District Boundaries - 2022,Hosted/APB_ElectoralDistricts,10,,,,,,,
+state_boundary,boundaries,New Hampshire State Boundary,Hosted/GV_BaseLayers,6,,,,,,,
+usgs_15_minute_quadrangle_boundaries,boundaries,NH USGS 15-Minute Quadrangle Boundaries,Hosted/GV_BaseLayers,3,,,,,,,
+usgs_7_5_minute_quadrangle_boundaries,boundaries,NH USGS 7.5-Minute Quadrangle Boundaries,Hosted/GV_BaseLayers,4,,,,,,,
+parcel_mosaic_additional_lines,cadastre,NH Parcel Mosaic - Additional Lines,Hosted/CAD_ParcelMosaic,2,,,,,,,
+parcel_mosaic_parcel_points,cadastre,NH Parcel Mosaic - Parcel Points,Hosted/CAD_ParcelMosaic,0,,,,,,,
+parcel_mosaic_polygons,cadastre,NH Parcel Mosaic - Polygons,Hosted/CAD_ParcelMosaic,1,,,,,,,
+2025_shoreline_structure_inventory,coast,2025 New Hampshire Shoreline Structure Inventory,Hosted/CV_OceansAndCoasts,2,,,,,,,
+coastal_conservation_focus_areas_2021,coast,Coastal Conservation Focus Areas - 2021,Hosted/CV_EnvironmentAndConservation_,28,,,,,,,
+coastal_priority_agricultural_resources_2021,coast,Coastal Priority Agricultural Resources - 2021,Hosted/CV_EnvironmentAndConservation_,27,,,,,,,
+coastal_restoration_database,coast,NH Coastal Restoration Database,Hosted/CV_EnvironmentAndConservation_,31,,,,,,,
+great_bay_estuary_assessment_zones,coast,Great Bay Estuary Assessment Zones,Hosted/BE_GreatBayAssessmentZonesCurrent,0,,,,,,,
+groundwater_depth_less_than_10_feet_no_slr,coast,Groundwater Depth less than 10-feet (No SLR),Hosted/CV_OceansAndCoasts,39,,,,,,,
+groundwater_depth_less_than_15_feet_no_slr,coast,Groundwater Depth less than 15-feet No SLR,Hosted/CV_OceansAndCoasts,37,,,,,,,
+groundwater_depth_less_than_5_feet_no_slr,coast,Groundwater Depth less than 5-feet (No SLR),Hosted/CV_OceansAndCoasts,38,,,,,,,
+groundwater_rise,coast,Groundwater Rise Caused by Sea-Level Rise,Hosted/CV_OceansAndCoasts,28,,,,,,,1 ft SLR
+groundwater_rise,coast,Groundwater Rise Caused by Sea-Level Rise,Hosted/CV_OceansAndCoasts,29,,,,,,,2 ft SLR
+groundwater_rise,coast,Groundwater Rise Caused by Sea-Level Rise,Hosted/CV_OceansAndCoasts,30,,,,,,,4 ft SLR
+groundwater_rise,coast,Groundwater Rise Caused by Sea-Level Rise,Hosted/CV_OceansAndCoasts,31,,,,,,,6 ft SLR
+groundwater_rise,coast,Groundwater Rise Caused by Sea-Level Rise,Hosted/CV_OceansAndCoasts,32,,,,,,,8 ft SLR
+groundwater_rise_modeled_areas,coast,Groundwater Rise Modeled Areas,Topical/CV_OceansAndCoasts,41,,,map,,,,
+groundwater_rise_zone_with_8_ft_of_slr,coast,Groundwater Rise Zone with 8-ft of SLR,Hosted/CV_OceansAndCoasts,36,,,,,,,
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,5,,,,,,,"groundwater under 10 ft, 1 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,6,,,,,,,"groundwater under 10 ft, 2 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,7,,,,,,,"groundwater under 10 ft, 4 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,8,,,,,,,"groundwater under 10 ft, 6 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,9,,,,,,,"groundwater under 10 ft, 8 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,0,,,,,,,"groundwater under 5 ft, 1 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,1,,,,,,,"groundwater under 5 ft, 2 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,2,,,,,,,"groundwater under 5 ft, 4 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,3,,,,,,,"groundwater under 5 ft, 6 ft SLR"
+groundwater_vulnerable_areas,coast,Areas Vulnerable to Groundwater Rise,Hosted/CV_GroundwaterVulnerability,4,,,,,,,"groundwater under 5 ft, 8 ft SLR"
+intertidal_rockweed_distribution,coast,Intertidal Rockweed Distribution,Hosted/CV_IntertidalRockweedDistribution,0,,,,,,,
+marine_aquaculture_resource_data_2015,coast,Marine Aquaculture Resource Data - 2015,Hosted/BE_AquacultureSites,0,,,,,,,
+salt_marsh_metrics_2022,coast,Salt Marsh Metrics 2022,Hosted/OC_SaltMarshMetrics2022,0,,,,,,,
+saltwater_intrusion,coast,Simulated Saltwater Intrusion,Hosted/CV_SaltWaterIntrusion,3,,,,,,,"bedrock, 8 ft SLR"
+saltwater_intrusion,coast,Simulated Saltwater Intrusion,Hosted/CV_SaltWaterIntrusion,2,,,,,,,"bedrock, no SLR"
+saltwater_intrusion,coast,Simulated Saltwater Intrusion,Hosted/CV_SaltWaterIntrusion,1,,,,,,,"overburden, 8 ft SLR"
+saltwater_intrusion,coast,Simulated Saltwater Intrusion,Hosted/CV_SaltWaterIntrusion,0,,,,,,,"overburden, no SLR"
+saltwater_intrusion_modeled_areas,coast,Saltwater Intrusion Modeled Areas,OC/CV_SaltWaterIntrusion,5,,,map,,,,
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,0,,,,,,,MHHW
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,1,,,,,,,MHHW + 1 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,6,,,,,,,MHHW + 1% flood
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,7,,,,,,,MHHW + 1% flood + 2 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,8,,,,,,,MHHW + 1% flood + 4 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,9,,,,,,,MHHW + 1% flood + 6 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,10,,,,,,,MHHW + 1% flood + 8 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,2,,,,,,,MHHW + 2 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,3,,,,,,,MHHW + 4 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,4,,,,,,,MHHW + 6 ft SLR
+sea_level_rise_2023,coast,Sea-Level Rise Scenarios (2023),Hosted/CV_SLR_classes_polygons,5,,,,,,,MHHW + 8 ft SLR
+shellfish_aquaculture_resources_2020,coast,Shellfish Aquaculture Resources - 2020,Hosted/CV_BiologyAndEcology,23,,,,,,,
+shellfish_water_classification_data_2015,coast,Shellfish Water Classification Data - 2015,Hosted/CV_BiologyAndEcology,24,,,,,,,
+slamm_2022_0_3_m_slr_at_year_2050,coast,SLAMM 2022 - 0.3-m SLR at Year 2050,SLAMM2022_year2050_slr03m,4,,,agol,,,,
+slamm_2022_0_5_m_slr_at_year_2050,coast,SLAMM 2022 - 0.5-m SLR at Year 2050,SLAMM2022_year2050_slr05m,3,,,agol,,,,
+slamm_2022_0_75_m_slr_at_year_2100,coast,SLAMM 2022 - 0.75-m SLR at Year 2100,SLAMM2022_year2100_slr075m,0,,,agol,,,,
+slamm_2022_1_2_m_slr_at_year_2100,coast,SLAMM 2022 - 1.2-m SLR at Year 2100,SLAMM2022_year2100_slr1pt2m,2,,,agol,,,,
+slamm_2022_1_5_m_slr_at_year_2100,coast,SLAMM 2022 - 1.5-m SLR at Year 2100,SLAMM2022_year2100_slr1pt5m,1,,,agol,,,,
+slamm_2022_initial_conditions,coast,SLAMM 2022 - Initial Conditions,initial_condition,5,,,agol,,,,
+vertical_land_motion_data_coastal_watershed,coast,"Vertical Land Motion Data, NH Coastal Watershed",Hosted/CV_VerticalLandMotion,0,,,,,,,
+connect_the_coast_ctc_prioritized_habitat_blocks,environment,Connect The Coast (CTC) Prioritized Habitat Blocks,Hosted/CV_EnvironmentAndConservation_,7,,,,,,,
+connect_the_coast_ctc_wildlife_corridors,environment,Connect The Coast (CTC) Wildlife Corridors,Hosted/CV_EnvironmentAndConservation_,6,,,,,,,
+conservation_public_lands,environment,New Hampshire Conservation/Public Lands,Hosted/EC_Conservation,6,,,,,,,
+lcp_2016_flood_storage_and_risk_mitigation,environment,Land Conservation Plan 2016 Update - Flood Storage and Risk Mitigation,Hosted/EC_LandConservationPlanDatasets,2,,,,,,,
+lcp_2016_pollutant_attenuation,environment,Land Conservation Plan 2016 Update - Pollutant Attenuation,Hosted/EC_LandConservationPlanDatasets,1,,,,,,,
+lcp_2016_public_water_supply,environment,Land Conservation Plan 2016 Update - Public Water Supply,Hosted/EC_LandConservationPlanDatasets,3,,,,,,,
+lcp_2016_water_resource_overlays,environment,Land Conservation Plan 2016 Update - Water Resource Overlays,Hosted/EC_LandConservationPlanDatasets,4,,,,,,,
+lcp_conservation_focus_areas,environment,Land Conservation Plan Conservation Focus Areas,Hosted/EC_LandConservationPlanDatasets,8,,,,,,,
+lcp_forest_ecosystem_zones,environment,Land Conservation Plan Forest Ecosystem Zones,Hosted/EC_LandConservationPlanDatasets,5,,,,,,,
+lcp_forest_ecosystems_co_occurrence_model,environment,Land Conservation Plan Forest Ecosystems Co-occurrence Model,Hosted/EC_LandConservationPlanDatasets,6,,,,,,,
+lcp_high_quality_stream_watersheds,environment,Land Conservation Plan High-quality Stream Watersheds,Hosted/EC_LandConservationPlanDatasets,7,,,,,,,
+natural_services_network_2007,environment,New Hampshire Natural Services Network 2007,Hosted/EC_NH_NaturalServicesNetwork_2007,0,,,,,,,
+quabbin_to_cardigan_conservation_focus_areas,environment,Quabbin to Cardigan Conservation Focus Areas,Hosted/EC_OpenData_MiscVectorData,2,,,,,,,
+quabbin_to_cardigan_study_area_outline,environment,Quabbin to Cardigan Study Area Outline,Hosted/EC_OpenData_MiscVectorData,1,,,,,,,
+quabbin_to_cardigan_supporting_landscapes,environment,Quabbin to Cardigan Supporting Landscapes,Hosted/EC_OpenData_MiscVectorData,3,,,,,,,
+wap_2025_aquatic_habitat_estuarine_marine,environment,NH Wildlife Action Plan 2025 - Aquatic Habitat (Estuarine/Marine),Hosted/EC_NHWAP,5,,,,,,,
+wap_2025_aquatic_habitat_lakes_ponds,environment,NH Wildlife Action Plan 2025 - Aquatic Habitat (Lakes/Ponds),Hosted/EC_NHWAP,6,,,,,,,
+wap_2025_aquatic_habitat_rivers_streams,environment,NH Wildlife Action Plan 2025 - Aquatic Habitat (Rivers/Streams),Hosted/EC_NHWAP,4,,,,,,,
+wap_2025_habitat_land_cover,environment,NH Wildlife Action Plan 2025 - Habitat Land Cover,Hosted/EC_NHWAP,1,,,,,,,
+wap_2025_highest_ranked_wildlife_habitat,environment,NH Wildlife Action Plan 2025 - Highest Ranked Wildlife Habitat,Hosted/EC_NHWAP,2,,,,,,,
+community_anchor_institutions,facilities,NH Community Anchor Institutions,Hosted/CSD_OpenData_MiscVectorData,0,,,,,,,
+correctional_institutions,facilities,New Hampshire Correctional Institutions,Hosted/CSD_HSIP_ServiceFacilities,0,,,,,,,
+emergency_medical_services,facilities,New Hampshire Emergency Medical Services,Hosted/CSD_HSIP_ServiceFacilities,1,,,,,,,
+fire_stations,facilities,New Hampshire Fire Stations,Hosted/CSD_HSIP_ServiceFacilities,2,,,,,,,
+gnis_places_of_interest,facilities,Geographic Names Information System (Places of Interest),Hosted/GV_BaseLayers,0,,,,,,,
+historic_and_cultural_features_ct_river,facilities,NH Historic and Cultural Features (CT River),Hosted/CSD_OpenData_MiscVectorData,2,,,,,,,
+historic_and_cultural_features_rt_16,facilities,NH Historic and Cultural Features (RT 16),Hosted/CSD_OpenData_MiscVectorData,1,,,,,,,
+hospitals,facilities,New Hampshire Hospitals,Hosted/CSD_HSIP_ServiceFacilities,3,,,,,,,
+law_enforcement,facilities,New Hampshire Law Enforcement,Hosted/CSD_HSIP_ServiceFacilities,4,,,,,,,
+nursing_homes,facilities,New Hampshire Nursing Homes,Hosted/CSD_HSIP_ServiceFacilities,5,,,,,,,
+places_of_worship,facilities,New Hampshire Places of Worship,Hosted/CSD_HSIP_ServiceFacilities,6,,,,,,,
+public_health_departments,facilities,New Hampshire Public Health Departments,Hosted/CSD_HSIP_ServiceFacilities,7,,,,,,,
+recreation_inventory_areas,facilities,NH Recreation Inventory (Areas),Hosted/CSD_RecreationResources,3,,,,,,,
+recreation_inventory_points,facilities,NH Recreation Inventory (Points),Hosted/CSD_RecreationResources,1,,,,,,,
+bedrock_geology_contacts,geology_soils,NH Bedrock Geology - Contacts,Hosted/GG_BedrockGeology,0,,,,,,,
+bedrock_geology_formations,geology_soils,NH Bedrock Geology - Formations,Hosted/GG_BedrockGeology,1,,,,,,,
+ssurgo_soils,geology_soils,Soil Survey Geographic (SSURGO) database for New Hampshire,Hosted/GG_SoilsResources,0,,,,,,,
+land_use_1962_rockingham_county,land_cover,"Land Use 1962 - Rockingham County, NH",Hosted/EC_LandUse_OpenData,8,,,,,,,
+land_use_1962_strafford_county,land_cover,"Land Use 1962 - Strafford County, NH",Hosted/EC_LandUse_OpenData,9,,,,,,,
+land_use_1974_rockingham_county,land_cover,"Land Use 1974 - Rockingham County, NH",Hosted/EC_LandUse_OpenData,5,,,,,,,
+land_use_1974_strafford_county,land_cover,"Land Use 1974 - Strafford County, NH",Hosted/EC_LandUse_OpenData,6,,,,,,,
+land_use_1998_rockingham_county,land_cover,"Land Use 1998 - Rockingham County, NH",Hosted/EC_LandUse_OpenData,2,,,,,,,
+land_use_1998_strafford_county,land_cover,"Land Use 1998 - Strafford County, NH",Hosted/EC_LandUse_OpenData,3,,,,,,,
+land_use_2015_southeastern,land_cover,Land Use 2015 - Southeastern New Hampshire,Hosted/EC_LandUse_OpenData,0,,,,,,,
+timber_clear_cut_inventory_1995,land_cover,New Hampshire Timber Clear Cut Inventory - 1995,Hosted/EC_OpenData_MiscVectorData,4,,,,,,,
+access_sites_to_public_waters,transport_utilities,NH Access Sites To Public Waters,Hosted/CSD_RecreationResources,0,,,,,,,
+dot_roads,transport_utilities,NH DOT Roads,Hosted/GV_BaseLayers,18,,,,,,,
+personal_wireless_service_facilities,transport_utilities,New Hampshire Personal Wireless Service Facilities,Hosted/GV_BaseLayers,1,,,,,,,
+railroads,transport_utilities,New Hampshire Railroads,Hosted/GV_BaseLayers,11,,,,,,,
+recreational_trails,transport_utilities,NH Recreational Trails,Hosted/CSD_RecreationResources,2,,,,,,,
+transmission_pipelines,transport_utilities,NH Transmission/Pipelines,Hosted/GV_BaseLayers,17,,,,,,,
+hydrography_dataset_area,water,New Hampshire Hydrography Dataset (Area),Hosted/IWR_WaterResources,10,,,,,,,
+hydrography_dataset_flowline,water,New Hampshire Hydrography Dataset (Flowline),Hosted/IWR_WaterResources,29,,,,,,,
+hydrography_dataset_waterbody,water,New Hampshire Hydrography Dataset (Waterbody),Hosted/IWR_WaterResources,9,,,,,,,
+statewide_aquifer_transmissivity_for,water,Statewide Aquifer Transmissivity for New Hampshire,Hosted/IWR_WaterResources,27,,,,,,,
+stream_order_dataset,water,New Hampshire Stream Order Dataset,Hosted/IWR_WaterResources,8,,,,,,,
+watershed_boundaries_huc10,water,NH Watershed Boundaries (HUC10),Hosted/IWR_WaterResources,2,,,,,,,
+watershed_boundaries_huc12,water,NH Watershed Boundaries (HUC12),Hosted/IWR_WaterResources,3,,,,,,,
+watershed_boundaries_huc8,water,NH Watershed Boundaries (HUC8),Hosted/IWR_WaterResources,1,,,,,,,
