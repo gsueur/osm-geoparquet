@@ -334,6 +334,31 @@ uploads only the files whose bytes changed; a run starts no layer after 4.5
 hours and leaves the rest to the next. Portolan catalog at
 `https://parquetry.geomermaids.com/maine/catalog/catalog.json`
 (`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
+The Maine and NH builders share their engine: `arcgis_layers.py` (fetch,
+fingerprints, manifests) and `arcgis_catalog.py` (the catalog); each state is
+a profile of it.
+
+NH GRANIT (`scripts/datasets/nh.py`, workflow `dataset-nh.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/nh/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 101 files
+in 9 themes (boundaries and districts, parcels, transportation and utilities,
+facilities, water, geology and soils, conservation and wildlife, coast, land
+use), read from the NH Geodata Portal's ArcGIS services on nhgeodata.unh.edu
+the same way as Maine's. Every layer is in NAD83(NSRS2007) / New Hampshire, US
+survey feet (EPSG:3437), the server projecting the few published in another
+CRS. `nh_layers.csv` lists the published layers; the 2023 sea-level-rise
+scenarios, groundwater rise, the areas vulnerable to groundwater rise and the
+simulated saltwater intrusion are folded into one file each with a `scenario`
+column. Left out: imagery and LiDAR rasters, the 2-ft contours, the canopy
+height polygons, NWI Plus, the 2012 districts, the items whose terms say
+distribution is discouraged (the Great Bay eelgrass years, the dam inventory,
+lake bathymetry, NPDES), and the coastal impervious surfaces (their map
+services support neither paging nor statistics). Credit NH GRANIT. The portal
+gives no edit dates: a layer is rebuilt when its count, highest object id or
+fields move (GRANIT replaces a layer when it updates it); a full build is 5
+to 8 hours, so the first one takes two runs. Portolan catalog at
+`https://parquetry.geomermaids.com/nh/catalog/catalog.json`
+(`scripts/datasets/nh_catalog.py`), one sub-catalog per theme.
 
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
