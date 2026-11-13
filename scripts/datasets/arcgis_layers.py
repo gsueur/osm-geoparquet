@@ -21,9 +21,18 @@ the CSV gives (FOLD_COLUMNS: `year`, `category`, `from_year` and `to_year`,
 Fetching: pages of the layer's maxRecordCount (at most 2,000), walked on the
 object id (`OBJECTID > last`, ordered on it), in the layer's own spatial
 reference or the profile's CRS (outSR: the server projects), as Esri JSON
-read by GDAL, which keeps the field types (dates as timestamps). The rows
-fetched must equal the layer's returnCountOnly count, or the layer fails.
-Features without a geometry are dropped and counted in the manifest.
+read by GDAL, which keeps the field types (dates as timestamps). A large
+layer's ids are cut into ranges walked by up to page_workers threads, put
+back together in id order (the rows, and so the files' bytes, are those of
+one walk). The rows fetched must equal the layer's returnCountOnly count, or
+the layer fails. Features without a geometry are dropped and counted in the
+manifest.
+
+Building: --workers layers at a time, each in a process of its own, the
+outline first, then the largest first, never two of over BIG features side
+by side. With --publish, the main process uploads each layer as soon as it
+is built (Publisher): a run stopped by the time budget, a timeout or a
+cancel keeps all it published.
 
 Columns and values are the publisher's, unchanged, but for the columns a
 profile drops (drop_columns: New York's parcel owner names and mailing
@@ -56,13 +65,20 @@ import http.client
 import itertools
 import json
 import math
+import multiprocessing
+import os
+import queue
 import re
+import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import (FIRST_COMPLETED, ProcessPoolExecutor,
+                                ThreadPoolExecutor, wait)
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -91,7 +107,7 @@ PAGE_FILES = itertools.count()
 class Profile:
     """One state's layers. servers: CSV `server` value -> {url (with
     {service} and {layer}), kind, publisher, undated ('daily', 'monthly'
-    or 'changes')}."""
+    or 'changes'), and optionally workers (threads reading one layer)}."""
     name: str                      # the bucket prefix, e.g. "maine"
     public: str                    # where the published files are read
     layers_csv: Path
@@ -106,6 +122,9 @@ class Profile:
     tile_max_zoom: dict[str, int] = field(default_factory=dict)
     # Layer id -> the publisher's columns left out of the file.
     drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Threads reading one large layer, each a range of its object ids (a
+    # server's `workers` overrides it: 1 for a fragile one).
+    page_workers: int = 4
 
 
 def layers(p: Profile) -> list[dict]:
@@ -293,61 +312,150 @@ def clean_geometry(f: dict) -> None:
         f["geometry"] = None
 
 
-def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None = None) -> int:
-    """One source layer into `table` (created on the first page), walked on
-    its object id, in target_crs (default: its own). Returns the rows
-    fetched."""
-    target_crs = target_crs or info["crs"]
-    last, n, created = -1, 0, con.execute(
-        f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'").fetchone()[0] > 0
+def oid_ranges(info: dict, workers: int) -> list[tuple[int, int | None]]:
+    """The source's object ids cut into up to `workers` ranges (lo, hi], each
+    walked by a thread of its own: [(-1, None)] (one walk) for a small layer,
+    one thread, or a service that cannot say its lowest and highest ids."""
+    pages = math.ceil(info["count"] / info["page"])
+    if workers < 2 or pages < 4:
+        return [(-1, None)]
     oid = info["oid"]
-    page = info["page"]
-    while True:
-        params = {"where": f"{oid} > {last}", "outFields": "*", "orderByFields": f"{oid} ASC",
-                  "resultRecordCount": page, "outSR": target_crs.split(":")[1],
-                  "returnZ": "false", "returnM": "false"}
-        while True:
+    try:
+        stats = get(info["url"] + "/query", {"where": "1=1", "outStatistics": json.dumps(
+            [{"statisticType": t, "onStatisticField": oid, "outStatisticFieldName": t}
+             for t in ("min", "max")])}, attempts=2)
+        a = {k.lower(): v for k, v in
+             ((stats.get("features") or [{}])[0].get("attributes") or {}).items()}
+        lo, hi = int(a["min"]), int(a["max"])
+    except (RuntimeError, KeyError, TypeError, ValueError):
+        return [(-1, None)]
+    n = min(workers, pages // 2)
+    cuts = [lo - 1 + (hi - lo + 1) * i // n for i in range(n)] + [hi]
+    # The last range is open: rows added past the highest id while the layer
+    # is read are fetched too, and the count check sees them.
+    return [(a, b) for a, b in zip(cuts, cuts[1:-1] + [None]) if b is None or b > a]
+
+
+def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None = None,
+                 workers: int = 1) -> int:
+    """One source layer into `table`, walked on its object id, in target_crs
+    (default: its own). Returns the rows fetched.
+
+    With workers > 1 the ids are cut into ranges walked by as many threads,
+    each range in id order into a table of its own; the tables are then
+    appended in range order, so `table` has the rows in the order one walk
+    gives (the files are sorted on a Hilbert key with no tie-breaker: rows
+    on the same key keep this order, and the bytes stay the same)."""
+    target_crs = target_crs or info["crs"]
+    oid = info["oid"]
+    ranges = oid_ranges(info, workers)
+    names = info.get("fold_names") or {}
+    extra = "".join(
+        f", {v}::{FOLD_COLUMNS[c]} AS {names.get(c, c)}" if FOLD_COLUMNS[c] != "VARCHAR"
+        else f", '{str(v).replace(chr(39), chr(39) * 2)}'::VARCHAR AS {names.get(c, c)}"
+        for c, v in (info.get("fold") or {}).items())
+    pages: queue.Queue = queue.Queue(maxsize=2 * len(ranges))
+    stop = threading.Event()
+
+    def put(item: tuple) -> None:
+        """Hand a page over, unless the reading thread gave up."""
+        while not stop.is_set():
             try:
-                # Two tries before halving; the smallest page gets them all.
-                doc = get(info["url"] + "/query", params, attempts=2 if page > MIN_PAGE else 6)
-                break
-            except RuntimeError as e:
-                if page <= MIN_PAGE:
-                    raise
-                page = params["resultRecordCount"] = max(MIN_PAGE, page // 2)
-                print(f"    {table}: {e}; pages of {page}", flush=True)
-        feats = doc.get("features") or []
-        if not feats:
-            break
-        if "NaN" in json.dumps([f.get("geometry") for f in feats]):
-            for f in feats:
-                clean_geometry(f)
-        # A page file of its own, in the whole run: a page GDAL failed to
-        # open stays marked as open in this thread, and any later read of
-        # that path fails ("GDALOpen() called recursively"), every layer
-        # after it.
-        page_file = work / f"page-{table}-{next(PAGE_FILES)}.json"
-        # The features last: GDAL tells Esri JSON from GeoJSON by the keys
-        # at the start of the file, and NH GRANIT's servers put `features`
-        # before `geometryType`.
-        page_file.write_text(json.dumps(
-            {key: v for key, v in doc.items() if key != "features"} | {"features": feats}))
-        names = info.get("fold_names") or {}
-        extra = "".join(
-            f", {v}::{FOLD_COLUMNS[c]} AS {names.get(c, c)}" if FOLD_COLUMNS[c] != "VARCHAR"
-            else f", '{str(v).replace(chr(39), chr(39) * 2)}'::VARCHAR AS {names.get(c, c)}"
-            for c, v in (info.get("fold") or {}).items())
-        sel = f"SELECT *{extra} FROM ST_Read('{page_file}')"
+                pages.put(item, timeout=1)
+                return
+            except queue.Full:
+                continue
+        if isinstance(item[1], Path):
+            item[1].unlink(missing_ok=True)
+
+    def walk(k: int, lo: int, hi: int | None) -> None:
+        last, page = lo, info["page"]
         try:
-            if created:
-                con.execute(f"INSERT INTO {table} BY NAME {sel}")
-            else:
-                con.execute(f"CREATE TABLE {table} AS {sel}")
-                created = True
+            while not stop.is_set():
+                where = f"{oid} > {last}" + (f" AND {oid} <= {hi}" if hi is not None else "")
+                params = {"where": where, "outFields": "*", "orderByFields": f"{oid} ASC",
+                          "resultRecordCount": page, "outSR": target_crs.split(":")[1],
+                          "returnZ": "false", "returnM": "false"}
+                while True:
+                    try:
+                        # Two tries before halving; the smallest page gets them all.
+                        doc = get(info["url"] + "/query", params,
+                                  attempts=2 if page > MIN_PAGE else 6)
+                        break
+                    except RuntimeError as e:
+                        if page <= MIN_PAGE:
+                            raise
+                        page = params["resultRecordCount"] = max(MIN_PAGE, page // 2)
+                        print(f"    {table}: {e}; pages of {page}", flush=True)
+                feats = doc.get("features") or []
+                if not feats:
+                    break
+                if "NaN" in json.dumps([f.get("geometry") for f in feats]):
+                    for f in feats:
+                        clean_geometry(f)
+                # A page file of its own, in the whole run: a page GDAL failed
+                # to open stays marked as open in this thread, and any later
+                # read of that path fails ("GDALOpen() called recursively").
+                page_file = work / f"page-{table}-{os.getpid()}-{next(PAGE_FILES)}.json"
+                # The features last: GDAL tells Esri JSON from GeoJSON by the
+                # keys at the start of the file, and NH GRANIT's servers put
+                # `features` before `geometryType`.
+                page_file.write_text(json.dumps(
+                    {key: v for key, v in doc.items() if key != "features"} | {"features": feats}))
+                put((k, page_file, len(feats)))
+                last = max(f["attributes"][oid] for f in feats)
+            put((k, None, 0))
+        except BaseException as e:  # noqa: BLE001 - handed to the reading thread
+            put((k, e, 0))
+
+    # One walk writes straight into the table.
+    chunks = [table] if len(ranges) == 1 else [f"{table}_r{k}" for k in range(len(ranges))]
+    created = [False] * len(ranges)
+    n, running = 0, len(ranges)
+    with ThreadPoolExecutor(len(ranges)) as ex:
+        for k, (lo, hi) in enumerate(ranges):
+            ex.submit(walk, k, lo, hi)
+        try:
+            while running:
+                k, item, count = pages.get()
+                if item is None:
+                    running -= 1
+                    continue
+                if isinstance(item, BaseException):
+                    raise item
+                sel = f"SELECT *{extra} FROM ST_Read('{item}')"
+                try:
+                    if created[k]:
+                        con.execute(f"INSERT INTO {chunks[k]} BY NAME {sel}")
+                    else:
+                        con.execute(f"CREATE TABLE {chunks[k]} AS {sel}")
+                        created[k] = True
+                finally:
+                    item.unlink(missing_ok=True)
+                n += count
         finally:
-            page_file.unlink(missing_ok=True)
-        n += len(feats)
-        last = max(f["attributes"][oid] for f in feats)
+            stop.set()
+            while True:  # unblock the threads still putting pages
+                try:
+                    _, item, _ = pages.get_nowait()
+                except queue.Empty:
+                    break
+                if isinstance(item, Path):
+                    item.unlink(missing_ok=True)
+    if len(ranges) == 1:
+        return n
+    # Appended in range order: the order of one walk on the object id.
+    have = con.execute(f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'"
+                       ).fetchone()[0] > 0
+    for k, c in enumerate(chunks):
+        if not created[k]:
+            continue
+        if have:
+            con.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {c}")
+        else:
+            con.execute(f"CREATE TABLE {table} AS SELECT * FROM {c}")
+            have = True
+        con.execute(f"DROP TABLE {c}")
     return n
 
 
@@ -383,7 +491,8 @@ def load(p: Profile, con, sources: list[dict], work: Path) -> tuple[str, int]:
         for t in tables:
             con.execute(f"DROP TABLE IF EXISTS {t}")
         short = [(s, got) for s, t in zip(sources, tables)
-                 if (got := fetch_source(con, s, work, t, crs)) != s["count"]]
+                 if (got := fetch_source(con, s, work, t, crs, p.servers[s["server"]].get(
+                     "workers", p.page_workers))) != s["count"]]
         if not short:
             break
         if attempt == 2:
@@ -462,8 +571,88 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     return e
 
 
+# A layer of more features than this is big: one at a time, so two of them
+# never sort and tile side by side in the runner's 16 GB.
+BIG = 1_000_000
+
+
+def run_layer(p: Profile, r: dict, info: dict, work: Path, out: Path,
+              no_tiles: bool) -> tuple[bool, dict | str]:
+    """build_layer in a worker process, on a connection and a temp folder of
+    its own. Returns (True, entry) or (False, why it failed)."""
+    tmp = work / f"layer-{r['id']}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    con.execute(f"INSTALL spatial; LOAD spatial; SET temp_directory = '{tmp}'; "
+                "SET memory_limit = '6GB'")
+    try:
+        return True, build_layer(p, con, r, info, tmp, out, no_tiles)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - one layer must not stop the others
+        for f in (out / r["theme"]).glob(f"{r['id']}.*"):
+            f.unlink(missing_ok=True)
+        return False, f"{type(e).__name__}: {e}"[:500]
+    finally:
+        con.close()
+        for f in sorted(tmp.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+        tmp.rmdir()
+
+
+class Publisher:
+    """Uploads each layer as soon as it is built, in the order a reader can
+    trust: its GeoParquet and PMTiles (those whose bytes changed, as
+    scripts/filedates.py says) and thumbnail, then its theme's manifest and
+    attribution, the index, _source.json, and the file stamp last. A run cut
+    short keeps everything published before it; the next one starts from the
+    published _source.json."""
+
+    def __init__(self, p: Profile, out: Path, remote: str, public: str):
+        from filedates import as_rfc3339, fetch_json, now_rfc3339
+        self.p, self.out, self.remote = p, out, remote.rstrip("/")
+        self.stamp = fetch_json(f"{public}/_files/{p.name}.json")
+        self.first = self.stamp is None
+        self.now = now_rfc3339()
+        self.since = as_rfc3339(dt.date.today().isoformat())
+        self.cache = os.environ.get("CACHE", "Cache-Control: public, max-age=3600")
+
+    def copy(self, rel: str, *headers: str) -> None:
+        cmd = ["rclone", "copyto", str(self.out / rel), f"{self.remote}/{rel}", "--ignore-times",
+               "--no-traverse", "--retries", "5"]
+        for h in headers:
+            cmd += ["--header-upload", h]
+        subprocess.run(cmd, check=True)
+
+    def data(self, theme: str, layer_id: str) -> None:
+        from filedates import stamp
+        folder = self.out / theme
+        files = [f for f in (folder / f"{layer_id}.parquet", folder / f"{layer_id}.pmtiles")
+                 if f.is_file()]
+        doc = stamp(self.out, self.p.name, self.stamp, self.since, self.now, only=files,
+                    first=self.first)
+        upload = doc.pop("upload")
+        self.stamp = doc
+        types = {".parquet": "application/vnd.apache.parquet", ".pmtiles": "application/vnd.pmtiles"}
+        for rel in upload:
+            self.copy(rel, self.cache, f"Content-Type: {types[Path(rel).suffix]}")
+        if (folder / f"{layer_id}.png").is_file():
+            self.copy(f"{theme}/{layer_id}.png", self.cache)
+        print(f"    published {theme}/{layer_id}: {len(upload)} data file(s) changed", flush=True)
+
+    def meta(self, rels: list[str]) -> None:
+        """Manifests, index and _source.json, then the stamp, last."""
+        for rel in rels:
+            if (self.out / rel).is_file():
+                self.copy(rel, "Cache-Control: public, max-age=300")
+        if self.stamp is not None:
+            stamp_file = self.out / "_files" / f"{self.p.name}.json"
+            stamp_file.parent.mkdir(exist_ok=True)
+            stamp_file.write_text(json.dumps(self.stamp, indent=1) + "\n")
+            self.copy(f"_files/{self.p.name}.json", "Cache-Control: public, max-age=300")
+
+
 def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | None,
-          force: bool, no_tiles: bool, max_minutes: float | None = None) -> None:
+          force: bool, no_tiles: bool, max_minutes: float | None = None, workers: int = 1,
+          publish: str | None = None) -> None:
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)  # written to even when nothing is built
     rows = layers(p)
@@ -473,9 +662,7 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
     t0 = time.monotonic()
     source = upstream(p, only)
     print(f"  upstream read in {time.monotonic() - t0:.0f} s", flush=True)
-    con = duckdb.connect()
-    con.execute(f"INSTALL spatial; LOAD spatial; SET temp_directory = '{work}'; "
-                "SET memory_limit = '6GB'")
+    publisher = Publisher(p, out, publish, public) if publish else None
 
     def complete(r: dict, e: dict) -> bool:
         """The entry's files are all here, the PMTiles too unless --no-tiles."""
@@ -517,32 +704,135 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
             built[r["id"]] = e
             todo.remove(r)
     print(f"  {len(rows)} layers, {len(todo)} to build"
-          + (f", {len(built)} already built here" if built else ""), flush=True)
-    deferred: list[str] = []
-    for r in todo:
-        if max_minutes and time.monotonic() - t0 > max_minutes * 60:
-            # The rest waits for the next run: not in _source.json, so it
-            # counts as moved then (a first build is longer than a job may run).
-            deferred.append(r["id"])
-            continue
-        try:
-            built[r["id"]] = build_layer(p, con, r, source[r["id"]], work, out, no_tiles)
-        except (Exception, SystemExit) as e:  # noqa: BLE001 - one layer must not stop the others
-            failed[r["id"]] = f"{type(e).__name__}: {e}"[:500]
-            print(f"  FAIL {r['theme']}/{r['id']}: {failed[r['id']]}", flush=True)
-            for f in (out / r["theme"]).glob(f"{r['id']}.*"):
-                f.unlink(missing_ok=True)
-            for (t,) in con.execute("SELECT table_name FROM duckdb_tables() WHERE "
-                                    "table_name = 'src' OR table_name LIKE 'raw%'").fetchall():
-                con.execute(f"DROP TABLE IF EXISTS {t}")
-            continue
-        e = built[r["id"]]
+          + (f", {len(built)} already built here" if built else "")
+          + (f", {workers} at a time" if workers > 1 else ""), flush=True)
+
+    prev_cache: dict[str, dict] = {}
+
+    def published_entries(theme: str) -> dict:
+        if theme not in prev_cache:
+            prev_cache[theme] = {f["name"]: f for f in
+                                 get_json(f"{public}/{theme}/_manifest.json", {}).get("files", [])}
+        return prev_cache[theme]
+
+    def write_theme(theme: str, entries: list[dict]) -> None:
+        folder = out / theme
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "ATTRIBUTION.txt").write_text(p.attribution(theme, entries))
+        crs = {e["crs"] for e in entries}
+        (folder / "_manifest.json").write_text(json.dumps({
+            "state_name": p.theme_title(theme),
+            **({"crs": crs.pop()} if len(crs) == 1 else {}),
+            "total_features": sum(e["features"] for e in entries),
+            "themes": {e["name"]: e["features"] for e in entries},
+            "labels": {e["name"]: e["title"] for e in entries},
+            "files": entries,
+            "pmtiles": [{"name": e["name"], **e["pmtiles"]} for e in entries if e.get("pmtiles")],
+        }, indent=2) + "\n")
+
+    def write_index(themes: set[str]) -> None:
+        (out / "index.json").write_text(json.dumps({"datasets": [
+            {"path": theme, "code": theme, "name": p.theme_title(theme)}
+            for theme in p.themes if theme in themes]}, indent=2) + "\n")
+        (out / "snapshots.json").write_text(json.dumps({"latest": "", "snapshots": []}) + "\n")
+
+    def write_source() -> None:
+        # A layer not built keeps its published fingerprint, so the next run
+        # tries it again.
+        (out / "_source.json").write_text(json.dumps(
+            {r["id"]: {k: built[r["id"]]["source"][k]
+                       for k in ("fingerprint", "last_modified", "count")}
+             if r["id"] in built else published[r["id"]]
+             for r in rows if r["id"] in built or r["id"] in published}, indent=2) + "\n")
+
+    def published_now(r: dict, e: dict) -> None:
+        """One layer just built: its files, then everything that names it."""
+        publisher.data(r["theme"], r["id"])
+        entries = [built[x["id"]] if x["id"] in built else published_entries(x["theme"])[x["id"]]
+                   for x in rows if x["theme"] == r["theme"]
+                   and (x["id"] in built or x["id"] in published_entries(x["theme"]))]
+        write_theme(r["theme"], entries)
+        themes = {x["theme"] for x in rows
+                  if x["id"] in built or x["id"] in published_entries(x["theme"])}
+        write_index(themes)
+        write_source()
+        publisher.meta([f"{r['theme']}/_manifest.json", f"{r['theme']}/ATTRIBUTION.txt",
+                        "index.json", "snapshots.json", "_source.json"])
+
+    def report(r: dict, ok: bool, result: dict | str) -> None:
+        if not ok:
+            failed[r["id"]] = result
+            print(f"  FAIL {r['theme']}/{r['id']}: {result}", flush=True)
+            return
+        e = built[r["id"]] = result
         tiles = e["pmtiles"]
         print(f"  {r['theme']}/{r['id']}: {e['features']:,} rows, {e['bytes'] / 1e6:.1f} MB, "
               f"{e['crs']}"
               + (f", tiles {tiles['bytes'] / 1e6:.1f} MB from z{tiles['min_zoom']}"
                  f"{'' if tiles['all_properties'] else ' (naming columns)'}" if tiles else "")
               + f", {time.monotonic() - t0:.0f} s", flush=True)
+        if publisher:
+            try:
+                published_now(r, e)
+            except (Exception, SystemExit) as err:  # noqa: BLE001 - the others still publish
+                # Not published: the layer keeps its published state (its
+                # fingerprint too, so the next run tries it again).
+                del built[r["id"]]
+                failed[r["id"]] = f"publish: {type(err).__name__}: {err}"[:500]
+                print(f"  FAIL {r['theme']}/{r['id']}: {failed[r['id']]}", flush=True)
+
+    def result(f) -> tuple[bool, dict | str]:
+        try:
+            return f.result()
+        except BrokenProcessPool:
+            raise
+        except Exception as e:  # noqa: BLE001
+            return False, f"{type(e).__name__}: {e}"[:500]
+
+    def size(r: dict) -> int:
+        return source[r["id"]].get("count") or 0
+
+    # The outline first, alone: every thumbnail is drawn over it. Then the
+    # largest first, so the long ones start early and the small ones fill the
+    # other workers around them; never two big ones side by side.
+    first = [r for r in todo if (r["theme"], r["id"]) == p.outline]
+    waiting = sorted((r for r in todo if r not in first), key=size, reverse=True)
+    deferred: list[str] = []
+    running: dict = {}
+    ctx = multiprocessing.get_context("spawn")
+    try:
+        with ProcessPoolExecutor(max(1, workers), mp_context=ctx) as pool:
+            for r in first:
+                f = pool.submit(run_layer, p, r, source[r["id"]], work, out, no_tiles)
+                running[f] = r
+                report(r, *result(f))
+                del running[f]
+            while waiting or running:
+                if waiting and max_minutes and time.monotonic() - t0 > max_minutes * 60:
+                    # The rest waits for the next run: not in _source.json, so
+                    # it counts as moved then.
+                    deferred += [r["id"] for r in waiting]
+                    waiting = []
+                big = any(size(r) > BIG for r in running.values())
+                pick = next((r for r in waiting if not (big and size(r) > BIG)), None)
+                if pick and len(running) < max(1, workers):
+                    waiting.remove(pick)
+                    running[pool.submit(run_layer, p, pick, source[pick["id"]], work, out,
+                                        no_tiles)] = pick
+                    continue
+                if not running:
+                    break
+                done_, _ = wait(running, return_when=FIRST_COMPLETED)
+                for f in done_:
+                    report(running.pop(f), *result(f))
+    except BrokenProcessPool:
+        # A worker died (out of memory): the layers in flight fail, the rest
+        # waits for the next run; what is published stays.
+        for r in running.values():
+            failed[r["id"]] = "BrokenProcessPool: a worker process died (out of memory?)"
+            print(f"  FAIL {r['theme']}/{r['id']}: {failed[r['id']]}", flush=True)
+        deferred += [r["id"] for r in waiting]
+
     # Manifests: the published entries, with the layers just built replaced.
     by_theme: dict[str, list[dict]] = {}
     absent = []
@@ -565,8 +855,7 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
         # Nothing local is published for this layer: whatever an earlier or
         # interrupted run left here (with or without an entry) goes.
         discard(r)
-        prev = {f["name"]: f for f in get_json(f"{public}/{r['theme']}/_manifest.json", {})
-                .get("files", [])}
+        prev = published_entries(r["theme"])
         if r["id"] in prev:
             by_theme.setdefault(r["theme"], []).append(prev[r["id"]])
         else:
@@ -575,30 +864,13 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
         print(f"  {len(absent)} layers neither built nor published: left out of the manifests",
               flush=True)
     for theme, entries in by_theme.items():
-        folder = out / theme
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "ATTRIBUTION.txt").write_text(p.attribution(theme, entries))
-        crs = {e["crs"] for e in entries}
-        (folder / "_manifest.json").write_text(json.dumps({
-            "state_name": p.theme_title(theme),
-            **({"crs": crs.pop()} if len(crs) == 1 else {}),
-            "total_features": sum(e["features"] for e in entries),
-            "themes": {e["name"]: e["features"] for e in entries},
-            "labels": {e["name"]: e["title"] for e in entries},
-            "files": entries,
-            "pmtiles": [{"name": e["name"], **e["pmtiles"]} for e in entries if e.get("pmtiles")],
-        }, indent=2) + "\n")
-    (out / "index.json").write_text(json.dumps({"datasets": [
-        {"path": theme, "code": theme, "name": p.theme_title(theme)}
-        for theme in p.themes if theme in by_theme]}, indent=2) + "\n")
-    (out / "snapshots.json").write_text(json.dumps({"latest": "", "snapshots": []}) + "\n")
-    # A layer not built keeps its published fingerprint, so the next run
-    # tries it again.
-    (out / "_source.json").write_text(json.dumps(
-        {r["id"]: {k: built[r["id"]]["source"][k] for k in ("fingerprint", "last_modified", "count")}
-         if r["id"] in built else published[r["id"]]
-         for r in rows if r["id"] in built or r["id"] in published}, indent=2) + "\n")
+        write_theme(theme, entries)
+    write_index(set(by_theme))
+    write_source()
     (out / "failed.json").write_text(json.dumps(failed, indent=2) + "\n")
+    if publisher:
+        publisher.meta([f"{t}/{f}" for t in by_theme for f in ("_manifest.json", "ATTRIBUTION.txt")]
+                       + ["index.json", "snapshots.json", "_source.json"])
     if deferred:
         print(f"  time budget of {max_minutes:.0f} min reached: {len(deferred)} layers left for "
               f"the next run: {', '.join(deferred)}", flush=True)
@@ -620,6 +892,10 @@ def main(p: Profile, doc: str) -> None:
     b.add_argument("--no-tiles", action="store_true", help="GeoParquet only (a test run)")
     b.add_argument("--max-minutes", type=float, default=None,
                    help="start no layer after this many minutes; the rest waits for the next run")
+    b.add_argument("--workers", type=int, default=1,
+                   help="layers built at a time, each in a process of its own (one big at a time)")
+    b.add_argument("--publish", metavar="REMOTE",
+                   help="upload each layer as soon as it is built (rclone remote of the prefix)")
     args = ap.parse_args()
     if args.cmd == "upstream":
         src = upstream(p, args.layer)
@@ -630,4 +906,5 @@ def main(p: Profile, doc: str) -> None:
                           for k, v in src.items() if not v.get("error")}, indent=2))
         return
     build(p, args.work_dir, args.out_dir, public=args.public, only=args.layer, force=args.force,
-          no_tiles=args.no_tiles, max_minutes=args.max_minutes)
+          no_tiles=args.no_tiles, max_minutes=args.max_minutes, workers=args.workers,
+          publish=args.publish)

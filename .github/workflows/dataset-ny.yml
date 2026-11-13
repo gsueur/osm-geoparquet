@@ -10,12 +10,12 @@
 # edit dates, or counts, highest object ids and fields where a service gives
 # no dates) with the published ny/_source.json and rebuilds only the layers
 # that moved; the manifests keep the others' published entries. Of what is
-# rebuilt, only the files whose bytes changed are uploaded
-# (scripts/upload_changed.sh, stamp ny/_files/ny.json).
+# rebuilt, each layer is uploaded as soon as it is built, only the files
+# whose bytes changed (stamp ny/_files/ny.json).
 #
 #   build    fetch, convert, tile and verify what moved, upload nothing
-#   publish  the same, then upload (a scheduled run publishes), then the
-#            Portolan catalog at /ny/catalog/
+#   publish  the same, uploading each layer as it is built (a scheduled run
+#            publishes), then the Portolan catalog at /ny/catalog/
 #   catalog  only the catalog, rendered from the files already published
 #
 # Needs the R2 secrets the nightly uses.
@@ -60,11 +60,11 @@ env:
 jobs:
   ny:
     runs-on: ubuntu-24.04
-    # A weekly run rebuilds the layers that moved, in minutes. A full build
-    # (about 18 million features: the address points, the parcel centroids,
-    # the parcels and the streets most of it) is 4 to 6 hours: --max-minutes
-    # starts no layer after 4.5 hours, publishes what is built and leaves the
-    # rest to the next run.
+    # A weekly run rebuilds the layers that moved, in minutes. A first build
+    # runs three layers at a time (one of over a million features at most),
+    # reads large layers four pages at a time and uploads each layer as soon
+    # as it is built: --max-minutes starts no layer after 5 hours, and a run
+    # cut short keeps all it published; the next run builds the rest.
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
@@ -102,6 +102,12 @@ jobs:
           echo "WORK=/mnt/work" >> "$GITHUB_ENV"
           df -h /mnt; free -g
 
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
       - name: Fetch, convert, tile and verify
         if: steps.check.outputs.go == 'true'
         run: |
@@ -109,34 +115,11 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
           mkdir -p "$TMPDIR"
           /usr/bin/time -v uv run --project scripts --with matplotlib python scripts/datasets/ny.py build \
-            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 270 \
+            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 300 --workers 3 \
+            ${{ env.PUBLISH == 'true' && format('--publish {0}', env.REMOTE) || '' }} \
             ${{ inputs.force && '--force' || '' }} 2> >(tee "$WORK/time.txt" >&2)
           grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
           du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
-
-      - name: rclone
-        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
-        run: |
-          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
-          rclone version | sed -n 1p
-
-      # The data first, then the manifests and the repository files that
-      # name it: a reader never finds a path that is not there yet. out/
-      # holds only the layers just built, so copy, never sync.
-      - name: Publish
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
-        run: |
-          out="$WORK/out"
-          # Only the GeoParquet that changed, and the PMTiles made from them.
-          scripts/upload_changed.sh "$out" "$REMOTE" "$PUBLIC" ny ""
-          rclone copy "$out" "$REMOTE" --include "*.png" --header-upload "$CACHE" --transfers 16
-          rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
-            --ignore-times --header-upload "Cache-Control: public, max-age=300"
-          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
-            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
-          # The stamp last: the catalog step reads it.
-          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
-            --header-upload "Cache-Control: public, max-age=300"
 
       - name: Check what is live
         if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'

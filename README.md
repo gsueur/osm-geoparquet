@@ -336,7 +336,10 @@ hours and leaves the rest to the next. Portolan catalog at
 (`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
 The Maine, NH and New York builders share their engine: `arcgis_layers.py` (fetch,
 fingerprints, manifests) and `arcgis_catalog.py` (the catalog); each state is
-a profile of it.
+a profile of it. The engine builds three layers at a time (one of over a
+million features at most), reads large layers four pages at a time, and on
+a publish run uploads each layer as soon as it is built, so a run cut short
+keeps everything it published.
 
 NH GRANIT (`scripts/datasets/nh.py`, workflow `dataset-nh.yml`, checked
 weekly) sits under `https://parquetry.geomermaids.com/nh/<theme>/`: one
@@ -355,8 +358,7 @@ distribution is discouraged (the Great Bay eelgrass years, the dam inventory,
 lake bathymetry, NPDES), and the coastal impervious surfaces (their map
 services support neither paging nor statistics). Credit NH GRANIT. The portal
 gives no edit dates: a layer is rebuilt when its count, highest object id or
-fields move (GRANIT replaces a layer when it updates it); a full build is 5
-to 8 hours, so the first one takes two runs. Portolan catalog at
+fields move (GRANIT replaces a layer when it updates it). Portolan catalog at
 `https://parquetry.geomermaids.com/nh/catalog/catalog.json`
 (`scripts/datasets/nh_catalog.py`), one sub-catalog per theme.
 
@@ -380,8 +382,7 @@ out: the layers whose terms forbid redistribution (most of DEC's, OPRHP's
 parks, trails and National Register listings, TNC's forest blocks), county
 and local layers, indexes, rasters, the building footprints (USA Structures
 covers them) and the Census Bureau layers already on parquetry. Credit the
-NYS GIS Clearinghouse and the agency each layer names. A full build is 4 to 6
-hours, so the first one takes two runs. Portolan catalog at
+NYS GIS Clearinghouse and the agency each layer names. Portolan catalog at
 `https://parquetry.geomermaids.com/ny/catalog/catalog.json`
 (`scripts/datasets/ny_catalog.py`), one sub-catalog per theme.
 
