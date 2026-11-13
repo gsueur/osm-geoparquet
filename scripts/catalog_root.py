@@ -95,6 +95,10 @@ DATASETS = [
     ("nh", "NH GRANIT's statewide layers: the parcel mosaic, districts, roads and "
            "facilities, hydrography, soils, conserved lands, wildlife habitat and the "
            "coast's sea-level-rise and groundwater scenarios, checked weekly.", SITE),
+    ("ny", "New York State's statewide layers from the NYS GIS Clearinghouse: tax parcels "
+           "(without owner names), address points, streets, civil boundaries, NYSDOT's "
+           "roadway inventory and bridges, wetlands and the coast's waterfront programs, "
+           "checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored

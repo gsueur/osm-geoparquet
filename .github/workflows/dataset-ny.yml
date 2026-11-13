@@ -1,0 +1,187 @@
+# New York State statewide vector layers: parquetry:parquetry/ny/.
+#
+# One GeoParquet file and one PMTiles archive per layer, under
+# ny/<theme>/. scripts/datasets/ny.py documents the layout and the fetch;
+# scripts/datasets/ny_layers.csv says which layers are built.
+#
+# The layers are the state agencies' ArcGIS services listed on the NYS GIS
+# Clearinghouse (ITS, State, DEC, DOT, the Thruway, OPRHP), all read in
+# EPSG:26918. A weekly run compares each layer's fingerprint (its sources'
+# edit dates, or counts, highest object ids and fields where a service gives
+# no dates) with the published ny/_source.json and rebuilds only the layers
+# that moved; the manifests keep the others' published entries. Of what is
+# rebuilt, only the files whose bytes changed are uploaded
+# (scripts/upload_changed.sh, stamp ny/_files/ny.json).
+#
+#   build    fetch, convert, tile and verify what moved, upload nothing
+#   publish  the same, then upload (a scheduled run publishes), then the
+#            Portolan catalog at /ny/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-ny
+
+on:
+  schedule:
+    - cron: "29 10 * * 6"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild every layer, moved or not"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-ny
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/ny
+  PUBLIC: https://parquetry.geomermaids.com/ny
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place when a layer changes: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  ny:
+    runs-on: ubuntu-24.04
+    # A weekly run rebuilds the layers that moved, in minutes. A full build
+    # (about 18 million features: the address points, the parcel centroids,
+    # the parcels and the streets most of it) is 4 to 6 hours: --max-minutes
+    # starts no layer after 4.5 hours, publishes what is built and leaves the
+    # rest to the next run.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/ny.py upstream > upstream.json 2> upstream.err
+          cat upstream.err >&2
+          # Layers whose service did not answer: left out of the comparison,
+          # reported by the last step even when nothing else moved.
+          unreachable=$(sed -n 's/^unreachable, left out: \([^:]*\):.*/\1/p' upstream.err | tr '\n' ' ')
+          echo "unreachable=${unreachable% }" >> "$GITHUB_OUTPUT"
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          moved=$(jq -r --argjson was "$live" \
+            'to_entries | map(select(.value.fingerprint != $was[.key].fingerprint)) | map(.key) | join(" ")' \
+            upstream.json)
+          echo "moved: ${moved:-none}"
+          if [ -z "$moved" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: Fetch, convert, tile and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts --with matplotlib python scripts/datasets/ny.py build \
+            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 270 \
+            ${{ inputs.force && '--force' || '' }} 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The data first, then the manifests and the repository files that
+      # name it: a reader never finds a path that is not there yet. out/
+      # holds only the layers just built, so copy, never sync.
+      - name: Publish
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          out="$WORK/out"
+          # Only the GeoParquet that changed, and the PMTiles made from them.
+          scripts/upload_changed.sh "$out" "$REMOTE" "$PUBLIC" ny ""
+          rclone copy "$out" "$REMOTE" --include "*.png" --header-upload "$CACHE" --transfers 16
+          rclone copy "$out" "$REMOTE" --include "_manifest.json" --include "ATTRIBUTION.txt" \
+            --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          rclone copy "$out" "$REMOTE" --max-depth 1 --include index.json --include snapshots.json \
+            --include _source.json --ignore-times --header-upload "Cache-Control: public, max-age=300"
+          # The stamp last: the catalog step reads it.
+          rclone copy "$out/_files" "$REMOTE/_files" --include "*.json" --ignore-times \
+            --header-upload "Cache-Control: public, max-age=300"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json _files/ny.json boundaries/_manifest.json \
+                   boundaries/ATTRIBUTION.txt cadastre/tax_parcels.parquet \
+                   cadastre/tax_parcels.pmtiles addresses/streets.parquet \
+                   addresses/address_points.parquet transport/dot_roadway_inventory.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/addresses/streets.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/ny_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/cadastre/catalog.json \
+                   catalog/cadastre/tax_parcels/collection.json \
+                   catalog/cadastre/tax_parcels/styles/default.json \
+                   catalog/addresses/streets/collection.json \
+                   catalog/facilities/schools/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
+
+      # Last, so a layer that failed does not hold back the others: they are
+      # published, the failed one stays as it was (its published fingerprint
+      # is kept, so the next run tries it again), and this run goes red.
+      - name: Layers that failed
+        if: steps.check.outputs.go == 'true'
+        run: |
+          jq -e 'length == 0' "$WORK/out/failed.json" >/dev/null && exit 0
+          jq -r 'to_entries[] | "\(.key): \(.value)"' "$WORK/out/failed.json"
+          exit 1
+
+      - name: Unreachable sources
+        if: always() && steps.check.outputs.unreachable != ''
+        run: |
+          echo "::error::services that did not answer, layers left as published: ${{ steps.check.outputs.unreachable }}"
+          exit 1

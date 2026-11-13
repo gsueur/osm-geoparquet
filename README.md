@@ -334,7 +334,7 @@ uploads only the files whose bytes changed; a run starts no layer after 4.5
 hours and leaves the rest to the next. Portolan catalog at
 `https://parquetry.geomermaids.com/maine/catalog/catalog.json`
 (`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
-The Maine and NH builders share their engine: `arcgis_layers.py` (fetch,
+The Maine, NH and New York builders share their engine: `arcgis_layers.py` (fetch,
 fingerprints, manifests) and `arcgis_catalog.py` (the catalog); each state is
 a profile of it.
 
@@ -359,6 +359,31 @@ fields move (GRANIT replaces a layer when it updates it); a full build is 5
 to 8 hours, so the first one takes two runs. Portolan catalog at
 `https://parquetry.geomermaids.com/nh/catalog/catalog.json`
 (`scripts/datasets/nh_catalog.py`), one sub-catalog per theme.
+
+New York State (`scripts/datasets/ny.py`, workflow `dataset-ny.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/ny/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 98 files
+in 9 themes (boundaries and districts, tax parcels, addresses and streets,
+transportation, facilities and permits, wetlands and habitat, coast and
+waterfronts, community development, historic preservation), read from the
+agencies' ArcGIS services listed on the NYS GIS Clearinghouse
+(data.gis.ny.gov) the same way as Maine's and NH's. Every layer is in NAD83 /
+UTM zone 18N (EPSG:26918), the server projecting the others. `ny_layers.csv`
+lists the published layers; the school layers, polling sites, Natural
+Heritage important areas, NYSDOT's material suppliers, the Thruway rest stops
+and the tax-credit tracts are folded into one file each with a `category`
+column, the South Shore benthic habitat surveys with a `year` column. The tax
+parcels (polygons for the 38 counties that allow sharing) and the parcel
+centroids (all 62) leave out the owner names and mailing addresses (the
+profile's `drop_columns`, listed in the manifest as `columns_left_out`). Left
+out: the layers whose terms forbid redistribution (most of DEC's, OPRHP's
+parks, trails and National Register listings, TNC's forest blocks), county
+and local layers, indexes, rasters, the building footprints (USA Structures
+covers them) and the Census Bureau layers already on parquetry. Credit the
+NYS GIS Clearinghouse and the agency each layer names. A full build is 4 to 6
+hours, so the first one takes two runs. Portolan catalog at
+`https://parquetry.geomermaids.com/ny/catalog/catalog.json`
+(`scripts/datasets/ny_catalog.py`), one sub-catalog per theme.
 
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
