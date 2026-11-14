@@ -440,6 +440,30 @@ redistribution or commercial use; credit the agency each layer names. Portolan
 catalog at `https://parquetry.geomermaids.com/wa/catalog/catalog.json`
 (`scripts/datasets/wa_catalog.py`), one sub-catalog per theme.
 
+Oregon (`scripts/datasets/oregon.py`, workflow `dataset-or.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/or/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 85 files
+in 10 themes (boundaries and planning, addresses and public land survey,
+transportation, water and water rights, fish and wildlife, geology and
+geologic hazards, land and agriculture, coast, public safety, communities),
+read from the agencies' ArcGIS services listed on the Oregon GEOHub
+(geohub.oregon.gov) the same way as the other states'. Every layer is in
+NAD83(HARN) / Oregon GIC Lambert, international feet (EPSG:2992).
+`oregon_layers.csv` lists the published layers; folded into one file each by
+`category`: the water rights' points of diversion and places of use (75
+layers, by source and use), ODFW's fish habitat distribution (136 species
+layers; streams and lakes apart) and DOGAMI's liquefaction hazard classes.
+Left out: copies of national datasets published elsewhere (NHD, 3DHP, WBD,
+GNIS, Census, NWI, wilderness areas, USFS boundaries), the statewide building
+footprints (USA Structures covers them, as for New York), rasters, layers
+covering less than a fifth of the state, indexes of studies and the yearly
+urban growth boundaries (the history layer has them). The GEOHub's terms
+allow any lawful use of its public data, commercial use included; credit the
+agency each layer names. The Oregon Spatial Data Library's framework
+downloads are not read yet. Portolan catalog at
+`https://parquetry.geomermaids.com/or/catalog/catalog.json`
+(`scripts/datasets/oregon_catalog.py`), one sub-catalog per theme.
+
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
 `https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,
