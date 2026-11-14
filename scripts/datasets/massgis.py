@@ -441,10 +441,11 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
                start: int = 0, max_zoom: int = MAX_ZOOM) -> dict:
     """PMTiles from a lon/lat copy, down the ladder: every attribute, then
     the naming columns, then later minimum zooms, then a larger tile size
-    cap (BIG_TILES). A layer denser than one tile at MAX_ZOOM holds (survey
-    soundings) takes a higher max_zoom: points are thinned below it, never
-    at it. pmtiles.tile() fails when
-    a tile goes over the size cap; that failure moves to the next step."""
+    cap (BIG_TILES), from the first minimum zoom then from the last. A
+    layer denser than one tile at MAX_ZOOM holds (survey soundings) takes a
+    higher max_zoom: points are thinned below it, never at it.
+    pmtiles.tile() fails when a tile goes over the size cap; that failure
+    moves to the next step."""
     cols = [c for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{parquet}')").fetchall()
             if c not in ("geometry", "bbox") and not t.startswith(("BLOB", "STRUCT", "GEOMETRY"))]
     # An overview's class column first, so the polygons can be coloured
@@ -460,7 +461,10 @@ def tile_layer(con, parquet: Path, layer_id: str, crs: str, types: list[str],
     dest = parquet.with_suffix(".pmtiles")
     steps = ([(spec["properties"], z, "500K") for z in MIN_ZOOMS if z >= start] if every_segment
              else [(cols, start, "500K")] + [(labels, z, "500K") for z in MIN_ZOOMS if z >= start]
-             + [(labels, start, cap) for cap in BIG_TILES])
+             + [(labels, start, cap) for cap in BIG_TILES]
+             # Dense parcels (NH's mosaic): a larger cap from the last
+             # minimum zoom.
+             + [(labels, max(start, MIN_ZOOMS[-1]), cap) for cap in BIG_TILES])
     try:
         for props, min_zoom, cap in steps:
             try:
