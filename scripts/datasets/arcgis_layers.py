@@ -120,6 +120,9 @@ class Profile:
     attribution: Callable[[str, list[dict]], str]
     crs: str | None = None         # every layer in this CRS; None: each its own
     tile_max_zoom: dict[str, int] = field(default_factory=dict)
+    # Layers published as GeoParquet only: too dense for any tile a browser
+    # can load.
+    untiled: frozenset[str] = frozenset()
     # Layer id -> the publisher's columns left out of the file.
     drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Threads reading one large layer, each a range of its object ids (a
@@ -539,7 +542,7 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     dest = folder / f"{r['id']}.parquet"
     entry = write_layer(con, dest, crs)
     tiles = None
-    if not no_tiles:
+    if not no_tiles and r["id"] not in p.untiled:
         tiles = tile_layer(con, dest, r["id"], crs, entry["geometry_types"], 0,
                            **({"max_zoom": p.tile_max_zoom[r["id"]]}
                               if r["id"] in p.tile_max_zoom else {}))
@@ -668,7 +671,7 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
         """The entry's files are all here, the PMTiles too unless --no-tiles."""
         if not (out / r["theme"] / e["file"]).is_file():
             return False
-        return no_tiles or bool(e.get("pmtiles")
+        return no_tiles or r["id"] in p.untiled or bool(e.get("pmtiles")
                                 and (out / r["theme"] / e["pmtiles"]["file"]).is_file())
 
     def done(r: dict) -> dict | None:

@@ -144,10 +144,21 @@ This data is packaged and hosted by Geomermaids:
 """
 
 
+# GeoParquet only: polygons traced from rasters, pixel staircases still over
+# a 4 MB tile at zoom 14 (run of 2026-11-13). A map of them belongs with the
+# rasters.
+UNTILED = frozenset({
+    "sea_level_rise_2023", "groundwater_rise", "groundwater_vulnerable_areas",
+    "slamm_2022_0_3_m_slr_at_year_2050", "slamm_2022_0_5_m_slr_at_year_2050",
+    "slamm_2022_0_75_m_slr_at_year_2100", "slamm_2022_1_2_m_slr_at_year_2100",
+    "slamm_2022_1_5_m_slr_at_year_2100",
+})
+
+
 PROFILE = arcgis_layers.Profile(
     name="nh", public=PUBLIC, layers_csv=LAYERS_CSV, servers=SERVERS, themes=THEMES,
     colors=COLORS, outline=OUTLINE, outline_crs=CRS, theme_title=theme_title,
-    attribution=attribution, crs=CRS)
+    attribution=attribution, crs=CRS, untiled=UNTILED)
 
 
 def layers() -> list[dict]:

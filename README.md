@@ -352,7 +352,9 @@ survey feet (EPSG:3437), the server projecting the few published in another
 CRS. `nh_layers.csv` lists the published layers; the 2023 sea-level-rise
 scenarios, groundwater rise, the areas vulnerable to groundwater rise and the
 simulated saltwater intrusion are folded into one file each with a `scenario`
-column. Left out: imagery and LiDAR rasters, the 2-ft contours, the canopy
+column. The sea-level-rise, groundwater and SLAMM layers have no PMTiles:
+traced from rasters, they overflow a 4 MB tile even at zoom 14. The parcels
+are tiled from zoom 12. Left out: imagery and LiDAR rasters, the 2-ft contours, the canopy
 height polygons, NWI Plus, the 2012 districts, the items whose terms say
 distribution is discouraged (the Great Bay eelgrass years, the dam inventory,
 lake bathymetry, NPDES), and the coastal impervious surfaces (their map
