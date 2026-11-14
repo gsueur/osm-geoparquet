@@ -625,6 +625,12 @@ def load(p: Profile, con, sources: list[dict], work: Path,
         con.execute(f"DROP TABLE {t}")
     cols = con.execute("DESCRIBE raw").fetchall()
     g = next(c for c, t, *_ in cols if t.startswith("GEOMETRY"))
+    # A publisher's field named like the columns written here (Oregon's
+    # channel migration zones have a text `Geometry`, the channel's form;
+    # DuckDB's names ignore case) becomes source_<name>, as fold columns do.
+    for c, *_ in cols:
+        if c != g and c.lower() in ("geometry", "bbox"):
+            con.execute(f'ALTER TABLE raw RENAME COLUMN "{c}" TO "source_{c}"')
     total = con.execute("SELECT count(*) FROM raw").fetchone()[0]
     con.execute(f"""CREATE OR REPLACE TEMP TABLE src AS
         SELECT *, {BBOX} FROM (
