@@ -390,7 +390,7 @@ NYS GIS Clearinghouse and the agency each layer names. Portolan catalog at
 
 California (`scripts/datasets/ca.py`, workflow `dataset-ca.yml`, checked
 weekly) sits under `https://parquetry.geomermaids.com/ca/<theme>/`: one
-GeoParquet file and one PMTiles archive per statewide vector layer, 458 files
+GeoParquet file and one PMTiles archive per statewide vector layer, 457 files
 in 9 themes (boundaries and districts, tax rate areas, transportation, fire,
 water, land and geology, fish and wildlife, coast and state lands,
 communities and facilities), read from the departments' ArcGIS services
@@ -427,7 +427,9 @@ from the agencies' ArcGIS services listed on the Washington Geospatial Open
 Data Portal (geo.wa.gov) the same way as the other states'. Every layer is in
 NAD83(HARN) / Washington South, US survey feet (EPSG:2927). The statewide tax
 parcels (3.3 million, all 39 counties) carry no owner names upstream; their
-PMTiles start at zoom 12, as NH's.
+PMTiles run from zoom 12 to 14 in tiles of up to 4 MB, with the parcel
+number, the site address and the land use code, and the layer is built with
+no other beside it.
 `wa_layers.csv` lists the published layers; folded into one file each:
 WSDOT's historic traffic counts and sections by `year`, its stormwater assets
 (one file per geometry) and facilities by `category`. The ShoreZone

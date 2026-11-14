@@ -99,6 +99,11 @@ WKID_ALIASES = {102100: 3857, 102113: 3857, 900913: 3857}
 # full-resolution basins are 30 MB of JSON, 500 fail) is asked again in
 # halves, down to this many features.
 MIN_PAGE = 25
+# The longest a page may take to arrive, all of it: a server trickling a
+# page of huge polygons never trips the socket timeout (CDFW's eelgrass, 74
+# polygons of up to a megabyte each), and one past this is asked again,
+# smaller.
+PAGE_SECONDS = 600
 # Numbers the page files of a run (fetch_source).
 PAGE_FILES = itertools.count()
 
@@ -123,6 +128,15 @@ class Profile:
     # Layers published as GeoParquet only: too dense for any tile a browser
     # can load.
     untiled: frozenset[str] = frozenset()
+    # Layer id -> (min zoom, tile size cap, properties): its tile setting,
+    # tried before the ladder. For a layer whose ladder is known to end there
+    # (WA's 3.3 million parcels fit from zoom 12 in 4 MB tiles, after seven
+    # tries that cannot).
+    tiles: dict[str, tuple[int, str, tuple[str, ...]]] = field(default_factory=dict)
+    # Layers built with no other layer beside them: each worker's DuckDB may
+    # take 6 GB, and three of them beside a layer this large outgrow the
+    # runner's 16 GB (WA's parcels, 2026-11-14: the runner was lost).
+    alone: frozenset[str] = frozenset()
     # Folded layer id -> the columns kept as columns (lower case); each
     # source's other fields go into one JSON text column, other_attributes.
     # For folds whose sources share few fields (CA's 96 vegetation maps have
@@ -186,7 +200,7 @@ def get(u: str, params: dict | None = None, attempts: int = 6) -> dict:
     for attempt in range(1, attempts + 1):
         try:
             with urllib.request.urlopen(full, timeout=180) as r:
-                doc = json.load(r)
+                doc = json.loads(read_all(r, time.monotonic() + PAGE_SECONDS))
             if "error" not in doc:
                 return doc
             err = doc["error"]
@@ -197,6 +211,16 @@ def get(u: str, params: dict | None = None, attempts: int = 6) -> dict:
             raise RuntimeError(f"{u}: {err}")
         time.sleep(min(60, 5 * 2 ** (attempt - 1)))
     raise AssertionError
+
+
+def read_all(r, deadline: float) -> bytes:
+    """A response's body, or TimeoutError once the deadline passes."""
+    chunks = []
+    while chunk := r.read(1 << 20):
+        chunks.append(chunk)
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"response not complete after {PAGE_SECONDS} s")
+    return b"".join(chunks)
 
 
 def ms_iso(ms: int | None) -> str | None:
@@ -411,6 +435,11 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
 
     def walk(k: int, lo: int, hi: int | None) -> None:
         last, page = lo, info["page"]
+        if paging:
+            # No page larger than the layer: halving a 2000-row page of a
+            # 74-row layer that times out takes six steps before a smaller
+            # request reaches the server.
+            page = min(page, max(info.get("count") or 0, MIN_PAGE))
         try:
             while not stop.is_set():
                 if paging:
@@ -501,7 +530,7 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                 if isinstance(item, Path):
                     item.unlink(missing_ok=True)
     if len(ranges) == 1:
-        return n
+        return has_geometry(con, table, info, n)
     # Appended in range order: the order of one walk on the object id.
     have = con.execute(f"SELECT count(*) FROM duckdb_tables() WHERE table_name = '{table}'"
                        ).fetchone()[0] > 0
@@ -514,6 +543,16 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
             con.execute(f"CREATE TABLE {table} AS SELECT * FROM {c}")
             have = True
         con.execute(f"DROP TABLE {c}")
+    return has_geometry(con, table, info, n)
+
+
+def has_geometry(con, table: str, info: dict, n: int) -> int:
+    """n, once `table` is known to have a geometry column: a service that
+    returns every feature without its geometry (the California Water Boards'
+    map services, November 2026) fails the layer with that said."""
+    if n and info.get("geometry_type") and not any(t.startswith("GEOMETRY") for _, t, *_ in
+                     con.execute(f"DESCRIBE {table}").fetchall()):
+        raise RuntimeError(f"{info['url']}: the service returned {n} features, none with a geometry")
     return n
 
 
@@ -660,7 +699,8 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     if not no_tiles and r["id"] not in p.untiled:
         tiles = tile_layer(con, dest, r["id"], crs, entry["geometry_types"], 0,
                            **({"max_zoom": p.tile_max_zoom[r["id"]]}
-                              if r["id"] in p.tile_max_zoom else {}))
+                              if r["id"] in p.tile_max_zoom else {}),
+                           first=p.tiles.get(r["id"]))
     outline = out / p.outline[0] / f"{p.outline[1]}.parquet"
     thumb = thumbnail(con, dest, crs, folder / f"{r['id']}.png", r["theme"], r["title"],
                       outline if outline.exists() else None, color=p.colors[r["theme"]],
@@ -933,6 +973,11 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
                     waiting = []
                 big = any(size(r) > BIG for r in running.values())
                 pick = next((r for r in waiting if not (big and size(r) > BIG)), None)
+                # A layer built alone waits for the others to end, and
+                # nothing starts beside it.
+                if any(r["id"] in p.alone for r in running.values()) or (
+                        pick and pick["id"] in p.alone and running):
+                    pick = None
                 if pick and len(running) < max(1, workers):
                     waiting.remove(pick)
                     running[pool.submit(run_layer, p, pick, source[pick["id"]], work, out,

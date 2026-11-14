@@ -109,6 +109,10 @@ jobs:
 
       - name: Fetch, convert, tile and verify
         if: steps.check.outputs.go == 'true'
+        # Stopped before the job's limit, so the steps below still run and
+        # publish the catalog of what is live (CA, 2026-11-14: one layer that
+        # never ended held back the catalog of 441).
+        timeout-minutes: 330
         run: |
           uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
           export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
@@ -121,7 +125,8 @@ jobs:
           du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
 
       - name: Check what is live
-        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        id: live
+        if: ${{ !cancelled() && (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') }}
         run: |
           set +e
           fail=0
@@ -139,7 +144,7 @@ jobs:
 
       # After the data, so the catalog never links a file that is not there.
       - name: STAC catalog, published
-        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        if: ${{ !cancelled() && steps.live.outcome != 'failure' && ((steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true') }}
         run: |
           uv run --project scripts python scripts/datasets/maine_catalog.py publish --remote "$REMOTE"
           for f in catalog/catalog.json catalog/boundaries/catalog.json \

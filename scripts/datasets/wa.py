@@ -202,7 +202,13 @@ PROFILE = arcgis_layers.Profile(
     name="wa", public=PUBLIC, layers_csv=LAYERS_CSV, servers=SERVERS, themes=THEMES,
     colors=COLORS, outline=OUTLINE, outline_crs=CRS, theme_title=theme_title,
     attribution=attribution, crs=CRS,
-    join_on={"shorezone_inventory": "UNIT_ID"})
+    join_on={"shorezone_inventory": "UNIT_ID"},
+    # The 3.3 million parcels: from zoom 12 in tiles of up to 4 MB, with the
+    # parcel number, the site address and the Department of Revenue land use
+    # code (a map can colour them by use); no zoom below 12 fits, and they
+    # are built alone (see Profile.alone).
+    tiles={"parcels": (12, "4M", ("PARCEL_ID_NR", "SITUS_ADDRESS", "LANDUSE_CD"))},
+    alone=frozenset({"parcels"}))
 
 
 def layers() -> list[dict]:
