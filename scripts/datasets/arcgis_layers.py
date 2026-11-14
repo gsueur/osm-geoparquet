@@ -128,6 +128,12 @@ class Profile:
     # For folds whose sources share few fields (CA's 96 vegetation maps have
     # 738 between them): a union by name would be hundreds of columns wide.
     fold_keep: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Layer id -> the key column (case-insensitive) its sources are joined
+    # on instead of unioned: layers drawing the same features, each with its
+    # own attributes (WA's ShoreZone inventory: 13 layers of the same 7,365
+    # shore units). The first source gives the geometry and the shared
+    # columns; the others add the columns it lacks.
+    join_on: dict[str, str] = field(default_factory=dict)
     # Layer id -> the publisher's columns left out of the file.
     drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Threads reading one large layer, each a range of its object ids (a
@@ -213,6 +219,11 @@ def source_info(p: Profile, src: dict) -> dict:
         sr = (ext.get("extent") or {}).get("spatialReference") or ext.get("spatialReference") or {}
         wkid = sr.get("latestWkid") or sr.get("wkid")
     wkid = WKID_ALIASES.get(wkid, wkid)
+    if not wkid and sr.get("wkt") and p.crs:
+        # A custom WKT and no id (WA Nearshore's kelp history: Washington
+        # South's parameters on an unnamed GRS80 datum): read in the
+        # profile's CRS, which the server projects to from its own WKT.
+        wkid = int(p.crs.split(":")[1])
     if not wkid:
         raise RuntimeError(f"{u}: no spatial reference")
     edits = info.get("editingInfo") or {}
@@ -521,12 +532,41 @@ def narrow(con, table: str, keep: tuple[str, ...], folds: set[str]) -> None:
     con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT {select} FROM {table}")
 
 
+def join(con, tables: list[str], key: str) -> None:
+    """The tables joined on key into raw: the first one's columns and
+    geometry, then each other's columns not seen yet. Exits when a table
+    repeats a key (rows would multiply)."""
+    first = tables[0]
+    seen = {c.lower() for (c,) in con.execute(f"SELECT column_name FROM (DESCRIBE {first})").fetchall()}
+    select, joins = [f"{first}.*"], []
+    for t in tables[1:]:
+        cols = con.execute(f"DESCRIBE {t}").fetchall()
+        by_lower = {c.lower(): c for c, *_ in cols}
+        if key.lower() not in by_lower:
+            sys.exit(f"{t}: no join column {key}")
+        dup = con.execute(f'SELECT count(*) - count(DISTINCT "{by_lower[key.lower()]}") FROM {t}').fetchone()[0]
+        if dup:
+            sys.exit(f"{t}: {dup:,} repeated values of the join column {key}")
+        new = [c for c, ty, *_ in cols if c.lower() not in seen and not ty.startswith("GEOMETRY")]
+        seen |= {c.lower() for c in new}
+        select += [f'{t}."{c}"' for c in new]
+        k0 = next(c for (c,) in con.execute(f"SELECT column_name FROM (DESCRIBE {first})").fetchall()
+                  if c.lower() == key.lower())
+        joins.append(f'LEFT JOIN {t} ON {first}."{k0}" = {t}."{by_lower[key.lower()]}"')
+    con.execute(f"CREATE OR REPLACE TABLE raw AS SELECT {', '.join(select)} FROM {first} "
+                + " ".join(joins) + f" ORDER BY {first}.rowid")
+
+
 def load(p: Profile, con, sources: list[dict], work: Path,
-         keep: tuple[str, ...] | None = None) -> tuple[str, int]:
+         keep: tuple[str, ...] | None = None, join_on: str | None = None) -> tuple[str, int]:
     """The layer's sources into the temp table src, geometry 2D in the
     profile's CRS (or the sources' own), with its bbox. keep: the columns
     kept as columns, the others of each source in other_attributes (JSON).
+    join_on: the key the sources are joined on instead (no fold columns).
     Returns the CRS and the rows dropped for having no geometry."""
+    if join_on:
+        for s in sources:
+            s["fold"] = {}
     if p.crs:
         crs = p.crs
     else:
@@ -574,8 +614,13 @@ def load(p: Profile, con, sources: list[dict], work: Path,
     if keep:
         for t in present:
             narrow(con, t, keep, set(names.values()))
-    con.execute("CREATE OR REPLACE TABLE raw AS "
-                + " UNION ALL BY NAME ".join(f"SELECT * FROM {t}" for t in present))
+    if join_on:
+        if len(present) != len(tables):
+            sys.exit("a joined layer's source is empty")
+        join(con, present, join_on)
+    else:
+        con.execute("CREATE OR REPLACE TABLE raw AS "
+                    + " UNION ALL BY NAME ".join(f"SELECT * FROM {t}" for t in present))
     for t in present:
         con.execute(f"DROP TABLE {t}")
     cols = con.execute("DESCRIBE raw").fetchall()
@@ -598,7 +643,7 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     <id>.entry.json."""
     folder = out / r["theme"]
     folder.mkdir(parents=True, exist_ok=True)
-    crs, dropped = load(p, con, info["sources"], work, p.fold_keep.get(r["id"]))
+    crs, dropped = load(p, con, info["sources"], work, p.fold_keep.get(r["id"]), p.join_on.get(r["id"]))
     have = {c for (c,) in con.execute("SELECT column_name FROM (DESCRIBE src)").fetchall()}
     left_out = [c for c in p.drop_columns.get(r["id"], ()) if c in have]
     for c in left_out:

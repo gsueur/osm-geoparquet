@@ -414,6 +414,32 @@ layer names; Fish and Wildlife's are CC BY 4.0. Portolan catalog at
 `https://parquetry.geomermaids.com/ca/catalog/catalog.json`
 (`scripts/datasets/ca_catalog.py`), one sub-catalog per theme.
 
+Washington (`scripts/datasets/wa.py`, workflow `dataset-wa.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/wa/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 458 files
+in 11 themes (boundaries and districts, parcels and public land survey,
+transportation, water and environment, geology and geologic hazards, forests
+and forest practices, coast and aquatic lands, fish and wildlife, parks and
+recreation, emergency management and wildfire, health and communities), read
+from the agencies' ArcGIS services listed on the Washington Geospatial Open
+Data Portal (geo.wa.gov) the same way as the other states'. Every layer is in
+NAD83(HARN) / Washington South, US survey feet (EPSG:2927). The statewide tax
+parcels (3.3 million, all 39 counties) carry no owner names upstream; their
+PMTiles start at zoom 12, as NH's.
+`wa_layers.csv` lists the published layers; folded into one file each:
+WSDOT's historic traffic counts and sections by `year`, its stormwater assets
+(one file per geometry) and facilities by `category`. The ShoreZone
+inventory's 13 layers, the same 7,365 shore units each with its own
+attributes, are joined on `UNIT_ID` into one file. Left out: copies of
+national datasets published elsewhere (NHD, the Watershed Boundary Dataset,
+GNIS, Census TIGER), rasters, layers covering less than a fifth of the state,
+indexes of surveys and imagery, older editions, per-year and per-indicator
+layers whose content is in another layer, Emergency Management's Hazus model
+inputs and Commerce's zoning atlas prototype. No layer's terms forbid
+redistribution or commercial use; credit the agency each layer names. Portolan
+catalog at `https://parquetry.geomermaids.com/wa/catalog/catalog.json`
+(`scripts/datasets/wa_catalog.py`), one sub-catalog per theme.
+
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
 `https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,

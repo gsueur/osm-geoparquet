@@ -103,6 +103,10 @@ DATASETS = [
            "severity zones and perimeters, tax rate areas, Caltrans roads, groundwater and "
            "drinking water, farmland, oil and gas wells, Fish and Wildlife's species ranges, "
            "Areas of Conservation Emphasis and Marine Protected Areas, checked weekly.", SITE),
+    ("wa", "Washington's statewide layers from the Washington Geospatial Open Data Portal: tax "
+           "parcels for all 39 counties (without owner names), WSDOT's state routes, roadway "
+           "data and traffic counts, geologic hazards, forest practices, water rights and "
+           "wells, shorelines and hunting units, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
