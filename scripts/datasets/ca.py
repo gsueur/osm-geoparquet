@@ -23,7 +23,7 @@ ca_layers.csv says which layers: one row per source layer, its theme, its
 server (a key of SERVERS: the department's ArcGIS Online organisation or
 server), the service and layer number. Rows sharing an id are one published
 layer, each source told apart by its `category` (the CWHR species ranges,
-elk, deer and pronghorn herds, the
+the regional VegCAMP vegetation maps, elk, deer and pronghorn herds, the
 Board of Equalization's tax rate areas by county) or its `year` (Important
 Farmland, the sales and use tax rates, Caltrans planning grants).
 
@@ -198,7 +198,7 @@ are not published here.
 
 One GeoParquet 2.0 file per layer. Folded into one file each, a column
 telling the source layers apart: `category` for the CWHR species ranges, the
-elk, deer and pronghorn herds and the
+regional VegCAMP vegetation maps, the elk, deer and pronghorn herds and the
 tax rate areas by county; `year` for Important Farmland, the sales and use
 tax rates and Caltrans' planning grants. Caltrans' climate vulnerability is
 one file per hazard. Columns and values are the departments',
@@ -215,6 +215,17 @@ This data is packaged and hosted by Geomermaids:
 """
 
 
+# The 96 VegCAMP maps have 738 fields between them (37 for the median map):
+# those in at least half the maps stay columns, each map's others go into
+# other_attributes (JSON).
+VEGETATION_COLUMNS = (
+    "mapclass", "mapcode", "calvegcode", "calvegtype", "cwhrtype", "cwhrcode",
+    "mcvname", "mcvlevel", "mcvalliance", "mcvgroup", "mcvmacrogroup", "cacode",
+    "secondcacode", "globalrank", "staterank", "sensitive", "sensitiveflag",
+    "communitylink", "acres", "hectares", "uid", "objectid",
+)
+
+
 PROFILE = arcgis_layers.Profile(
     name="ca", public=PUBLIC, layers_csv=LAYERS_CSV, servers=SERVERS, themes=THEMES,
     colors=COLORS, outline=OUTLINE, outline_crs=CRS, theme_title=theme_title,
@@ -222,8 +233,11 @@ PROFILE = arcgis_layers.Profile(
     # GeoParquet only. The species ranges: 762, 63 M vertices, overlapping
     # statewide; no tile under the size cap holds them, even with one
     # property from zoom 10. The farmland history: 20 surveys stacked on the
-    # same ground; important_farmland_most_recent is the one to map.
-    untiled=frozenset({"cwhr_species_ranges", "important_farmland_history"}))
+    # same ground; important_farmland_most_recent is the one to map. The
+    # vegetation maps: 3.5 million detailed polygons, 12 GB of geometry;
+    # tylertoo ran past its time limit at 10 GB resident.
+    untiled=frozenset({"cwhr_species_ranges", "important_farmland_history", "vegetation_maps"}),
+    fold_keep={"vegetation_maps": VEGETATION_COLUMNS})
 
 
 def layers() -> list[dict]:

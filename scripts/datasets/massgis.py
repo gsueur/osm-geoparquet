@@ -404,11 +404,27 @@ def write_layer(con, dest: Path, crs: str | None) -> dict:
             "covering": {"bbox": {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}},
         }},
     }).replace("'", "''")
-    con.execute(f"""
+    copy = f"""
         COPY (SELECT * FROM src ORDER BY ST_Hilbert(geometry,
                   ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
         TO '{raw}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE', COMPRESSION ZSTD, ROW_GROUP_SIZE 8192,
-                    KV_METADATA {{geo: '{geo}'}})""")
+                    KV_METADATA {{geo: '{geo}'}})"""
+    try:
+        con.execute(copy)
+    except duckdb.OutOfMemoryException:
+        # The sort holds whole rows: CA's 96 vegetation maps (3.5 million
+        # polygons, 12 GB of geometry) do not sort within the 6 GB limit on
+        # the default threads. Two threads do (49 min, 6.5 GB resident).
+        # Only a layer that failed takes this path: the others' bytes stay
+        # as the default threads write them.
+        threads = con.execute("SELECT current_setting('threads')").fetchone()[0]
+        raw.unlink(missing_ok=True)
+        print(f"  {dest.stem}: out of memory sorting, again on 2 threads", file=sys.stderr, flush=True)
+        con.execute("SET threads = 2")
+        try:
+            con.execute(copy)
+        finally:
+            con.execute(f"SET threads = {threads}")
     rewrite(raw, dest)
     raw.unlink()
     verify(con, dest.parent, [dest.stem])

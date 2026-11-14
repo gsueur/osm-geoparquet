@@ -390,21 +390,23 @@ NYS GIS Clearinghouse and the agency each layer names. Portolan catalog at
 
 California (`scripts/datasets/ca.py`, workflow `dataset-ca.yml`, checked
 weekly) sits under `https://parquetry.geomermaids.com/ca/<theme>/`: one
-GeoParquet file and one PMTiles archive per statewide vector layer, 457 files
+GeoParquet file and one PMTiles archive per statewide vector layer, 458 files
 in 9 themes (boundaries and districts, tax rate areas, transportation, fire,
 water, land and geology, fish and wildlife, coast and state lands,
 communities and facilities), read from the departments' ArcGIS services
 listed on the California State Geoportal (gis.data.ca.gov) the same way as
 the other states'. Every layer is in NAD83 / California Albers (EPSG:3310).
 `ca_layers.csv` lists the published layers; folded into one file each: the
-762 CWHR species ranges
+762 CWHR species ranges and the 96 regional VegCAMP vegetation maps
 (`category`), the elk, deer and pronghorn herds, the Board of Equalization's
 tax rate areas by county, Important Farmland and the sales and use tax rates
 by `year`. Caltrans' climate vulnerability is one file per hazard (the same
 612,000 road segments, each hazard with its own columns). The
-species ranges and the Important Farmland history have no PMTiles (too many
-overlapping polygons for a tile; the most recent farmland survey has its
-own). Left out:
+vegetation maps keep the 22 fields at least half of them share as columns;
+each map's other fields are in `other_attributes`, a JSON object. The
+species ranges, the vegetation maps and the Important Farmland history have
+no PMTiles (too many overlapping or detailed polygons for a tile; the most
+recent farmland survey has its own). Left out:
 the layers whose terms forbid redistribution or commercial use (the Energy
 Commission's, wherever hosted; CGS seismic hazard zones), Esri's own layers,
 rasters (the predicted habitat models, for a later raster dataset), layers covering
