@@ -1,0 +1,170 @@
+# California statewide vector layers: parquetry:parquetry/ca/.
+#
+# One GeoParquet file and one PMTiles archive per layer, under
+# ca/<theme>/. scripts/datasets/ca.py documents the layout and the fetch;
+# scripts/datasets/ca_layers.csv says which layers are built.
+#
+# The layers are the state departments' ArcGIS services listed on the
+# California State Geoportal (Fish and Wildlife, CAL FIRE, Caltrans, the Water
+# Boards, Conservation and others), all read in EPSG:3310. A weekly run compares each layer's fingerprint (its sources'
+# edit dates, or counts, highest object ids and fields where a service gives
+# no dates) with the published ca/_source.json and rebuilds only the layers
+# that moved; the manifests keep the others' published entries. Of what is
+# rebuilt, each layer is uploaded as soon as it is built, only the files
+# whose bytes changed (stamp ca/_files/ca.json).
+#
+#   build    fetch, convert, tile and verify what moved, upload nothing
+#   publish  the same, uploading each layer as it is built (a scheduled run
+#            publishes), then the Portolan catalog at /ca/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-ca
+
+on:
+  schedule:
+    - cron: "29 10 * * 0"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild every layer, moved or not"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-ca
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/ca
+  PUBLIC: https://parquetry.geomermaids.com/ca
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place when a layer changes: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  ca:
+    runs-on: ubuntu-24.04
+    # A weekly run rebuilds the layers that moved, in minutes. A first build
+    # runs three layers at a time (one of over a million features at most),
+    # reads large layers four pages at a time and uploads each layer as soon
+    # as it is built: --max-minutes starts no layer after 5 hours, and a run
+    # cut short keeps all it published; the next run builds the rest.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Anything new upstream?
+        id: check
+        run: |
+          if [ "$CATALOG_ONLY" = "true" ]; then
+            echo "catalog only"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uv run --project scripts python scripts/datasets/ca.py upstream > upstream.json 2> upstream.err
+          cat upstream.err >&2
+          # Layers whose service did not answer: left out of the comparison,
+          # reported by the last step even when nothing else moved.
+          unreachable=$(sed -n 's/^unreachable, left out: \([^:]*\):.*/\1/p' upstream.err | tr '\n' ' ')
+          echo "unreachable=${unreachable% }" >> "$GITHUB_OUTPUT"
+          live=$(curl -fsS "$PUBLIC/_source.json" || echo '{}')
+          moved=$(jq -r --argjson was "$live" \
+            'to_entries | map(select(.value.fingerprint != $was[.key].fingerprint)) | map(.key) | join(" ")' \
+            upstream.json)
+          echo "moved: ${moved:-none}"
+          if [ -z "$moved" ] && [ "${{ inputs.force }}" != "true" ] && [ "$PUBLISH" = "true" ]; then
+            echo "nothing moved upstream"; echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work dir on the runner's big scratch disk
+        if: steps.check.outputs.go == 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: rclone
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Fetch, convert, tile and verify
+        if: steps.check.outputs.go == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH" TMPDIR="$WORK/tmp"
+          mkdir -p "$TMPDIR"
+          /usr/bin/time -v uv run --project scripts --with matplotlib python scripts/datasets/ca.py build \
+            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 300 --workers 3 \
+            ${{ env.PUBLISH == 'true' && format('--publish {0}', env.REMOTE) || '' }} \
+            ${{ inputs.force && '--force' || '' }} 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"; find "$WORK/out" -type f | sort | sed "s|$WORK/out/||"
+
+      - name: Check what is live
+        if: steps.check.outputs.go == 'true' && env.PUBLISH == 'true'
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json _files/ca.json boundaries/_manifest.json \
+                   boundaries/ATTRIBUTION.txt fire/fire_hazard_severity_zones_sra.parquet \
+                   fire/fire_hazard_severity_zones_sra.pmtiles transport/public_road_functional_classification.parquet \
+                   wildlife/cwhr_species_ranges.parquet tax/tax_rate_areas.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-126 "$PUBLIC/fire/fire_hazard_severity_zones_sra.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD pmtiles range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: (steps.check.outputs.go == 'true' && env.PUBLISH == 'true') || env.CATALOG_ONLY == 'true'
+        run: |
+          uv run --project scripts python scripts/datasets/ca_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/fire/catalog.json \
+                   catalog/fire/fire_hazard_severity_zones_sra/collection.json \
+                   catalog/fire/fire_hazard_severity_zones_sra/styles/default.json \
+                   catalog/wildlife/cwhr_species_ranges/collection.json \
+                   catalog/tax/tax_rate_areas/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
+
+      # Last, so a layer that failed does not hold back the others: they are
+      # published, the failed one stays as it was (its published fingerprint
+      # is kept, so the next run tries it again), and this run goes red.
+      - name: Layers that failed
+        if: steps.check.outputs.go == 'true'
+        run: |
+          jq -e 'length == 0' "$WORK/out/failed.json" >/dev/null && exit 0
+          jq -r 'to_entries[] | "\(.key): \(.value)"' "$WORK/out/failed.json"
+          exit 1
+
+      - name: Unreachable sources
+        if: always() && steps.check.outputs.unreachable != ''
+        run: |
+          echo "::error::services that did not answer, layers left as published: ${{ steps.check.outputs.unreachable }}"
+          exit 1

@@ -99,6 +99,10 @@ DATASETS = [
            "(without owner names), address points, streets, civil boundaries, NYSDOT's "
            "roadway inventory and bridges, wetlands and the coast's waterfront programs, "
            "checked weekly.", SITE),
+    ("ca", "California's statewide layers from the California State Geoportal: fire hazard "
+           "severity zones and perimeters, tax rate areas, Caltrans roads, groundwater and "
+           "drinking water, farmland, oil and gas wells, Fish and Wildlife's species ranges, "
+           "Areas of Conservation Emphasis and Marine Protected Areas, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored

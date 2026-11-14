@@ -334,7 +334,7 @@ uploads only the files whose bytes changed; a run starts no layer after 4.5
 hours and leaves the rest to the next. Portolan catalog at
 `https://parquetry.geomermaids.com/maine/catalog/catalog.json`
 (`scripts/datasets/maine_catalog.py`), one sub-catalog per theme.
-The Maine, NH and New York builders share their engine: `arcgis_layers.py` (fetch,
+The Maine, NH, New York and California builders share their engine: `arcgis_layers.py` (fetch,
 fingerprints, manifests) and `arcgis_catalog.py` (the catalog); each state is
 a profile of it. The engine builds three layers at a time (one of over a
 million features at most), reads large layers four pages at a time, and on
@@ -387,6 +387,32 @@ covers them) and the Census Bureau layers already on parquetry. Credit the
 NYS GIS Clearinghouse and the agency each layer names. Portolan catalog at
 `https://parquetry.geomermaids.com/ny/catalog/catalog.json`
 (`scripts/datasets/ny_catalog.py`), one sub-catalog per theme.
+
+California (`scripts/datasets/ca.py`, workflow `dataset-ca.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/ca/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 457 files
+in 9 themes (boundaries and districts, tax rate areas, transportation, fire,
+water, land and geology, fish and wildlife, coast and state lands,
+communities and facilities), read from the departments' ArcGIS services
+listed on the California State Geoportal (gis.data.ca.gov) the same way as
+the other states'. Every layer is in NAD83 / California Albers (EPSG:3310).
+`ca_layers.csv` lists the published layers; folded into one file each: the
+762 CWHR species ranges
+(`category`), the elk, deer and pronghorn herds, the Board of Equalization's
+tax rate areas by county, Important Farmland and the sales and use tax rates
+by `year`. Caltrans' climate vulnerability is one file per hazard (the same
+612,000 road segments, each hazard with its own columns). The
+species ranges and the Important Farmland history have no PMTiles (too many
+overlapping polygons for a tile; the most recent farmland survey has its
+own). Left out:
+the layers whose terms forbid redistribution or commercial use (the Energy
+Commission's, wherever hosted; CGS seismic hazard zones), Esri's own layers,
+rasters (the predicted habitat models, for a later raster dataset), layers covering
+less than a fifth of the state (local studies), provider directories, field
+survey records, live feeds and older editions. Credit the department each
+layer names; Fish and Wildlife's are CC BY 4.0. Portolan catalog at
+`https://parquetry.geomermaids.com/ca/catalog/catalog.json`
+(`scripts/datasets/ca_catalog.py`), one sub-catalog per theme.
 
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
