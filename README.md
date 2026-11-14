@@ -468,6 +468,22 @@ downloads are not read yet. Portolan catalog at
 `https://parquetry.geomermaids.com/or/catalog/catalog.json`
 (`scripts/datasets/oregon_catalog.py`), one sub-catalog per theme.
 
+USGS base rasters, linked (`scripts/datasets/usgs_rasters_catalog.py`,
+workflow `dataset-usgs-rasters.yml`, weekly): a Portolan catalog at
+`https://parquetry.geomermaids.com/usgs-rasters/catalog/catalog.json` of
+Cloud-Optimized GeoTIFFs served elsewhere, metadata only, no raster copied.
+`usgs-3dep-13` lists the 3DEP 1/3 arc-second DEM tiles (one item per
+one-degree tile) in the USGS's public bucket prd-tnm; six `annual-nlcd-*`
+collections list the Annual NLCD Collection 1 CONUS mosaics (land cover,
+impervious surface and descriptor, change, confidence, spectral change; one
+item per year, 1985 to 2024) on the public Source Cooperative mirror, the
+USGS's own bucket being requester-pays. Each run lists both buckets, so the
+catalog follows what the USGS adds or replaces. The collection thumbnails are
+committed under `catalog/thumbnails/usgs-rasters/`, rendered from the files'
+overviews by the script's `thumbnails` command. NAIP imagery is linked from
+the root catalog to Microsoft Planetary Computer's collection, with our guide
+at `catalog/naip/AGENTS.md`.
+
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
 `https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,

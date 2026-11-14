@@ -1,0 +1,73 @@
+# USGS base rasters, linked: parquetry:parquetry/usgs-rasters/catalog/.
+#
+# A Portolan catalog of files served elsewhere, metadata only: the 3DEP
+# 1/3 arc-second tiles in the USGS's public bucket prd-tnm and the Annual
+# NLCD mosaics on the Source Cooperative mirror. Each run lists both buckets
+# and re-renders the catalog, so a tile the USGS adds, replaces or removes
+# shows the next week. scripts/datasets/usgs_rasters_catalog.py documents the
+# layout; the collection thumbnails are committed (its `thumbnails` command).
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-usgs-rasters
+
+on:
+  schedule:
+    - cron: "41 10 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render and check, upload nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-usgs-rasters
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/usgs-rasters
+  PUBLIC: https://parquetry.geomermaids.com/usgs-rasters
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  usgs-rasters:
+    runs-on: ubuntu-24.04
+    # Two bucket listings (about 1,500 tiles and 240 files) and some 1,700
+    # small JSON files: a few minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Render, check and publish
+        run: |
+          uv run --project scripts python scripts/datasets/usgs_rasters_catalog.py publish \
+            --remote "$REMOTE" ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Check what is live
+        if: ${{ !inputs.dry_run }}
+        run: |
+          for f in catalog/catalog.json catalog/README.md catalog/AGENTS.md \
+                   catalog/usgs-3dep-13/collection.json catalog/usgs-3dep-13/thumbnail.png \
+                   catalog/usgs-3dep-13/n43w072/n43w072.json \
+                   catalog/annual-nlcd-land-cover/collection.json \
+                   catalog/annual-nlcd-land-cover/2024/2024.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done

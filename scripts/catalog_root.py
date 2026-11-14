@@ -110,6 +110,10 @@ DATASETS = [
     ("or", "Oregon's statewide layers from the Oregon GEOHub: address points, ODOT's public "
            "roads and mileposts, urban growth boundaries and zoning, water rights and wells, "
            "fish habitat distribution, faults and landslides, checked weekly.", SITE),
+    ("usgs-rasters", "USGS base rasters listed where they are served, nothing copied: the 3DEP "
+                     "seamless 1/3 arc-second DEM (one item per one-degree tile) and Annual NLCD "
+                     "land cover, impervious surface and change since 1985, as Cloud-Optimized "
+                     "GeoTIFFs, relisted weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
@@ -125,6 +129,15 @@ EXTERNAL = [
      "license": "ODbL-1.0 for most themes; places and addresses per source",
      "page": "https://docs.overturemaps.org/",
      "guide": f"{PUBLIC_BASE}/overture/AGENTS.md"},
+    {"url": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip",
+     "title": "NAIP aerial imagery (Microsoft Planetary Computer's collection)",
+     "summary": "The USDA's leaf-on aerial imagery of the conterminous US, four bands at 0.3 "
+                "to 1 m, 2010 to 2025, as Cloud-Optimized GeoTIFFs on Planetary Computer "
+                "(free signed URLs). Files and metadata are Microsoft's and the USDA's; the "
+                "guide is ours.",
+     "license": "US public domain (USDA); Planetary Computer terms of use",
+     "page": "https://planetarycomputer.microsoft.com/dataset/naip",
+     "guide": f"{PUBLIC_BASE}/naip/AGENTS.md"},
 ]
 
 
@@ -167,9 +180,11 @@ def build_root(children: list[dict], updated: str) -> dict:
             "America and its infrastructure worldwide, administrative units, population, "
             "land cover, a world basemap, place names, addresses, schools, building footprints, protected areas, "
             "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
-            "census geography and estimates, and the Massachusetts and Maine statewide layers. One sub-catalog per dataset, each kept current by its own build and "
-            "under its own licence. Overture Maps is linked to Overture's own catalog, "
-            "not copied. With [Geobox](https://geobox.cloud) you can add any of them to your "
+            "census geography and estimates, and the statewide layers of Massachusetts, Maine, "
+            "New Hampshire, New York, California, Washington and Oregon; and USGS elevation and "
+            "land cover rasters, listed where they are served. One sub-catalog per dataset, each "
+            "kept current by its own build and under its own licence. Overture Maps and NAIP "
+            "imagery are linked to their publishers' own catalogs, not copied. With [Geobox](https://geobox.cloud) you can add any of them to your "
             "own box, or query them in place from DuckDB, QGIS or an AI assistant."),
         "updated": updated,
         "links": [
@@ -208,9 +223,10 @@ def root_readme(root: dict, children: list[dict]) -> str:
 ## Access
 
 Every Geomermaids file is on {PUBLIC_BASE} (Overture's are on Overture's
-own buckets) and can be read in place over HTTPS with
-range requests: DuckDB, GDAL, polars and pyarrow need no download and no
-credentials. Each dataset catalog's README says how its files are laid out
+own buckets, NAIP's on Planetary Computer, the USGS rasters on the USGS's
+bucket and a public mirror) and can be read in place over HTTPS with range
+requests: DuckDB, GDAL, polars and pyarrow need no download and no
+credentials (NAIP's take a free signed URL). Each dataset catalog's README says how its files are laid out
 and how to query them.
 
 ## Licences
@@ -234,8 +250,9 @@ def root_agents(children: list[dict]) -> str:
 
 The root of the Geomermaids catalogs. It holds no data: each child is a
 complete Portolan catalog on {PUBLIC_BASE}, with its own README.md and
-AGENTS.md beside its catalog.json, except Overture Maps: that child is
-Overture's own STAC catalog, read through the guide named below. Read the child's AGENTS.md before
+AGENTS.md beside its catalog.json, except Overture Maps and NAIP: those
+children are their publishers' own STAC catalogs, read through the guides
+named below. Read the child's AGENTS.md before
 querying it: layouts differ (one file per region, per country, per county or
 per layer).
 
@@ -245,9 +262,12 @@ per layer).
 
 ## Conventions
 
-- Files are GeoParquet with a `bbox` covering column: filter on it before
-  touching geometry.
-- Read in place over HTTPS; no credentials anywhere.
+- Vector files are GeoParquet with a `bbox` covering column: filter on it
+  before touching geometry.
+- Rasters (usgs-rasters, NAIP) are Cloud-Optimized GeoTIFFs: read windows with
+  GDAL or rasterio, not whole files.
+- Read in place over HTTPS; no credentials anywhere (NAIP: a free, anonymous
+  signed URL).
 - Each catalog states its licence and the attribution it requires. Carry it
   into any map or result.
 """
