@@ -32,8 +32,10 @@ use (the Energy Commission's, wherever they are hosted; CGS seismic hazard
 zones; Caltrans' odometer), Esri's own layers, rasters (the CWHR predicted
 habitat models among them: a later raster dataset), layers covering less
 than a fifth of the state's extent (local studies), provider directories,
-field survey records, live feeds and older editions. PLAN-ca-layers.csv,
-outside the repository, kept the reasons.
+field survey records, live feeds and older editions, and CDFW's Region 7
+eelgrass map, whose largest polygon (over 144 MB as JSON) its service cuts
+off every time. PLAN-ca-layers.csv, outside the repository, kept the
+reasons.
 
 Every layer is in NAD83 / California Albers (EPSG:3310): the server projects
 the others as they are read. Columns and values are the departments',
