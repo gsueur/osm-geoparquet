@@ -107,6 +107,9 @@ DATASETS = [
            "parcels for all 39 counties (without owner names), WSDOT's state routes, roadway "
            "data and traffic counts, geologic hazards, forest practices, water rights and "
            "wells, shorelines and hunting units, checked weekly.", SITE),
+    ("or", "Oregon's statewide layers from the Oregon GEOHub: address points, ODOT's public "
+           "roads and mileposts, urban growth boundaries and zoning, water rights and wells, "
+           "fish habitat distribution, faults and landslides, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
