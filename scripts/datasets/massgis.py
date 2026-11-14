@@ -407,7 +407,7 @@ def write_layer(con, dest: Path, crs: str | None) -> dict:
     con.execute(f"""
         COPY (SELECT * FROM src ORDER BY ST_Hilbert(geometry,
                   ST_Extent(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}))))
-        TO '{raw}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE', COMPRESSION ZSTD,
+        TO '{raw}' (FORMAT PARQUET, GEOPARQUET_VERSION 'NONE', COMPRESSION ZSTD, ROW_GROUP_SIZE 8192,
                     KV_METADATA {{geo: '{geo}'}})""")
     rewrite(raw, dest)
     raw.unlink()

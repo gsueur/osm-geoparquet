@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 A state's ArcGIS REST layers as GeoParquet and PMTiles: the engine maine.py,
-nh.py and ny.py share. Each of them is a Profile (its servers, layer CSV, themes,
+nh.py, ny.py and ca.py share. Each of them is a Profile (its servers, layer CSV, themes,
 colours, outline and attribution); this reads each layer from its query
 endpoint and writes one GeoParquet file per layer, and its PMTiles archive,
 grouped by theme:
@@ -123,6 +123,11 @@ class Profile:
     # Layers published as GeoParquet only: too dense for any tile a browser
     # can load.
     untiled: frozenset[str] = frozenset()
+    # Folded layer id -> the columns kept as columns (lower case); each
+    # source's other fields go into one JSON text column, other_attributes.
+    # For folds whose sources share few fields (CA's 96 vegetation maps have
+    # 738 between them): a union by name would be hundreds of columns wide.
+    fold_keep: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Layer id -> the publisher's columns left out of the file.
     drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Threads reading one large layer, each a range of its object ids (a
@@ -201,6 +206,12 @@ def source_info(p: Profile, src: dict) -> dict:
     info = get(u)
     sr = info.get("sourceSpatialReference") or (info.get("extent") or {}).get("spatialReference") or {}
     wkid = sr.get("latestWkid") or sr.get("wkid")
+    if not wkid:
+        # No spatial reference in the layer's description (a few hosted CSV
+        # layers): the one its query answers in.
+        ext = get(u + "/query", {"where": "1=1", "returnExtentOnly": "true"}, attempts=2)
+        sr = (ext.get("extent") or {}).get("spatialReference") or ext.get("spatialReference") or {}
+        wkid = sr.get("latestWkid") or sr.get("wkid")
     wkid = WKID_ALIASES.get(wkid, wkid)
     if not wkid:
         raise RuntimeError(f"{u}: no spatial reference")
@@ -211,14 +222,14 @@ def source_info(p: Profile, src: dict) -> dict:
     if not oid:
         raise RuntimeError(f"{u}: no object id field")
     count = get(u + "/query", {"where": "1=1", "returnCountOnly": "true"})["count"]
+    # A service that can neither page nor order (the California Water Boards'
+    # map services) is walked in windows of object ids instead.
+    paging = (info.get("advancedQueryCapabilities") or {}).get("supportsPagination") is not False
     max_oid = None
-    if not edits:
+    if not edits or not paging:
         # No edit dates (Maine DEP's map services): the highest object id
         # and the fields stand in for them in the fingerprint.
-        stats = get(u + "/query", {"where": "1=1", "outStatistics": json.dumps(
-            [{"statisticType": "max", "onStatisticField": oid, "outStatisticFieldName": "m"}])})
-        feats = stats.get("features") or [{}]
-        max_oid = (feats[0].get("attributes") or {}).get("m")
+        max_oid = highest_oid(u, oid)
     fields = hashlib.sha256(json.dumps(
         [(f["name"], f["type"]) for f in info.get("fields") or []]).encode()).hexdigest()[:12]
     return {
@@ -226,7 +237,7 @@ def source_info(p: Profile, src: dict) -> dict:
         "year": src["year"], "name": info.get("name"),
         "crs": f"EPSG:{wkid}", "oid": oid, "max_oid": max_oid, "fields": fields,
         "field_names": sorted({f["name"].lower() for f in info.get("fields") or []}),
-        "page": min(PAGE, info.get("maxRecordCount") or PAGE),
+        "page": min(PAGE, info.get("maxRecordCount") or PAGE), "paging": paging,
         "geometry_type": info.get("geometryType"),
         "data_edited": ms_iso(edits.get("dataLastEditDate") or edits.get("lastEditDate")),
         "schema_edited": ms_iso(edits.get("schemaLastEditDate")),
@@ -234,6 +245,20 @@ def source_info(p: Profile, src: dict) -> dict:
         "description": clean(info.get("description")),
         "copyright": clean(info.get("copyrightText")),
     }
+
+
+def highest_oid(u: str, oid: str) -> int | None:
+    """The layer's highest object id: its statistics, or, from a service
+    that has none, the largest of its ids."""
+    try:
+        stats = get(u + "/query", {"where": "1=1", "outStatistics": json.dumps(
+            [{"statisticType": "max", "onStatisticField": oid, "outStatisticFieldName": "m"}])},
+            attempts=2)
+        feats = stats.get("features") or [{}]
+        return (feats[0].get("attributes") or {}).get("m")
+    except RuntimeError:
+        ids = get(u + "/query", {"where": "1=1", "returnIdsOnly": "true"}).get("objectIds") or []
+        return max(ids) if ids else None
 
 
 def clean(text: str | None) -> str | None:
@@ -371,14 +396,24 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
         if isinstance(item[1], Path):
             item[1].unlink(missing_ok=True)
 
+    paging = info.get("paging", True)
+
     def walk(k: int, lo: int, hi: int | None) -> None:
         last, page = lo, info["page"]
         try:
             while not stop.is_set():
-                where = f"{oid} > {last}" + (f" AND {oid} <= {hi}" if hi is not None else "")
-                params = {"where": where, "outFields": "*", "orderByFields": f"{oid} ASC",
-                          "resultRecordCount": page, "outSR": target_crs.split(":")[1],
-                          "returnZ": "false", "returnM": "false"}
+                if paging:
+                    where = f"{oid} > {last}" + (f" AND {oid} <= {hi}" if hi is not None else "")
+                    params = {"where": where, "outFields": "*", "orderByFields": f"{oid} ASC",
+                              "resultRecordCount": page}
+                else:
+                    # No paging and no ordering: a window of ids at a time,
+                    # sorted here, until the highest id.
+                    if info.get("max_oid") is None or last >= info["max_oid"]:
+                        break
+                    params = {"where": f"{oid} > {last} AND {oid} <= {last + page}",
+                              "outFields": "*"}
+                params |= {"outSR": target_crs.split(":")[1], "returnZ": "false", "returnM": "false"}
                 while True:
                     try:
                         # Two tries before halving; the smallest page gets them all.
@@ -388,9 +423,18 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                     except RuntimeError as e:
                         if page <= MIN_PAGE:
                             raise
-                        page = params["resultRecordCount"] = max(MIN_PAGE, page // 2)
+                        page = max(MIN_PAGE, page // 2)
+                        if paging:
+                            params["resultRecordCount"] = page
+                        else:
+                            params["where"] = f"{oid} > {last} AND {oid} <= {last + page}"
                         print(f"    {table}: {e}; pages of {page}", flush=True)
                 feats = doc.get("features") or []
+                if not paging:
+                    feats.sort(key=lambda f: f["attributes"][oid])
+                    if not feats:
+                        last += page  # a gap in the ids
+                        continue
                 if not feats:
                     break
                 if "NaN" in json.dumps([f.get("geometry") for f in feats]):
@@ -406,7 +450,7 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                 page_file.write_text(json.dumps(
                     {key: v for key, v in doc.items() if key != "features"} | {"features": feats}))
                 put((k, page_file, len(feats)))
-                last = max(f["attributes"][oid] for f in feats)
+                last = max(f["attributes"][oid] for f in feats) if paging else last + page
             put((k, None, 0))
         except BaseException as e:  # noqa: BLE001 - handed to the reading thread
             put((k, e, 0))
@@ -462,10 +506,27 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
     return n
 
 
-def load(p: Profile, con, sources: list[dict], work: Path) -> tuple[str, int]:
+def narrow(con, table: str, keep: tuple[str, ...], folds: set[str]) -> None:
+    """One source's table down to the kept columns (lower case, in keep's
+    order), its fold columns, its geometry and other_attributes: its other
+    fields as a JSON object, in its own field order."""
+    cols = con.execute(f"DESCRIBE {table}").fetchall()
+    by_lower = {c.lower(): c for c, *_ in cols}
+    g = next(c for c, t, *_ in cols if t.startswith("GEOMETRY"))
+    kept = [f'"{by_lower[k]}" AS "{k}"' for k in keep if k in by_lower]
+    rest = [c for c, *_ in cols if c.lower() not in keep and c not in folds and c != g]
+    pairs = ", ".join(f'"{c}" := "{c}"' for c in rest)
+    other = f"to_json(struct_pack({pairs}))::VARCHAR" if rest else "NULL::VARCHAR"
+    select = ", ".join([*kept, *(f'"{c}"' for c in sorted(folds)), f"{other} AS other_attributes", f'"{g}"'])
+    con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT {select} FROM {table}")
+
+
+def load(p: Profile, con, sources: list[dict], work: Path,
+         keep: tuple[str, ...] | None = None) -> tuple[str, int]:
     """The layer's sources into the temp table src, geometry 2D in the
-    profile's CRS (or the sources' own), with its bbox. Returns the CRS and
-    the rows dropped for having no geometry."""
+    profile's CRS (or the sources' own), with its bbox. keep: the columns
+    kept as columns, the others of each source in other_attributes (JSON).
+    Returns the CRS and the rows dropped for having no geometry."""
     if p.crs:
         crs = p.crs
     else:
@@ -510,6 +571,9 @@ def load(p: Profile, con, sources: list[dict], work: Path) -> tuple[str, int]:
     ).fetchall() if t in tables]
     if not present:
         sys.exit("every source is empty")
+    if keep:
+        for t in present:
+            narrow(con, t, keep, set(names.values()))
     con.execute("CREATE OR REPLACE TABLE raw AS "
                 + " UNION ALL BY NAME ".join(f"SELECT * FROM {t}" for t in present))
     for t in present:
@@ -534,7 +598,7 @@ def build_layer(p: Profile, con, r: dict, info: dict, work: Path, out: Path,
     <id>.entry.json."""
     folder = out / r["theme"]
     folder.mkdir(parents=True, exist_ok=True)
-    crs, dropped = load(p, con, info["sources"], work)
+    crs, dropped = load(p, con, info["sources"], work, p.fold_keep.get(r["id"]))
     have = {c for (c,) in con.execute("SELECT column_name FROM (DESCRIBE src)").fetchall()}
     left_out = [c for c in p.drop_columns.get(r["id"], ()) if c in have]
     for c in left_out:
