@@ -7,6 +7,12 @@
 # shows the next week. scripts/datasets/usgs_rasters_catalog.py documents the
 # layout; the collection thumbnails are committed (its `thumbnails` command).
 #
+# Then the 3DEP tile indexes at usgs-rasters/index/ (usgs_dem_index.py): one
+# GeoParquet row per 1 m and 1/3 arc-second tile, with a PMTiles grid of the
+# cells each, for pickers (Geobox's Elevation page) and GDAL's GTI driver.
+# Rows of unchanged tiles are reused from the published index; gdalinfo (the
+# GDAL image) checks a sample of footprints against the COG headers.
+#
 # Needs the R2 secrets the nightly uses.
 
 name: dataset-usgs-rasters
@@ -36,13 +42,15 @@ env:
   RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
   RCLONE_CONFIG_PARQUETRY_ACL: private
   RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  GDAL_IMAGE: ghcr.io/osgeo/gdal:ubuntu-small-3.13.3
 
 jobs:
   usgs-rasters:
     runs-on: ubuntu-24.04
     # Two bucket listings (about 1,500 tiles and 240 files) and some 1,700
-    # small JSON files: a few minutes.
-    timeout-minutes: 30
+    # small JSON files: a few minutes. The tile indexes: 977 project listings,
+    # and the first time about 37,000 GeoTIFF headers (16 KB each).
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -59,6 +67,23 @@ jobs:
           uv run --project scripts python scripts/datasets/usgs_rasters_catalog.py publish \
             --remote "$REMOTE" ${{ inputs.dry_run && '--dry-run' || '' }}
 
+      - name: tylertoo and gdalinfo
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          docker pull -q "$GDAL_IMAGE"
+          printf '#!/usr/bin/env bash\nexec docker run --rm "%s" gdalinfo "$@"\n' "$GDAL_IMAGE" \
+            > "$HOME/.local/bin/gdalinfo"
+          chmod +x "$HOME/.local/bin/gdalinfo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 3DEP tile indexes
+        run: |
+          uv run --project scripts python scripts/datasets/usgs_dem_index.py build --out-dir index
+          cat index/index.json
+          ${{ inputs.dry_run && 'exit 0' || '' }}
+          uv run --project scripts python scripts/datasets/usgs_dem_index.py publish \
+            --out-dir index --remote "$REMOTE"
+
       - name: Check what is live
         if: ${{ !inputs.dry_run }}
         run: |
@@ -66,7 +91,9 @@ jobs:
                    catalog/usgs-3dep-13/collection.json catalog/usgs-3dep-13/thumbnail.png \
                    catalog/usgs-3dep-13/n43w072/n43w072.json \
                    catalog/annual-nlcd-land-cover/collection.json \
-                   catalog/annual-nlcd-land-cover/2024/2024.json; do
+                   catalog/annual-nlcd-land-cover/2024/2024.json \
+                   index/index.json index/3dep-1m.parquet index/3dep-1m-cells.pmtiles \
+                   index/3dep-13.parquet index/3dep-13-cells.pmtiles; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
             echo "ok  $f"
