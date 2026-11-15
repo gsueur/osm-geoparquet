@@ -429,7 +429,9 @@ NAD83(HARN) / Washington South, US survey feet (EPSG:2927). The statewide tax
 parcels (3.3 million, all 39 counties) carry no owner names upstream; their
 PMTiles run from zoom 12 to 14 in tiles of up to 4 MB, with the parcel
 number, the site address and the land use code, and the layer is built with
-no other beside it.
+no other beside it. The riparian management zones (2.3 million) the same way,
+with their zone. The Department of Health's languages spoken at home (one
+copy of each school district per year and language) are GeoParquet only.
 `wa_layers.csv` lists the published layers; folded into one file each:
 WSDOT's historic traffic counts and sections by `year`, its stormwater assets
 (one file per geometry) and facilities by `category`. The ShoreZone
