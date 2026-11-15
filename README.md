@@ -487,6 +487,17 @@ overviews by the script's `thumbnails` command. NAIP imagery is linked from
 the root catalog to Microsoft Planetary Computer's collection, with our guide
 at `catalog/naip/AGENTS.md`.
 
+The same workflow builds a 3DEP tile index (`scripts/datasets/usgs_dem_index.py`)
+at `https://parquetry.geomermaids.com/usgs-rasters/index/`: `3dep-tiles.parquet`,
+one GeoParquet row per tile of the 1 m DEM (every lidar project, overlaps kept,
+with the project's acquisition dates), the 1/3 and the 1 arc-second DEMs, each
+with its URL, CRS (EPSG and PROJ string), grid, nodata and elevation range from
+its GeoTIFF header; and two PMTiles grids of the footprints
+(`3dep-1m-tiles.pmtiles`, `3dep-arcsec-tiles.pmtiles`) for map pickers such as
+Geobox's Elevation page. GDAL's GTI driver reads the Parquet index as one
+mosaic (`-oo LOCATION_FIELD=url`). Rows of unchanged tiles are reused, so a
+weekly run reads only the headers of new or replaced tiles.
+
 State thematic rasters (`scripts/datasets/rasters.py`, the raster sibling of
 the ArcGIS engine; one profile per state, `ca_rasters.py` and
 `nh_rasters.py`, workflows `dataset-ca-rasters.yml` and
