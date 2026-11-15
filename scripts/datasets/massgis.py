@@ -753,9 +753,15 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
                 color=color)
     else:
         to84 = f"ST_Transform({{g}}, '{crs}', 'OGC:CRS84', always_xy := true)"
-        box = con.execute(f"""SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) FROM (
-            SELECT ST_Extent_Agg({to84.format(g="ST_MakeEnvelope(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)")}) AS e
-            FROM {src})""").fetchone()
+        # Features whose transform is not finite (misplaced far outside the
+        # projection's area: CA's vegetation maps) leave the frame out.
+        box = con.execute(f"""
+            WITH t AS (SELECT {to84.format(g="ST_MakeEnvelope(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)")} AS g
+                       FROM {src}),
+                 b AS (SELECT ST_XMin(g) AS x0, ST_YMin(g) AS y0, ST_XMax(g) AS x1, ST_YMax(g) AS y1
+                       FROM t)
+            SELECT min(x0), min(y0), max(x1), max(y1) FROM b
+            WHERE isfinite(x0) AND isfinite(y0) AND isfinite(x1) AND isfinite(y1)""").fetchone()
         x0, y0, x1, y1, aspect = frame(*box)
         tol = (x1 - x0) / 1200
         if outline is not None and outline.exists():
@@ -795,7 +801,8 @@ def thumbnail(con, parquet: Path, crs: str | None, dest: Path, theme: str, title
                 SELECT floor((ST_X(c) - {x0}) / {(x1 - x0) / nx})::INT, floor((ST_Y(c) - {y0}) / {(y1 - y0) / ny})::INT,
                        count(*)
                 FROM (SELECT {to84.format(g="ST_Point((bbox.xmin + bbox.xmax) / 2, (bbox.ymin + bbox.ymax) / 2)")} AS c
-                      FROM {src}) GROUP BY 1, 2""").fetchall()
+                      FROM {src}) WHERE isfinite(ST_X(c)) AND isfinite(ST_Y(c))
+                GROUP BY 1, 2""").fetchall()
             grid = np.zeros((ny, nx))
             for i, j, k in cells:
                 if 0 <= i < nx and 0 <= j < ny:
