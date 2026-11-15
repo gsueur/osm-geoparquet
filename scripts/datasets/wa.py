@@ -209,9 +209,14 @@ PROFILE = arcgis_layers.Profile(
     # are built alone (see Profile.alone). The 2.3 million riparian
     # management zones the same way, with their zone: tiled beside two other
     # layers they took the runner down twice (runs 43669413922, 43675448971).
+    # And the 1.2 million surface water quality standards polygons, with the
+    # water body name and its aquatic life use (run 43678218811 lost its
+    # runner when they came next).
     tiles={"parcels": (12, "4M", ("PARCEL_ID_NR", "SITUS_ADDRESS", "LANDUSE_CD")),
-           "riparian_management_zones": (12, "4M", ("Zone",))},
-    alone=frozenset({"parcels", "riparian_management_zones"}),
+           "riparian_management_zones": (12, "4M", ("Zone",)),
+           "surface_water_quality_standards": (12, "4M", ("GNIS_Name", "AquaticLife"))},
+    alone=frozenset({"parcels", "riparian_management_zones",
+                     "surface_water_quality_standards"}),
     # The DOH table of languages by school district: one copy of the district
     # polygon per school year and language (about 60,000 stacked copies), so
     # every tile holds them all, even at 4 MB and with no columns. GeoParquet
