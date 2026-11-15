@@ -156,5 +156,9 @@ jobs:
         if: ${{ !cancelled() && env.CATALOG_ONLY != 'true' }}
         run: |
           jq -e 'length == 0' "$WORK/out/failed.json" >/dev/null && exit 0
-          jq -r 'to_entries[] | "\(.key): \(.value)"' "$WORK/out/failed.json"
+          # A host that did not answer: one line for all its rasters.
+          jq -r '[to_entries[] | select(.value | startswith("unreachable: "))] | group_by(.value)[]
+                 | "::error::\(length) rasters not tried, \(.[0].value)"' "$WORK/out/failed.json"
+          jq -r 'to_entries[] | select(.value | startswith("unreachable: ") | not)
+                 | "\(.key): \(.value)"' "$WORK/out/failed.json"
           exit 1
