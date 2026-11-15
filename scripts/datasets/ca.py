@@ -228,6 +228,23 @@ VEGETATION_COLUMNS = (
 )
 
 
+# Water Boards services answering wrong since the first build (2026-11-14):
+# tried every week, published once they answer.
+NO_GEOMETRY = "every feature comes back without a geometry"
+BROKEN = {
+    **dict.fromkeys((
+        "arsenic_water_quality_by_section", "hexavalent_chromium_water_quality_by_section",
+        "nitrate_water_quality_by_section", "tcp_water_quality_by_section",
+        "uranium_water_quality_by_section", "domestic_well_density_2022",
+        "water_quality_risk_by_well_all_chemicals",
+        "water_quality_risk_percentile_block_group",
+        "water_quality_risk_by_section_all_chemicals", "small_water_systems_rcac",
+        "cv_salts_prioritized_basins", "beneficial_use_lines", "beneficial_use_polygons",
+    ), NO_GEOMETRY),
+    "ir2020_2022_303d_draft": "the query answers HTTP 500",
+}
+
+
 PROFILE = arcgis_layers.Profile(
     name="ca", public=PUBLIC, layers_csv=LAYERS_CSV, servers=SERVERS, themes=THEMES,
     colors=COLORS, outline=OUTLINE, outline_crs=CRS, theme_title=theme_title,
@@ -239,7 +256,8 @@ PROFILE = arcgis_layers.Profile(
     # vegetation maps: 3.5 million detailed polygons, 12 GB of geometry;
     # tylertoo ran past its time limit at 10 GB resident.
     untiled=frozenset({"cwhr_species_ranges", "important_farmland_history", "vegetation_maps"}),
-    fold_keep={"vegetation_maps": VEGETATION_COLUMNS})
+    fold_keep={"vegetation_maps": VEGETATION_COLUMNS},
+    broken=BROKEN)
 
 
 def layers() -> list[dict]:
