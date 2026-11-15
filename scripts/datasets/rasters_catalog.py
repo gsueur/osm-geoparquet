@@ -83,6 +83,11 @@ def catalog_url(p) -> str:
     return f"{public_data(p)}/{CATALOG_PREFIX}"
 
 
+def state_catalog_url(p) -> str:
+    """The state's vector catalog: <state>/catalog/ beside <state>/rasters/."""
+    return f"{PUBLIC_BASE}/{p.prefix.rsplit('/', 1)[0]}/{CATALOG_PREFIX}/catalog.json"
+
+
 def stamp_url(p) -> str:
     return f"{public_data(p)}/_files/{p.name}.json"
 
@@ -365,6 +370,9 @@ def build_root(p, c: RasterCatalog, themes: list[dict], total: int, updated: str
         "links": [
             {"rel": "self", "href": f"{catalog_url(p)}/catalog.json", "type": "application/json"},
             {"rel": "root", "href": "./catalog.json", "type": "application/json"},
+            # A child of the state's catalog (arcgis_catalog.py links it).
+            {"rel": "parent", "href": state_catalog_url(p), "type": "application/json",
+             "title": "The state's catalog"},
             *({"rel": "child", "href": f"./{t['_theme']}/catalog.json",
                "type": "application/json", "title": t["title"]} for t in themes),
             md_link("describedby", "./README.md", f"{c.title}: README"),

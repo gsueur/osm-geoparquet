@@ -506,7 +506,8 @@ version. California: the CWHR predicted habitat of 517 species
 CC BY 4.0. New Hampshire: the Wildlife Action Plan 2025 habitat land cover
 from NH GRANIT. Portolan catalogs at
 `https://parquetry.geomermaids.com/<state>/rasters/catalog/catalog.json`
-(`rasters_catalog.py`), one sub-catalog per theme, one collection per raster.
+(`rasters_catalog.py`), one sub-catalog per theme, one collection per raster,
+each a "Rasters" child of its state's catalog.
 
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
