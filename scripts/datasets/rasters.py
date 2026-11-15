@@ -122,9 +122,35 @@ def rows(p: Profile) -> list[dict]:
 
 # --- HTTP -------------------------------------------------------------------
 
-def request(url: str, method: str = "GET", headers: dict | None = None):
+def request(url: str, method: str = "GET", headers: dict | None = None, timeout: float = 180):
     return urllib.request.urlopen(urllib.request.Request(
-        url, method=method, headers=headers or {}), timeout=180)
+        url, method=method, headers=headers or {}), timeout=timeout)
+
+
+def unreachable(items: list[dict]) -> dict[str, str]:
+    """Host -> why, for each host that does not answer at all: one request to
+    its first item, twice. An HTTP error is an answer (the host is up); a
+    connection that times out or is refused is not. Its items then fail at
+    once instead of each waiting out its own timeout (CDFW's file library
+    from a GitHub runner, 2026-11-15: 517 timeouts, 2 h 26 min)."""
+    first: dict[str, str] = {}
+    for r in items:
+        first.setdefault(urllib.parse.urlsplit(r["url"]).netloc, r["url"])
+    down = {}
+    for host, url in first.items():
+        for i in range(2):
+            try:
+                with request(url, method="HEAD" if url.endswith(".zip") else "GET", timeout=30):
+                    pass
+                break
+            except urllib.error.HTTPError:
+                break
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                if i:
+                    down[host] = str(getattr(e, "reason", e))
+                else:
+                    time.sleep(5)
+    return down
 
 
 def get_json(url: str, params: dict | None = None, attempts: int = 5) -> dict:
@@ -211,7 +237,7 @@ def checksum(path: Path) -> int:
 
 def fingerprint(r: dict) -> str:
     if r["reader"] == "zip":
-        with request(r["url"], method="HEAD") as resp:
+        with request(r["url"], method="HEAD", timeout=60) as resp:
             parts = [resp.headers.get("Last-Modified") or "", resp.headers.get("Content-Length") or ""]
         if not any(parts):
             raise RuntimeError(f"{r['url']}: no Last-Modified or Content-Length")
@@ -612,6 +638,13 @@ def build(p: Profile, work: Path, out: Path, *, only: list[str] | None, force: b
     prints: dict[str, str] = {}
     failed: dict[str, str] = {}
     look = [r for r in items if not only or r["id"] in only]
+    down = unreachable(look)
+    for host, why in down.items():
+        print(f"  UNREACHABLE {host}: {why}", flush=True)
+    for r in look:
+        if (host := urllib.parse.urlsplit(r["url"]).netloc) in down:
+            failed[r["id"]] = f"unreachable: {host}: {down[host]}"
+    look = [r for r in look if r["id"] not in failed]
     for r, fp in zip(look, pool.map(lambda r: _try(fingerprint, r), look)):
         if isinstance(fp, Exception):
             failed[r["id"]] = f"fingerprint: {fp}"
@@ -622,7 +655,8 @@ def build(p: Profile, work: Path, out: Path, *, only: list[str] | None, force: b
         force or (only and r["id"] in only)
         or (not only and published.get(r["id"], {}).get("fingerprint") != prints[r["id"]]))]
     for i, e in failed.items():
-        print(f"  FAIL {i}: {e}", flush=True)
+        if not e.startswith("unreachable: "):
+            print(f"  FAIL {i}: {e}", flush=True)
     print(f"  {len(items)} items, {len(todo)} to build, {len(failed)} unreachable, "
           f"{workers} at a time", flush=True)
     publisher = Publisher(p, out, publish) if publish else None
