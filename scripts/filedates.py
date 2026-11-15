@@ -53,7 +53,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DATA = (".parquet",)
+# GeoParquet, and the COGs of the raster datasets (scripts/datasets/rasters.py).
+DATA = (".parquet", ".tif")
 
 # For each catalog's README and AGENTS.md: what the two dates mean.
 DATES_MD = """\
