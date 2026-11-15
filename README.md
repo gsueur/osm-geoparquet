@@ -430,7 +430,8 @@ parcels (3.3 million, all 39 counties) carry no owner names upstream; their
 PMTiles run from zoom 12 to 14 in tiles of up to 4 MB, with the parcel
 number, the site address and the land use code, and the layer is built with
 no other beside it. The riparian management zones (2.3 million) the same way,
-with their zone. The Department of Health's languages spoken at home (one
+with their zone, and the surface water quality standards (1.2 million) with
+the water body name and its aquatic life use. The Department of Health's languages spoken at home (one
 copy of each school district per year and language) are GeoParquet only.
 `wa_layers.csv` lists the published layers; folded into one file each:
 WSDOT's historic traffic counts and sections by `year`, its stormwater assets
