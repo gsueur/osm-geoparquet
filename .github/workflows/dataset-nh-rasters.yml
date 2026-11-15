@@ -91,7 +91,7 @@ jobs:
         run: |
           docker pull -q "$GDAL_IMAGE"
           mkdir -p "$HOME/.local/bin"
-          for tool in gdalinfo gdal_translate gdalbuildvrt; do
+          for tool in gdalinfo gdal_translate gdalbuildvrt gdalwarp; do
             cat > "$HOME/.local/bin/$tool" <<EOF
           #!/usr/bin/env bash
           exec docker run --rm -u "\$(id -u):\$(id -g)" -e GDAL_PAM_ENABLED -e GDAL_NUM_THREADS -v "$WORK:$WORK" -w "\$PWD" "$GDAL_IMAGE" $tool "\$@"

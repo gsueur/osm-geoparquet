@@ -82,8 +82,49 @@ CATALOG = RasterCatalog(
         "A cell value is a key into the value table: the cell's CWHR habitat type "
         "(`WHRTYPE`, `WHRNAME`), size and density classes (`WHRSIZE`, `WHRDENSITY`), and the "
         "species' predicted suitability there (`Suit_Max`, 0 to 1, and its rank `Suit_Rank`, "
-        "Low, Medium or High, the three colours of the COG). Join on `Value`."),
+        "Low, Medium or High, the three colours of the COG). Join on `Value`. A few species "
+        "come from CDFW's older model, with `MEAN` (0 to 1) instead of `Suit_Max` and no rank: "
+        "their `Suit_Rank_derived` is Geomermaids' (see the collection's note)."),
 )
+
+# CDFW's legend.clr, the same three lines in every archive that has one; the
+# archives read from their geodatabase have none.
+LEGEND = {"Low": (245, 245, 135), "Medium": (204, 138, 8), "High": (0, 102, 0)}
+
+OLDER_MODEL = (
+    "CDFW publishes this species from an older CWHR model: its value table gives the mean "
+    "predicted suitability (`MEAN`, 0 to 1) but no rank. `Suit_Rank_derived` is Geomermaids', "
+    "from `MEAN` with the cut points of CDFW's current models (Low up to 0.33, Medium up to "
+    "0.66, High above), and gives the COG its colours. The older model's value table lists "
+    "only part of the raster's values: a cell whose value it does not list has no attributes "
+    "in CDFW's data and is drawn grey.")
+
+
+def older_model_ranks(rat: list[dict]) -> tuple[list[dict], str | None]:
+    """CDFW's older models (2016 to 2018 archives) have MEAN and no
+    Suit_Rank: the rank from MEAN, at the current models' cut points (Low
+    0.08-0.33, Medium 0.35-0.66, High 0.68-1.0 in their tables)."""
+    keys = {k.lower(): k for k in rat[0]}
+    if "suit_rank" in keys or "mean" not in keys:
+        return rat, None
+
+    def rank(v) -> str:
+        v = round(float(v), 2)
+        return "Low" if v <= 0.33 else "Medium" if v <= 0.66 else "High"
+
+    return [{**row, "Suit_Rank_derived": rank(row[keys["mean"]])} for row in rat], OLDER_MODEL
+
+
+# Archives with nothing to read (2026-11-15): still tried every week.
+BROKEN = {
+    "a013_southern_california_slender_salamander": "CDFW's archive is an empty zip (22 bytes)",
+    "b240_marbled_murrelet": "CDFW's archive answers 404",
+    "b413_bell_s_vireo": "CDFW's archive answers 404",
+    # Older-model geodatabases with no value table: habitat keys, no
+    # suitability.
+    "b129_peregrine_falcon": "CDFW's raster has no value table",
+    "r105_northern_three_lined_boa": "CDFW's raster has no value table",
+}
 
 PROFILE = rasters.Profile(
     name="ca-rasters", prefix=PREFIX, public=PUBLIC,
@@ -96,8 +137,10 @@ PROFILE = rasters.Profile(
     # The archives' GeoTIFFs say 65535; a few leave it unset.
     nodata={"*": 65535},
     # The value tables' colour columns are unset; legend.clr colours the
-    # three suitability ranks.
-    colour_by="Suit_Rank",
+    # three suitability ranks (the older models: the rank derived from MEAN).
+    colour_by=("Suit_Rank", "Suit_Rank_derived"), legend=LEGEND,
+    rat_hook=older_model_ranks, unlisted_colour=(190, 190, 190), require_classes=True,
+    broken=BROKEN,
     catalog=CATALOG,
 )
 

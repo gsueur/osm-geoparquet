@@ -148,7 +148,8 @@ def build_collection(p, c: RasterCatalog, theme: str, entry: dict, updated: str)
            f"Parquet), with the publisher's colours as the COG's colour table"
            if classes else "")
         + f", read in place over HTTPS or the anonymous S3 endpoint {S3_ENDPOINT}. "
-        f"Credit: {p.attribution}.")
+        f"Credit: {p.attribution}."
+        + (f" {entry['note']}" if entry.get("note") else ""))
     proj = {k: v for k, v in entry["proj"].items() if k in ("proj:code", "proj:epsg", "proj:wkt2",
                                                            "proj:projjson")}
     if "proj:code" not in proj and "proj:epsg" in proj:
@@ -280,7 +281,10 @@ def collection_readme(p, c: RasterCatalog, col: dict, theme: str, entry: dict) -
     if cl:
         rows.append(f"| Value table | `{cl['file']}`, {cl['rows']:,} rows |")
     rows.append(f"| Source | <{src['url']}>, last modified {src.get('last_modified') or 'not stated'} |")
-    how = ("the publisher's archive, downloaded, its GeoTIFF taken out with its value table"
+    how = ("the publisher's archive, downloaded, the raster of its file geodatabase copied "
+           "cell for cell onto its own grid, the geodatabase's mask as the nodata value"
+           if entry.get("read_from") == "geodatabase" else
+           "the publisher's archive, downloaded, its GeoTIFF taken out with its value table"
            if src["reader"] == "zip" else
            "the image service, read with exportImage at its own pixel size and spatial "
            "reference, block by block, each block's grid checked against the service's")
