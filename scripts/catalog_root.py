@@ -114,6 +114,12 @@ DATASETS = [
                      "seamless 1/3 arc-second DEM (one item per one-degree tile) and Annual NLCD "
                      "land cover, impervious surface and change since 1985, as Cloud-Optimized "
                      "GeoTIFFs, relisted weekly.", SITE),
+    ("ca/rasters", "California Department of Fish and Wildlife's CWHR predicted habitat: one "
+                   "Cloud-Optimized GeoTIFF per species (517 amphibians, birds, mammals and "
+                   "reptiles) on CDFW's 30 m grid, with its value table, checked weekly.", SITE),
+    ("nh/rasters", "New Hampshire's thematic rasters from NH GRANIT's image services, as "
+                   "Cloud-Optimized GeoTIFFs on the publisher's grid with their value tables: "
+                   "the Wildlife Action Plan 2025 habitat land cover, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored

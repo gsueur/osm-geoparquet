@@ -487,6 +487,27 @@ overviews by the script's `thumbnails` command. NAIP imagery is linked from
 the root catalog to Microsoft Planetary Computer's collection, with our guide
 at `catalog/naip/AGENTS.md`.
 
+State thematic rasters (`scripts/datasets/rasters.py`, the raster sibling of
+the ArcGIS engine; one profile per state, `ca_rasters.py` and
+`nh_rasters.py`, workflows `dataset-ca-rasters.yml` and
+`dataset-nh-rasters.yml`, weekly): one Cloud-Optimized GeoTIFF per raster
+under `https://parquetry.geomermaids.com/<state>/rasters/<theme>/`, on the
+publisher's grid with its values (never reprojected or resampled), ZSTD,
+tiles of 512, overviews, with the publisher's colours as the COG's colour
+table, its value table as `<item>.classes.parquet` and a thumbnail. Two
+readers: a publisher's archive (CDFW's file library) or an ArcGIS image
+service read with exportImage at its own grid, block by block, each block's
+grid checked. Every COG is checked against its source before upload (COG
+layout, grid, CRS, nodata, GDAL's checksum of every cell). GDAL is the
+3.13.3 command-line tools (the `ghcr.io/osgeo/gdal` image in the
+workflows), so the bytes are the same from a workstation with that
+version. California: the CWHR predicted habitat of 517 species
+(`ca_rasters_items.csv`; CDFW's withheld sensitive species are not public),
+CC BY 4.0. New Hampshire: the Wildlife Action Plan 2025 habitat land cover
+from NH GRANIT. Portolan catalogs at
+`https://parquetry.geomermaids.com/<state>/rasters/catalog/catalog.json`
+(`rasters_catalog.py`), one sub-catalog per theme, one collection per raster.
+
 Natural Earth v5.1.2 (`scripts/datasets/natural_earth.py`, workflow
 `dataset-natural-earth.yml`, on demand: the release is static) sits under
 `https://parquetry.geomermaids.com/natural-earth/v5.1.2/<scale>/` (10m, 50m,

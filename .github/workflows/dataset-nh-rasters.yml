@@ -1,0 +1,157 @@
+# New Hampshire thematic rasters (NH GRANIT): parquetry:parquetry/nh/rasters/.
+#
+# One Cloud-Optimized GeoTIFF per raster, with its value table (Parquet) and
+# thumbnail, under nh/rasters/<theme>/. scripts/datasets/rasters.py is the
+# engine and documents the layout, the readers and the checks;
+# scripts/datasets/nh_rasters.py the source, and nh_rasters_items.csv which
+# rasters are built. The rasters are
+# NH GRANIT's image services, read with exportImage at their own grid.
+#
+# Each run fingerprints every raster (its service's grid, pixel type and raster attribute table), compares with the
+# published nh/rasters/_source.json and builds only what moved, uploading
+# each raster as soon as it is verified (only the files whose bytes changed,
+# stamp nh/rasters/_files/nh-rasters.json).
+#
+#   build    read, write and verify what moved, upload nothing
+#   publish  the same, uploading each raster as it is built (a scheduled run
+#            publishes), then the Portolan catalog at /nh/rasters/catalog/
+#   catalog  only the catalog, rendered from the files already published
+#
+# GDAL is the ghcr.io/osgeo/gdal image at the version the vector builds use.
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-nh-rasters
+
+on:
+  schedule:
+    - cron: "23 11 * * 0"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "build writes and verifies; publish also uploads; catalog only the catalog"
+        type: choice
+        options: [build, publish, catalog]
+        default: build
+      force:
+        description: "Rebuild every raster, moved or not"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-nh-rasters
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/nh/rasters
+  PUBLIC: https://parquetry.geomermaids.com/nh/rasters
+  PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
+  CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
+  GDAL_IMAGE: ghcr.io/osgeo/gdal:ubuntu-small-3.13.3
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  # Files are replaced in place when a raster changes: a short cache.
+  CACHE: "Cache-Control: public, max-age=3600"
+
+jobs:
+  rasters:
+    runs-on: ubuntu-24.04
+    # A weekly run reads each service's description and rebuilds what
+    # moved; the habitat land cover takes about 7 minutes. --max-minutes starts no raster after 5 hours, and a run cut
+    # short keeps all it published; the next run builds the rest.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: Work dir on the runner's big scratch disk
+        if: env.CATALOG_ONLY != 'true'
+        run: |
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          echo "WORK=/mnt/work" >> "$GITHUB_ENV"
+          df -h /mnt; free -g
+
+      - name: rclone
+        if: env.PUBLISH == 'true' || env.CATALOG_ONLY == 'true'
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      # The GDAL tools rasters.py calls, from the image: they see only $WORK,
+      # where the sources and the outputs live.
+      - name: GDAL
+        if: env.CATALOG_ONLY != 'true'
+        run: |
+          docker pull -q "$GDAL_IMAGE"
+          mkdir -p "$HOME/.local/bin"
+          for tool in gdalinfo gdal_translate gdalbuildvrt; do
+            cat > "$HOME/.local/bin/$tool" <<EOF
+          #!/usr/bin/env bash
+          exec docker run --rm -u "\$(id -u):\$(id -g)" -e GDAL_PAM_ENABLED -e GDAL_NUM_THREADS -v "$WORK:$WORK" -w "\$PWD" "$GDAL_IMAGE" $tool "\$@"
+          EOF
+            chmod +x "$HOME/.local/bin/$tool"
+          done
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/gdalinfo" --version
+
+      - name: Read, write and verify
+        if: env.CATALOG_ONLY != 'true'
+        # Stopped before the job's limit, so the steps below still run and
+        # publish the catalog of what is live.
+        timeout-minutes: 330
+        run: |
+          mkdir -p "$WORK/tmp"
+          cd "$WORK"
+          /usr/bin/time -v uv run --project "$GITHUB_WORKSPACE/scripts" \
+            python "$GITHUB_WORKSPACE/scripts/datasets/nh_rasters.py" build \
+            --work-dir "$WORK/tmp" --out-dir "$WORK/out" --max-minutes 300 --workers 1 \
+            ${{ env.PUBLISH == 'true' && format('--publish {0}', env.REMOTE) || '' }} \
+            ${{ inputs.force && '--force' || '' }} 2> >(tee "$WORK/time.txt" >&2)
+          grep -E "Maximum resident|Elapsed" "$WORK/time.txt"
+          du -sh "$WORK/out"
+
+      - name: Check what is live
+        id: live
+        if: ${{ !cancelled() && env.PUBLISH == 'true' }}
+        run: |
+          set +e
+          fail=0
+          for f in index.json _source.json _files/nh-rasters.json habitat/_manifest.json \
+                   habitat/wap_2025_habitat_land_cover.tif \
+                   habitat/wap_2025_habitat_land_cover.classes.parquet; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-16383 "$PUBLIC/habitat/wap_2025_habitat_land_cover.tif")
+          [ "$range" = "206" ] || { echo "BAD COG range request -> $range"; fail=1; }
+          exit $fail
+
+      # After the data, so the catalog never links a file that is not there.
+      - name: STAC catalog, published
+        if: ${{ !cancelled() && steps.live.outcome != 'failure' && (env.PUBLISH == 'true' || env.CATALOG_ONLY == 'true') }}
+        run: |
+          uv run --project scripts python scripts/datasets/nh_rasters.py catalog --publish "$REMOTE"
+          for f in catalog/catalog.json catalog/habitat/catalog.json \
+                   catalog/habitat/wap_2025_habitat_land_cover/collection.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
+
+      # Last, so a raster that failed does not hold back the others: they are
+      # published, the failed one stays as it was (its published fingerprint
+      # is kept, so the next run tries it again), and this run goes red.
+      - name: Rasters that failed
+        if: ${{ !cancelled() && env.CATALOG_ONLY != 'true' }}
+        run: |
+          jq -e 'length == 0' "$WORK/out/failed.json" >/dev/null && exit 0
+          jq -r 'to_entries[] | "\(.key): \(.value)"' "$WORK/out/failed.json"
+          exit 1
