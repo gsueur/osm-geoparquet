@@ -14,7 +14,11 @@ theme:
 Two readers, the CSV's `reader` column says which:
 - `zip`: the publisher's archive (CDFW's file library), downloaded, the
   GeoTIFF taken out with its sidecars (the value table GDAL reads from the
-  .aux.xml or .vat.dbf). Fingerprint: the archive's Last-Modified and size.
+  .aux.xml or .vat.dbf). Identical copies of it count as one. With no
+  GeoTIFF, or one GDAL cannot read in full (CDFW's, cut at 1 MiB), the raster
+  in the archive's file geodatabase: copied cell for cell onto its own grid
+  (gdalwarp, nearest, the same extent and size), its mask written as the
+  nodata value. Fingerprint: the archive's Last-Modified and size.
 - `export`: an ArcGIS ImageServer read with exportImage at its own pixel size
   and spatial reference, in blocks of at most maxImageWidth × maxImageHeight,
   then mosaicked. Each block's grid is checked against the service's: a
@@ -34,7 +38,8 @@ CRS and nodata against the source's, and the pixels: GDAL's checksum of the
 full-resolution band must equal the source's. For `export`, one block is read
 again and compared with the COG's window.
 
-GDAL is the command-line tools (gdalinfo, gdal_translate, gdalbuildvrt);
+GDAL is the command-line tools (gdalinfo, gdal_translate, gdalbuildvrt,
+gdalwarp);
 the workflows run them from the ghcr.io/osgeo/gdal image at the version the
 vector builds use, so the bytes are the same from a laptop with that version.
 
@@ -63,6 +68,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -96,10 +102,25 @@ class Profile:
     # Colour each value through this value-table column and a legend in the
     # archive ("name|r|g|b" lines, CDFW's legend.clr), when the table's own
     # colour columns are unset.
-    colour_by: str | None = None
+    # A tuple: the first of these columns the table has.
+    colour_by: str | tuple[str, ...] | None = None
     legend_file: str = "legend.clr"
-    # Or a legend given here: {name in the colour_by column: (r, g, b)}.
+    # The legend when the archive has none: {name in the colour_by column:
+    # (r, g, b)}.
     legend: dict[str, tuple[int, int, int]] = field(default_factory=dict)
+    # Value table -> (value table, note or None): a column the profile adds
+    # (CDFW's older models have no suitability rank), and what the catalog
+    # says about it.
+    rat_hook: Callable[[list[dict]], tuple[list[dict], str | None]] | None = None
+    # The colour of a value the value table does not list (CDFW's older
+    # models list only part of their values); None: black, as GDAL pads.
+    unlisted_colour: tuple[int, int, int] | None = None
+    # Every item is a class raster: one without a value table fails (CDFW's
+    # values are keys, meaningless without it).
+    require_classes: bool = False
+    # Item id -> why it is broken upstream: still tried every run, its
+    # failure printed but left out of failed.json (as arcgis_layers.py's).
+    broken: dict[str, str] = field(default_factory=dict)
     # Value-table columns left out of the Parquet file (ArcGIS bookkeeping).
     drop_classes: tuple[str, ...] = ("OBJECTID", "OID", "Rowid", "ROWID")
     # What the catalog says (rasters_catalog.RasterCatalog).
@@ -254,31 +275,96 @@ def fingerprint(r: dict) -> str:
 # --- Readers ----------------------------------------------------------------
 
 def read_zip(r: dict, work: Path, nodata: float | None = None) -> tuple[Path, list[dict] | None]:
-    """The archive's GeoTIFF (outside any .gdb folder) and its sidecars."""
+    """The archive's GeoTIFF (outside any .gdb folder) and its sidecars, or
+    the raster of its file geodatabase."""
     archive = work / f"{r['id']}.zip"
     download(r["url"], archive)
+    stem = r["url"].rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
+    dest = work / r["id"]
     with zipfile.ZipFile(archive) as z:
-        tifs = [n for n in z.namelist() if n.lower().endswith((".tif", ".tiff"))
+        names = z.namelist()
+        tifs = [n for n in names if n.lower().endswith((".tif", ".tiff"))
                 and ".gdb/" not in n.lower()]
         if r.get("member"):
             tifs = [n for n in tifs if n == r["member"]]
         elif len(tifs) > 1:
             # Several (CDFW's ds2009 also holds ds2008's): the one named
             # after the archive.
-            stem = r["url"].rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
             tifs = [n for n in tifs if n.rsplit("/", 1)[-1].lower() == f"{stem}.tif"] or tifs
-        if len(tifs) != 1:
+        if len(tifs) > 1 and len({(z.getinfo(n).CRC, z.getinfo(n).file_size) for n in tifs}) == 1:
+            tifs = tifs[:1]  # the same file again (CDFW's tiff0/, tiff1/, tiff2/)
+        if len(tifs) > 1:
             raise RuntimeError(f"{r['url']}: {len(tifs)} GeoTIFFs in the archive: {tifs[:5]}")
-        stem = tifs[0]
-        # The GeoTIFF and its sidecars (.tfw, .aux.xml, .vat.dbf, .ovr...).
-        for n in z.namelist():
-            if n == stem or (n.startswith(stem + ".") and not n.endswith("/")) \
-                    or n == stem.rsplit(".", 1)[0] + ".tfw" \
-                    or n.rsplit("/", 1)[-1].lower() in ("legend.clr",):
-                z.extract(n, work / r["id"])
+        for n in names:
+            if n.rsplit("/", 1)[-1].lower() == "legend.clr":
+                z.extract(n, dest)
+        src = None
+        if tifs:
+            tif = tifs[0]
+            # The GeoTIFF and its sidecars (.tfw, .aux.xml, .vat.dbf, .ovr...).
+            for n in names:
+                if n == tif or (n.startswith(tif + ".") and not n.endswith("/")) \
+                        or n == tif.rsplit(".", 1)[0] + ".tfw":
+                    z.extract(n, dest)
+            src = dest / tif
+            try:
+                checksum(src)  # read in full: a GeoTIFF cut short fails here
+            except RuntimeError as e:
+                print(f"  {r['id']}: {tif} unreadable ({str(e)[-120:]}), trying the geodatabase",
+                      flush=True)
+                src = None
+        gdbs = sorted({n[:n.lower().index(".gdb/") + 4] for n in names if ".gdb/" in n.lower()})
+        gdbs = [g for g in gdbs if g.rsplit("/", 1)[-1].lower() == f"{stem}.gdb"] or gdbs
+        if src is None and len(gdbs) == 1:
+            for n in names:
+                if n.startswith(gdbs[0] + "/") and not n.endswith("/"):
+                    z.extract(n, dest)
     archive.unlink()
-    src = work / r["id"] / stem
-    return src, rat_of(info(src))
+    if src is not None:
+        return src, rat_of(info(src))
+    if len(gdbs) != 1:
+        raise RuntimeError(f"{r['url']}: no readable GeoTIFF, and {len(gdbs)} file geodatabases "
+                           f"in the archive")
+    return from_gdb(dest / gdbs[0], dest / "geodatabase.tif", nodata)
+
+
+def from_gdb(gdb: Path, dest: Path, nodata: float | None) -> tuple[Path, list[dict] | None]:
+    """A file geodatabase raster as a GeoTIFF, cell for cell: gdalwarp onto
+    its own extent and size (no cell moves or is resampled), the mask (a
+    geodatabase raster has no nodata value) written as the nodata. A 32-bit
+    integer raster whose values (its value table's) and nodata fit in UInt16
+    is written as UInt16, the same values: a GeoTIFF colour table needs Byte
+    or UInt16 (CDFW's older models are Int32, values up to about 15,000)."""
+    doc = info(gdb)
+    band = doc["bands"][0]
+    nd = band.get("noDataValue", nodata)
+    if nd is None:
+        raise RuntimeError(f"{gdb.name}: no nodata value to write its mask as")
+    rat = rat_of(doc)
+    ot = []
+    vkey = next((k for k in (rat or [{}])[0] if k.lower() == "value"), None)
+    if band["type"] in ("Int32", "UInt32") and vkey and float(nd).is_integer() \
+            and 0 <= nd <= 65535 and all(0 <= int(row[vkey]) <= 65535 and row[vkey] != nd
+                                         for row in rat):
+        ot = ["-ot", "UInt16"]
+    (x0, rx, _, y0, _, ry), (w, h) = doc["geoTransform"], doc["size"]
+    exact = dest.with_name(dest.stem + ".exact.tif") if ot else dest
+    gdal("gdalwarp", "-q", "-overwrite", "-r", "near",
+         "-te", repr(x0), repr(y0 + ry * h), repr(x0 + rx * w), repr(y0),
+         "-ts", str(w), str(h), "-dstnodata", str(int(nd)) if float(nd).is_integer() else repr(nd),
+         "-co", "COMPRESS=ZSTD", "-co", "TILED=YES", "-co", "BIGTIFF=IF_SAFER",
+         "-wo", "NUM_THREADS=ALL_CPUS", str(gdb), str(exact))
+    out = info(exact, "-nomd")
+    if out["size"] != doc["size"] or any(
+            abs(a - b) > 1e-9 * max(1.0, abs(b)) for a, b in zip(out["geoTransform"], doc["geoTransform"])):
+        raise RuntimeError(f"{gdb.name}: the copy is not on the geodatabase raster's grid")
+    if ot:
+        gdal("gdal_translate", "-q", *ot, "-co", "COMPRESS=ZSTD", "-co", "TILED=YES",
+             str(exact), str(dest))
+        if checksum(dest) != checksum(exact):
+            raise RuntimeError(f"{gdb.name}: the UInt16 copy's values differ")
+        exact.unlink()
+    return dest, rat
 
 
 def rat_of(doc: dict) -> list[dict] | None:
@@ -353,7 +439,8 @@ def fetch_block(url: str, ext: dict, sr: dict, px: float, py: float, col0: int, 
 
 # --- Writing ----------------------------------------------------------------
 
-def colour_table(rat: list[dict] | None, value_column: str, *, by: str | None = None,
+def colour_table(rat: list[dict] | None, value_column: str, *,
+                 by: str | tuple[str, ...] | None = None,
                  legend: Path | dict | None = None) -> dict[int, tuple[int, int, int]]:
     """Value -> RGB: from the value table's colour columns (0-1 or 0-255)
     when they are set, otherwise through the `by` column and a legend (a
@@ -371,6 +458,8 @@ def colour_table(rat: list[dict] | None, value_column: str, *, by: str | None = 
             scale = 255 if all(v <= 1 for rgb in raw for v in rgb) else 1
             return {int(row[vkey]): tuple(round(v * scale) for v in rgb)
                     for row, rgb in zip(rat, raw)}
+    if isinstance(by, tuple):
+        by = next((b for b in by if b.lower() in keys), None)
     if by and legend and by.lower() in keys:
         names = {}
         if isinstance(legend, dict):
@@ -388,7 +477,12 @@ def colour_table(rat: list[dict] | None, value_column: str, *, by: str | None = 
     return {}
 
 
-def write_cog(src: Path, dest: Path, *, nodata: float | None, colours: dict, classes: bool) -> None:
+def s_type(path: Path) -> str:
+    return info(path, "-nomd")["bands"][0]["type"]
+
+
+def write_cog(src: Path, dest: Path, *, nodata: float | None, colours: dict, classes: bool,
+              unlisted: tuple[int, int, int] | None = None) -> None:
     """src as a COG at dest, through a VRT that sets nodata and the colour
     table and drops the value table (it goes to Parquet)."""
     vrt = dest.with_suffix(".vrt")
@@ -409,8 +503,10 @@ def write_cog(src: Path, dest: Path, *, nodata: float | None, colours: dict, cla
             interp = ET.SubElement(band, "ColorInterp")
         interp.text = "Palette"
         table = ET.SubElement(band, "ColorTable")
-        for v in range(max(colours) + 1):
-            r, g, b = colours.get(v, (0, 0, 0))
+        # With an unlisted colour, every value the band can hold gets one.
+        top = (65535 if s_type(src) == "UInt16" else 255) if unlisted else max(colours)
+        for v in range(top + 1):
+            r, g, b = colours.get(v, unlisted or (0, 0, 0))
             a = 0 if v not in colours or (nodata is not None and v == nodata) else 255
             ET.SubElement(table, "Entry", c1=str(r), c2=str(g), c3=str(b), c4=str(a))
     tree.write(vrt)
@@ -478,6 +574,12 @@ def build_item(p: Profile, r: dict, work: Path, out: Path) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     want = p.nodata.get(r["id"], p.nodata.get("*"))
     src, rat = (read_zip if r["reader"] == "zip" else read_export)(r, work, want)
+    if rat is None and p.require_classes:
+        shutil.rmtree(work / r["id"], ignore_errors=True)
+        raise RuntimeError(f"{r['url']}: the raster has no value table")
+    note = None
+    if rat and p.rat_hook:
+        rat, note = p.rat_hook(rat)
     ok = False
     try:
         s = info(src, "-nomd")
@@ -486,12 +588,13 @@ def build_item(p: Profile, r: dict, work: Path, out: Path) -> dict:
         if nodata is None:
             nodata = want
         classes = rat is not None
-        legend = (p.legend or next(iter(src.parent.glob(p.legend_file)), None)) \
+        legend = (next(iter((work / r["id"]).rglob(p.legend_file)), None) or p.legend or None) \
             if p.colour_by else None
         colours = colour_table(rat, p.value_column, by=p.colour_by, legend=legend) \
             if classes else {}
         cog = folder / f"{r['id']}.tif"
-        write_cog(src, cog, nodata=nodata, colours=colours, classes=classes)
+        write_cog(src, cog, nodata=nodata, colours=colours, classes=classes,
+                  unlisted=p.unlisted_colour if note else None)
         c = verify(src, cog, nodata)
         if r["reader"] == "export":
             recheck_block(r, cog, work, nodata)
@@ -517,6 +620,8 @@ def build_item(p: Profile, r: dict, work: Path, out: Path) -> dict:
         "nodata": nodata, "kind": "classes" if classes else "values",
         "overviews": [o["size"] for o in c["bands"][0].get("overviews", [])],
         "source": {k: r[k] for k in r if k not in ("theme", "title") and r[k]},
+        **({"read_from": "geodatabase"} if src.name == "geodatabase.tif" else {}),
+        **({"note": note} if note else {}),
         "built": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if table is not None:
@@ -719,17 +824,25 @@ def build(p: Profile, work: Path, out: Path, *, only: list[str] | None, force: b
         elif r["id"] in published:
             source[r["id"]] = published[r["id"]]
     (out / "_source.json").write_text(json.dumps(source, indent=1, sort_keys=True) + "\n")
-    (out / "failed.json").write_text(json.dumps(failed, indent=1) + "\n")
+    known = {k: v for k, v in failed.items() if k in p.broken}
+    (out / "failed.json").write_text(
+        json.dumps({k: v for k, v in failed.items() if k not in known}, indent=1) + "\n")
     rels += ["index.json", "_source.json"]
     if publisher:
         publisher.meta(rels)
     if deferred:
         print(f"  time budget of {max_minutes:.0f} min reached: {len(deferred)} items left for "
               f"the next run", flush=True)
-    if failed:
-        print(f"  {len(failed)} items failed (failed.json): {', '.join(failed)}", flush=True)
+    if known:
+        print(f"  {len(known)} items still broken upstream (Profile.broken, not in failed.json): "
+              f"{', '.join(known)}", flush=True)
+    if fixed := sorted(k for k in p.broken if k in built):
+        print(f"  built again, to take out of Profile.broken: {', '.join(fixed)}", flush=True)
+    new = [k for k in failed if k not in known]
+    if new:
+        print(f"  {len(new)} items failed (failed.json): {', '.join(new)}", flush=True)
     print(f"  {len(built)} built in {time.monotonic() - t0:.0f} s", flush=True)
-    return 1 if failed else 0
+    return 1 if new else 0
 
 
 def local_entry(out: Path, r: dict, fingerprint: str | None) -> dict | None:
