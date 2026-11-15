@@ -208,7 +208,12 @@ PROFILE = arcgis_layers.Profile(
     # code (a map can colour them by use); no zoom below 12 fits, and they
     # are built alone (see Profile.alone).
     tiles={"parcels": (12, "4M", ("PARCEL_ID_NR", "SITUS_ADDRESS", "LANDUSE_CD"))},
-    alone=frozenset({"parcels"}))
+    alone=frozenset({"parcels"}),
+    # The DOH table of languages by school district: one copy of the district
+    # polygon per school year and language (about 60,000 stacked copies), so
+    # every tile holds them all, even at 4 MB and with no columns. GeoParquet
+    # only; a map draws the districts from school_districts.
+    untiled=frozenset({"language_spoken_at_home_full"}))
 
 
 def layers() -> list[dict]:
