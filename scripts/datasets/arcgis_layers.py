@@ -433,6 +433,15 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
 
     paging = info.get("paging", True)
 
+    def oid_of(f: dict) -> int:
+        """A feature's object id. The attributes may spell it in another
+        case than the layer's fields (WSDOT's survey monuments: OBJECTID in
+        the fields, ObjectID in the features)."""
+        a = f["attributes"]
+        if oid in a:
+            return a[oid]
+        return next(v for key, v in a.items() if key.lower() == oid.lower())
+
     def walk(k: int, lo: int, hi: int | None) -> None:
         last, page = lo, info["page"]
         if paging:
@@ -471,7 +480,7 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                         print(f"    {table}: {e}; pages of {page}", flush=True)
                 feats = doc.get("features") or []
                 if not paging:
-                    feats.sort(key=lambda f: f["attributes"][oid])
+                    feats.sort(key=oid_of)
                     if not feats:
                         last += page  # a gap in the ids
                         continue
@@ -490,7 +499,7 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                 page_file.write_text(json.dumps(
                     {key: v for key, v in doc.items() if key != "features"} | {"features": feats}))
                 put((k, page_file, len(feats)))
-                last = max(f["attributes"][oid] for f in feats) if paging else last + page
+                last = max(oid_of(f) for f in feats) if paging else last + page
             put((k, None, 0))
         except BaseException as e:  # noqa: BLE001 - handed to the reading thread
             put((k, e, 0))
