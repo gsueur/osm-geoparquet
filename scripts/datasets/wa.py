@@ -220,8 +220,10 @@ PROFILE = arcgis_layers.Profile(
     # The DOH table of languages by school district: one copy of the district
     # polygon per school year and language (about 60,000 stacked copies), so
     # every tile holds them all, even at 4 MB and with no columns. GeoParquet
-    # only; a map draws the districts from school_districts.
-    untiled=frozenset({"language_spoken_at_home_full"}))
+    # only; a map draws the districts from school_districts. The state
+    # boundary mask is one polygon covering the whole map but the state: its
+    # tiles at zoom 14 never end. GeoParquet only too.
+    untiled=frozenset({"language_spoken_at_home_full", "state_boundary_mask"}))
 
 
 def layers() -> list[dict]:
