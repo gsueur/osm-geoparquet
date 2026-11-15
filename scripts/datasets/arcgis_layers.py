@@ -148,6 +148,11 @@ class Profile:
     # shore units). The first source gives the geometry and the shared
     # columns; the others add the columns it lacks.
     join_on: dict[str, str] = field(default_factory=dict)
+    # Layer id -> why it is broken upstream (a service that has answered
+    # wrong for weeks). Still tried every run, and published once it builds;
+    # its failure is printed but left out of failed.json, so the run stays
+    # green and goes red only for a new failure.
+    broken: dict[str, str] = field(default_factory=dict)
     # Layer id -> the publisher's columns left out of the file.
     drop_columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Threads reading one large layer, each a range of its object ids (a
@@ -1039,15 +1044,22 @@ def build(p: Profile, work: Path, out: Path, *, public: str, only: list[str] | N
         write_theme(theme, entries)
     write_index(set(by_theme))
     write_source()
-    (out / "failed.json").write_text(json.dumps(failed, indent=2) + "\n")
+    known = {k: v for k, v in failed.items() if k in p.broken}
+    (out / "failed.json").write_text(
+        json.dumps({k: v for k, v in failed.items() if k not in known}, indent=2) + "\n")
     if publisher:
         publisher.meta([f"{t}/{f}" for t in by_theme for f in ("_manifest.json", "ATTRIBUTION.txt")]
                        + ["index.json", "snapshots.json", "_source.json"])
     if deferred:
         print(f"  time budget of {max_minutes:.0f} min reached: {len(deferred)} layers left for "
               f"the next run: {', '.join(deferred)}", flush=True)
-    if failed:
-        print(f"  {len(failed)} layers failed (failed.json): {', '.join(failed)}", flush=True)
+    if known:
+        print(f"  {len(known)} layers still broken upstream (Profile.broken, not in "
+              f"failed.json): {', '.join(known)}", flush=True)
+    if fixed := sorted(k for k in p.broken if k in built and k not in failed):
+        print(f"  built again, to take out of Profile.broken: {', '.join(fixed)}", flush=True)
+    if new := [k for k in failed if k not in known]:
+        print(f"  {len(new)} layers failed (failed.json): {', '.join(new)}", flush=True)
 
 
 def main(p: Profile, doc: str) -> None:
