@@ -296,7 +296,21 @@ def build_theme(p: CatalogProfile, theme: str, collections: list[dict], updated:
     }
 
 
-def build_root(p: CatalogProfile, themes: list[dict], total: int, updated: str) -> dict:
+def rasters_catalog(p: CatalogProfile) -> dict | None:
+    """The state's raster catalog (rasters.py, at <prefix>/rasters/catalog/),
+    when one is published: a child of this catalog."""
+    url = f"{p.public_data}/rasters/{CATALOG_PREFIX}/catalog.json"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return {**json.load(r), "_url": url}
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return None
+        raise
+
+
+def build_root(p: CatalogProfile, themes: list[dict], total: int, updated: str,
+               rasters: dict | None = None) -> dict:
     return {
         "type": "Catalog",
         "stac_version": "1.1.0",
@@ -310,6 +324,8 @@ def build_root(p: CatalogProfile, themes: list[dict], total: int, updated: str) 
             {"rel": "root", "href": "./catalog.json", "type": "application/json"},
             *({"rel": "child", "href": f"./{t['_theme']}/catalog.json", "type": "application/json",
                "title": t["title"]} for t in themes),
+            *([{"rel": "child", "href": rasters["_url"], "type": "application/json",
+                "title": f"Rasters: {rasters['title']}"}] if rasters else []),
             md_link("describedby", "./README.md", f"{p.title}: README"),
             md_link("agents", "./AGENTS.md", f"{p.title}: agent guide"),
             {"rel": "icon", "href": "./logo.png", "type": "image/png", "title": "Geomermaids"},
@@ -468,8 +484,12 @@ def theme_agents(cat: dict, collections: list[dict]) -> str:
 """
 
 
-def root_readme(p: CatalogProfile, root: dict, themes: list[dict], since: str | None) -> str:
+def root_readme(p: CatalogProfile, root: dict, themes: list[dict], since: str | None,
+                rasters: dict | None = None) -> str:
     listing = "\n".join(f"- [{t['title']}](./{t['_theme']}/README.md)" for t in themes)
+    if rasters:
+        listing += (f"\n- Rasters: [{rasters['title']}]({rasters['_url'].removesuffix('catalog.json')}"
+                    f"README.md), Cloud-Optimized GeoTIFFs in a catalog of their own")
     return f"""\
 # {root['title']}
 
@@ -494,9 +514,12 @@ Geomermaids, {CONTACT_EMAIL}. Source and issues: {REPO_URL}.
 """
 
 
-def root_agents(p: CatalogProfile, themes: list[dict]) -> str:
+def root_agents(p: CatalogProfile, themes: list[dict], rasters: dict | None = None) -> str:
     listing = "\n".join(f"- `{t['_theme']}`: {t['title']}. {t['_theme']}/AGENTS.md"
                         for t in themes)
+    if rasters:
+        listing += (f"\n- rasters: {rasters['title']}, Cloud-Optimized GeoTIFFs. "
+                    f"{rasters['_url'].removesuffix('catalog.json')}AGENTS.md")
     return f"""\
 # {p.catalog_id}: agent guide
 
@@ -556,11 +579,12 @@ def build(p: CatalogProfile, out_dir: Path | None, dest: Path, *, updated: str |
         themes.append({**cat, "_theme": theme})
         count += len(collections)
     dates = filedates.load(p.public_data, stamp or p.stamp)
-    root = build_root(p, themes, count, updated)
+    rasters = rasters_catalog(p)
+    root = build_root(p, themes, count, updated, rasters)
     write_json(dest / "catalog.json", root)
     shutil.copyfile(LOGO, dest / "logo.png")
-    (dest / "README.md").write_text(root_readme(p, root, themes, dates.since))
-    (dest / "AGENTS.md").write_text(root_agents(p, themes))
+    (dest / "README.md").write_text(root_readme(p, root, themes, dates.since, rasters))
+    (dest / "AGENTS.md").write_text(root_agents(p, themes, rasters))
     filedates.apply(dest, dates)
     return count
 

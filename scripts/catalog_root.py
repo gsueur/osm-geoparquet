@@ -114,12 +114,6 @@ DATASETS = [
                      "seamless 1/3 arc-second DEM (one item per one-degree tile) and Annual NLCD "
                      "land cover, impervious surface and change since 1985, as Cloud-Optimized "
                      "GeoTIFFs, relisted weekly.", SITE),
-    ("ca/rasters", "California Department of Fish and Wildlife's CWHR predicted habitat: one "
-                   "Cloud-Optimized GeoTIFF per species (517 amphibians, birds, mammals and "
-                   "reptiles) on CDFW's 30 m grid, with its value table, checked weekly.", SITE),
-    ("nh/rasters", "New Hampshire's thematic rasters from NH GRANIT's image services, as "
-                   "Cloud-Optimized GeoTIFFs on the publisher's grid with their value tables: "
-                   "the Wildlife Action Plan 2025 habitat land cover, checked weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
@@ -187,7 +181,9 @@ def build_root(children: list[dict], updated: str) -> dict:
             "land cover, a world basemap, place names, addresses, schools, building footprints, protected areas, "
             "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
             "census geography and estimates, and the statewide layers of Massachusetts, Maine, "
-            "New Hampshire, New York, California, Washington and Oregon; and USGS elevation and "
+            "New Hampshire, New York, California, Washington and Oregon, with thematic rasters "
+            "for some (California's species habitat, New Hampshire's habitat land cover); and "
+            "USGS elevation and "
             "land cover rasters, listed where they are served. One sub-catalog per dataset, each "
             "kept current by its own build and under its own licence. Overture Maps and NAIP "
             "imagery are linked to their publishers' own catalogs, not copied. With [Geobox](https://geobox.cloud) you can add any of them to your "
@@ -270,8 +266,8 @@ per layer).
 
 - Vector files are GeoParquet with a `bbox` covering column: filter on it
   before touching geometry.
-- Rasters (usgs-rasters, NAIP) are Cloud-Optimized GeoTIFFs: read windows with
-  GDAL or rasterio, not whole files.
+- Rasters (usgs-rasters, NAIP, a state catalog's "Rasters" child) are
+  Cloud-Optimized GeoTIFFs: read windows with GDAL or rasterio, not whole files.
 - Read in place over HTTPS; no credentials anywhere (NAIP: a free, anonymous
   signed URL).
 - Each catalog states its licence and the attribution it requires. Carry it
