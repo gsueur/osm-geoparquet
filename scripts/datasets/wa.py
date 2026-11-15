@@ -206,9 +206,12 @@ PROFILE = arcgis_layers.Profile(
     # The 3.3 million parcels: from zoom 12 in tiles of up to 4 MB, with the
     # parcel number, the site address and the Department of Revenue land use
     # code (a map can colour them by use); no zoom below 12 fits, and they
-    # are built alone (see Profile.alone).
-    tiles={"parcels": (12, "4M", ("PARCEL_ID_NR", "SITUS_ADDRESS", "LANDUSE_CD"))},
-    alone=frozenset({"parcels"}),
+    # are built alone (see Profile.alone). The 2.3 million riparian
+    # management zones the same way, with their zone: tiled beside two other
+    # layers they took the runner down twice (runs 43669413922, 43675448971).
+    tiles={"parcels": (12, "4M", ("PARCEL_ID_NR", "SITUS_ADDRESS", "LANDUSE_CD")),
+           "riparian_management_zones": (12, "4M", ("Zone",))},
+    alone=frozenset({"parcels", "riparian_management_zones"}),
     # The DOH table of languages by school district: one copy of the district
     # polygon per school year and language (about 60,000 stacked copies), so
     # every tile holds them all, even at 4 MB and with no columns. GeoParquet
