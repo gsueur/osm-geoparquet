@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import sys
 import tempfile
@@ -136,15 +137,37 @@ def data_source(out_dir: Path | None, theme: str, file: str) -> str:
     return str(local) if local and local.is_file() else f"{theme_url(theme)}/{file}"
 
 
-def lonlat_extent(con, entry: dict) -> list[float]:
-    """The layer's bbox, from its footer extent in its own CRS, to lon/lat."""
+def lonlat_extent(con, entry: dict, source: str | None = None) -> list[float]:
+    """The layer's bbox, from its footer extent in its own CRS, to lon/lat.
+    A bbox stretched by misplaced features (CA's DGS leases: points far off
+    California) has corners outside the projection, which come back
+    infinite: then the extent of the features themselves, each transformed,
+    from `source`."""
     if not entry.get("crs"):
         return STATE_BBOX
     x0, y0, x1, y1 = entry["bbox"]
     e = con.execute(f"""SELECT ST_XMin(g), ST_YMin(g), ST_XMax(g), ST_YMax(g) FROM (
         SELECT ST_Transform(ST_MakeEnvelope({x0}, {y0}, {x1}, {y1}), '{entry['crs']}',
                             'OGC:CRS84', always_xy := true) AS g)""").fetchone()
+    if not lonlat_ok(e) and source:
+        e = con.execute(f"""
+            WITH t AS (SELECT ST_Transform(ST_MakeEnvelope(bbox.xmin, bbox.ymin, bbox.xmax,
+                                                           bbox.ymax), '{entry['crs']}',
+                                           'OGC:CRS84', always_xy := true) AS g
+                       FROM read_parquet('{source}')),
+                 b AS (SELECT ST_XMin(g) AS x0, ST_YMin(g) AS y0, ST_XMax(g) AS x1,
+                              ST_YMax(g) AS y1 FROM t)
+            SELECT min(x0), min(y0), max(x1), max(y1) FROM b
+            WHERE isfinite(x0) AND isfinite(y0) AND isfinite(x1) AND isfinite(y1)""").fetchone()
+    if not lonlat_ok(e):
+        raise ValueError(f"{entry.get('name')}: no finite lon/lat extent ({e})")
     return [round(v, 6) for v in e]
+
+
+def lonlat_ok(e) -> bool:
+    """A lon/lat box of finite values within the world's bounds."""
+    return (e is not None and all(v is not None and math.isfinite(v) for v in e)
+            and -180 <= e[0] <= e[2] <= 180 and -90 <= e[1] <= e[3] <= 90)
 
 
 def footer(con, source: str) -> list[tuple[str, str]]:
@@ -583,7 +606,7 @@ def build(out_dir: Path | None, dest: Path, *, updated: str | None = None) -> in
         collections = []
         for entry in sorted(manifest["files"], key=lambda e: order.get(e["name"], 1 << 20)):
             source = data_source(out_dir, theme, entry["file"])
-            col = build_collection(theme, entry, lonlat_extent(con, entry),
+            col = build_collection(theme, entry, lonlat_extent(con, entry, source),
                                    footer(con, source), updated)
             cdir = tdir / entry["name"]
             cdir.mkdir(parents=True)

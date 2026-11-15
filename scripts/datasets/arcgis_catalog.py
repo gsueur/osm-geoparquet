@@ -532,7 +532,7 @@ def build(p: CatalogProfile, out_dir: Path | None, dest: Path, *, updated: str |
         collections = []
         for entry in sorted(manifest["files"], key=lambda e: order.get(e["name"], 1 << 20)):
             source = data_source(p, out_dir, theme, entry["file"])
-            col = build_collection(p, theme, entry, lonlat_extent(con, entry),
+            col = build_collection(p, theme, entry, lonlat_extent(con, entry, source),
                                    footer(con, source), updated)
             cdir = tdir / entry["name"]
             cdir.mkdir(parents=True)
