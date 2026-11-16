@@ -114,6 +114,9 @@ DATASETS = [
                      "seamless 1/3 arc-second DEM (one item per one-degree tile) and Annual NLCD "
                      "land cover, impervious surface and change since 1985, as Cloud-Optimized "
                      "GeoTIFFs, relisted weekly.", SITE),
+    ("copernicus-dem", "The Copernicus DEM GLO-30, the world's land at about 30 m, as a tile index: "
+                       "one GeoParquet row per Cloud-Optimized GeoTIFF of the AWS Open Data "
+                       "bucket, with a PMTiles grid of the footprints, relisted weekly.", SITE),
 ]
 
 # Catalogs published by others, linked as they are: nothing is built or stored
@@ -266,7 +269,7 @@ per layer).
 
 - Vector files are GeoParquet with a `bbox` covering column: filter on it
   before touching geometry.
-- Rasters (usgs-rasters, NAIP, a state catalog's "Rasters" child) are
+- Rasters (usgs-rasters, copernicus-dem, NAIP, a state catalog's "Rasters" child) are
   Cloud-Optimized GeoTIFFs: read windows with GDAL or rasterio, not whole files.
 - Read in place over HTTPS; no credentials anywhere (NAIP: a free, anonymous
   signed URL).

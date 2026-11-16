@@ -505,7 +505,8 @@ index, built weekly by `dataset-copernicus-dem.yml`
 `copernicus-glo30-tiles.parquet` (the 3DEP index's columns, one row per
 1 degree tile, elevation range from each tile's XML) and
 `copernicus-glo30-tiles.pmtiles`. The COGs stay in the AWS Open Data bucket
-`copernicus-dem-30m`, which sends no CORS headers. Credit: "© DLR e.V.
+`copernicus-dem-30m`, which sends no CORS headers. Its Portolan catalog
+(`copernicus_dem_catalog.py`) is at `copernicus-dem/catalog/`, linked from the root. Credit: "© DLR e.V.
 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
 COPERNICUS by the European Union and ESA; all rights reserved."
 
