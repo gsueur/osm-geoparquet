@@ -6,7 +6,8 @@
 # scripts/datasets/copernicus_dem_index.py documents the source and the
 # columns (those of the 3DEP index, usgs_dem_index.py). Rows of unchanged
 # tiles are reused from the published index; gdalinfo (the GDAL image)
-# checks a sample of headers.
+# checks a sample of headers. Then the Portolan catalog at
+# copernicus-dem/catalog/ (copernicus_dem_catalog.py), from the published index.
 #
 # Needs the R2 secrets the nightly uses.
 
@@ -85,3 +86,16 @@ jobs:
           done
           range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-16383 "$PUBLIC/index/copernicus-glo30-tiles.pmtiles")
           [ "$range" = "206" ] || { echo "BAD PMTiles range request -> $range"; exit 1; }
+
+      # After the data, so the catalog never describes files that are not there.
+      - name: Portolan catalog, published
+        if: ${{ !inputs.dry_run }}
+        run: |
+          uv run --project scripts python scripts/datasets/copernicus_dem_catalog.py publish --remote "$REMOTE"
+          for f in catalog/catalog.json catalog/README.md catalog/AGENTS.md \
+                   catalog/copernicus-glo30/collection.json catalog/copernicus-glo30/thumbnail.png \
+                   catalog/copernicus-glo30/styles/default.json; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
