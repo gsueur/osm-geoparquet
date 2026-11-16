@@ -81,6 +81,11 @@ class CatalogProfile:
     # The access example: x, y, their CRS, a distance in its units, the
     # comment above the query.
     example: tuple[int, int, str, int, str]
+    # A layer's own terms, where they differ from its theme's (Vermont's
+    # layers marked CC BY-SA 4.0 by their publisher): (theme, layer id) ->
+    # the terms dict, or None for the theme's. Its `spdx` is the collection's
+    # `license` ("other" without one).
+    layer_terms: Callable[[str, str], dict | None] | None = None
 
     @property
     def name(self) -> str:
@@ -98,6 +103,11 @@ class CatalogProfile:
     def stamp(self) -> str:
         # The file stamp (filedates.py), at <prefix>/_files/<prefix>.json.
         return f"{self.public_data}/_files/{self.name}.json"
+
+
+def terms_of(p: CatalogProfile, theme: str, name: str) -> dict:
+    """The terms a layer's collection states: its own, else its theme's."""
+    return (p.layer_terms and p.layer_terms(theme, name)) or p.terms(theme)
 
 
 def folds_of(entry: dict) -> tuple[dict, dict]:
@@ -173,7 +183,7 @@ def build_collection(p: CatalogProfile, theme: str, entry: dict, extent: list[fl
     lm = src.get("last_modified") or entry["built"]
     tiles = entry.get("pmtiles")
     years = fold_years(entry)
-    t = p.terms(theme)
+    t = terms_of(p, theme, name)
     server = p.layers.servers[entry.get("server") or ""]
     first_url = src["urls"][0]
     projected = [x for x in src.get("sources", []) if x.get("projected_from")]
@@ -240,7 +250,7 @@ def build_collection(p: CatalogProfile, theme: str, entry: dict, extent: list[fl
         "description": description,
         "keywords": [p.state, t["keyword"], p.layers.themes[theme], "GeoParquet",
                      *(["PMTiles"] if tiles else [])],
-        "license": "other",
+        "license": t.get("spdx", "other"),
         "attribution": t["attribution"],
         "updated": updated,
         "providers": t["providers"],
@@ -412,7 +422,7 @@ Copyright, from the service: "{short(entry["copyright"], 300)}"''' if entry.get(
 
 ## License
 
-{p.terms(theme)["license_md"]}
+{terms_of(p, theme, entry["name"])["license_md"]}
 """
 
 
@@ -431,7 +441,7 @@ def collection_agents(p: CatalogProfile, col: dict, theme: str, entry: dict) -> 
 
 - Filter on `bbox` before an exact predicate; the file is Hilbert-sorted, so a small area reads few row groups. Coordinates are in the layer's CRS, not lon/lat unless it is EPSG:4326 or EPSG:4269: transform your point first, e.g. `ST_Transform(ST_Point(lon, lat), 'OGC:CRS84', '{crs}', always_xy := true)`.
 - For a map, use the `rel: pmtiles` link and the `default` style asset.
-- Credit: {p.terms(theme)["attribution"]}.
+- Credit: {terms_of(p, theme, entry["name"])["attribution"]}.
 """
 
 

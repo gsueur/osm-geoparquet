@@ -175,8 +175,12 @@ def layers(p: Profile) -> list[dict]:
             sys.exit(f"{p.layers_csv.name}: {r['id']}: unknown server {server!r}")
         e = out.setdefault(r["id"], {"id": r["id"], "theme": r["theme"], "title": r["title"],
                                      "note": r["note"], "server": server, "sources": []})
-        if e["theme"] != r["theme"] or e["server"] != server:
-            sys.exit(f"{p.layers_csv.name}: {r['id']} is in two themes or on two servers")
+        # A folded layer's sources may sit on several servers (Vermont's
+        # broadband status: the older years on VCGI's map server, the newer
+        # on Public Service's organisation): each source is read from its
+        # own; the layer's `server`, the first source's, names its publisher.
+        if e["theme"] != r["theme"]:
+            sys.exit(f"{p.layers_csv.name}: {r['id']} is in two themes")
         fold = {c: (r[c] if t == "VARCHAR" else int(r[c]))
                 for c, t in FOLD_COLUMNS.items() if r.get(c)}
         e["sources"].append({"server": server, "service": r["service"],

@@ -471,6 +471,31 @@ downloads are not read yet. Portolan catalog at
 `https://parquetry.geomermaids.com/or/catalog/catalog.json`
 (`scripts/datasets/oregon_catalog.py`), one sub-catalog per theme.
 
+Vermont (`scripts/datasets/vt.py`, workflow `dataset-vt.yml`, checked
+weekly) sits under `https://parquetry.geomermaids.com/vt/<theme>/`: one
+GeoParquet file and one PMTiles archive per statewide vector layer, 283 files
+in 11 themes (boundaries, districts and zoning; parcels, addresses and
+protected lands; transportation; water; habitat and species; forests, farms
+and recreation; geology and soils; energy, utilities and broadband; waste
+and hazardous sites; health and emergency services; communities), read from
+the agencies' ArcGIS services listed on the Vermont Open Geodata Portal
+(geodata.vermont.gov, VCGI) the same way as the other states'. Every layer
+is in NAD83 / Vermont (EPSG:32145, metres). `vt_layers.csv` lists the
+published layers; folded into one file each: the towns' zoning districts and
+overlays (371 maps from the regional planning commissions, `category`
+"<town>: <map>", the columns they share kept and each map's others in
+`other_attributes`), the broadband status 2019 to 2026 (`year`) and the
+prior years of TickTracker reports. The parcels leave out the owner names
+and mailing addresses. Left out: the regional planning commissions' other
+layers, copies of national datasets published elsewhere (Census, NWI, NHD,
+WBD, GNIS), the statewide building footprints (USA Structures covers them),
+older editions, rasters, layers covering less than a fifth of the state and
+indexes of maps and surveys. Credit the agency each layer names; the 72
+layers their publisher marks CC BY-SA 4.0 keep that licence, and their
+collections say so. Portolan catalog at
+`https://parquetry.geomermaids.com/vt/catalog/catalog.json`
+(`scripts/datasets/vt_catalog.py`), one sub-catalog per theme.
+
 USGS base rasters, linked (`scripts/datasets/usgs_rasters_catalog.py`,
 workflow `dataset-usgs-rasters.yml`, weekly): a Portolan catalog at
 `https://parquetry.geomermaids.com/usgs-rasters/catalog/catalog.json` of
