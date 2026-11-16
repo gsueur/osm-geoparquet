@@ -219,6 +219,8 @@ def header(url: str) -> dict:
     sx, sy = tags[33550][:2]
     tp = tags[33922]
     x0, y1 = tp[3] - tp[0] * sx, tp[4] + tp[1] * sy
+    if keys.get(1025) == 2:   # PixelIsPoint: GDAL puts the cell's centre on the tie point
+        x0, y1 = x0 - sx / 2, y1 + sy / 2
     return {"epsg": keys.get(3072) or keys.get(2048), "size": [w, h], "pixel": sx,
             "extent": [x0, y1 - h * sy, x0 + w * sx, y1],
             "nodata": float(tags[42113]) if 42113 in tags else None,   # as GDAL reports it
@@ -279,14 +281,14 @@ def utm_zone(epsg: int) -> int:
 
 # ---------- listing ----------
 
-def published_rows() -> dict[str, dict]:
+def published_rows(src: str = f"{PUBLIC}/{INDEX}.parquet") -> dict[str, dict]:
     """The published index's rows, by tile_id (empty when there is none)."""
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
     try:
         cur = con.execute(f"""SELECT * EXCLUDE (geometry, bbox, west, south, east, north),
             strftime(published AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%SZ') AS published_s,
-            ST_AsText(geometry) AS wkt FROM read_parquet('{PUBLIC}/{INDEX}.parquet')""")
+            ST_AsText(geometry) AS wkt FROM read_parquet('{src}')""")
     except duckdb.Error as e:
         print(f"  no published index to reuse ({str(e)[:80]})", flush=True)
         return {}
@@ -347,7 +349,8 @@ def rows_1m(old: dict[str, dict], limit: int | None = None
     return rows, read, odd
 
 
-def read_headers(rows: list[dict], *, utm: bool = False) -> tuple[list[dict], list[str]]:
+def read_headers(rows: list[dict], *, utm: bool = False,
+                 nodata: float | None = NODATA) -> tuple[list[dict], list[str]]:
     """Each row with its header's grid, nodata and elevation range. A grid
     the row already has (from its name) is only compared: the header wins."""
     def one(r):
@@ -363,7 +366,7 @@ def read_headers(rows: list[dict], *, utm: bool = False) -> tuple[list[dict], li
             if r["epsg"] != g["epsg"] or r["width"] != g["width"] or any(
                     abs(a[k] - b[k]) > hd["pixel"] / 2 for k in a):
                 differ.append(r["tile_id"])
-        return r | g | {"nodata": hd["nodata"] if hd["nodata"] is not None else NODATA,
+        return r | g | {"nodata": hd["nodata"] if hd["nodata"] is not None else nodata,
                         "min_elev": hd["min_elev"], "max_elev": hd["max_elev"]}, None
 
     got, failed, differ = [], [], []
@@ -427,10 +430,14 @@ TRANSFORMERS: dict = {}
 
 
 def lonlat_wkt(r: dict) -> str:
-    """The footprint in lon/lat; projected edges densified to about 1 km."""
+    """The footprint in lon/lat; projected edges densified to about 1 km. A
+    geographic grid half a cell past the antimeridian or a pole (Copernicus
+    cells centred on whole degrees) is cut at it."""
     b = r["native_bbox"]
     x0, y0, x1, y1 = b["xmin"], b["ymin"], b["xmax"], b["ymax"]
-    if r["epsg"] == 4269:
+    if r["epsg"] in (4269, 4326):   # geographic: the grid, within the world's edges
+        x0, x1 = max(x0, -180.0), min(x1, 180.0)
+        y0, y1 = max(y0, -90.0), min(y1, 90.0)
         ring = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     else:
         from pyproj import Transformer
@@ -450,13 +457,13 @@ def lonlat_wkt(r: dict) -> str:
 NO_PAM = {**__import__("os").environ, "GDAL_PAM_ENABLED": "NO"}
 
 
-def check_parser(rows: list[dict], n: int) -> None:
+def check_parser(rows: list[dict], n: int, products: tuple[str, ...] = ("1m", "13", "1")) -> None:
     """This module's header reader against gdalinfo, on n tiles per product:
     CRS, size, pixel size, extent, nodata and statistics must agree. Run
     before the bulk reads (gdalinfo processes started after an hour of
     48-thread reads crashed on a laptop, 2026-11-15)."""
     sample = []
-    for product in ("1m", "13", "1"):
+    for product in products:
         group = [r for r in rows if r["product"] == product]
         sample += random.Random(len(group)).sample(group, min(n, len(group)))
 
@@ -553,18 +560,21 @@ def write(con, rows: list[dict], dest: Path) -> dict:
             "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(), "bbox": [x0, y0, x1, y1]}
 
 
-def write_footprints(con, src: Path, dest: Path, where: str, zooms: tuple[int, int]) -> dict:
+PROPERTIES = ["tile_id", "product", "project", "acquired_end", "url", "epsg", "min_elev", "max_elev"]
+
+
+def write_footprints(con, src: Path, dest: Path, where: str, zooms: tuple[int, int],
+                     properties: list[str] = PROPERTIES) -> dict:
     """The footprints of some products as PMTiles, layer `tiles`, one
     feature per tile (overlapping tiles stay separate features)."""
-    part = dest.with_suffix(".parquet")
-    con.execute(f"""COPY (SELECT tile_id, product, project,
-            strftime(acquired_end, '%Y-%m-%d') AS acquired_end, url, epsg,
-            round(min_elev, 1) AS min_elev, round(max_elev, 1) AS max_elev, geometry
+    part = dest.with_suffix(".footprints.parquet")
+    expr = {"acquired_end": "strftime(acquired_end, '%Y-%m-%d') AS acquired_end",
+            "min_elev": "round(min_elev, 1) AS min_elev", "max_elev": "round(max_elev, 1) AS max_elev"}
+    con.execute(f"""COPY (SELECT {", ".join(expr.get(c, c) for c in properties)}, geometry
         FROM read_parquet('{src}') WHERE {where} ORDER BY tile_id)
         TO '{part}' (FORMAT PARQUET, GEOPARQUET_VERSION 'V2')""")
     out = pmtiles.tile(part, dest, layer="tiles", min_zoom=zooms[0], max_zoom=zooms[1],
-                       properties=["tile_id", "product", "project", "acquired_end", "url",
-                                   "epsg", "min_elev", "max_elev"],
+                       properties=properties,
                        verbatim=True)
     part.unlink()
     return {"file": dest.name, "zooms": list(zooms),

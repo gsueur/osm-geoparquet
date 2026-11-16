@@ -498,6 +498,17 @@ Geobox's Elevation page. GDAL's GTI driver reads the Parquet index as one
 mosaic (`-oo LOCATION_FIELD=url`). Rows of unchanged tiles are reused, so a
 weekly run reads only the headers of new or replaced tiles.
 
+The Copernicus DEM GLO-30 (the world at about 30 m) has the same kind of
+index, built weekly by `dataset-copernicus-dem.yml`
+(`scripts/datasets/copernicus_dem_index.py`) at
+`https://parquetry.geomermaids.com/copernicus-dem/index/`:
+`copernicus-glo30-tiles.parquet` (the 3DEP index's columns, one row per
+1 degree tile, elevation range from each tile's XML) and
+`copernicus-glo30-tiles.pmtiles`. The COGs stay in the AWS Open Data bucket
+`copernicus-dem-30m`, which sends no CORS headers. Credit: "© DLR e.V.
+2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
+COPERNICUS by the European Union and ESA; all rights reserved."
+
 State thematic rasters (`scripts/datasets/rasters.py`, the raster sibling of
 the ArcGIS engine; one profile per state, `ca_rasters.py` and
 `nh_rasters.py`, workflows `dataset-ca-rasters.yml` and
