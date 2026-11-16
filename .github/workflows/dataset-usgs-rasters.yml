@@ -92,8 +92,8 @@ jobs:
                    catalog/usgs-3dep-13/n43w072/n43w072.json \
                    catalog/annual-nlcd-land-cover/collection.json \
                    catalog/annual-nlcd-land-cover/2024/2024.json \
-                   index/index.json index/3dep-1m.parquet index/3dep-1m-cells.pmtiles \
-                   index/3dep-13.parquet index/3dep-13-cells.pmtiles; do
+                   index/index.json index/3dep-tiles.parquet \
+                   index/3dep-1m-tiles.pmtiles index/3dep-arcsec-tiles.pmtiles; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
             [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
             echo "ok  $f"
