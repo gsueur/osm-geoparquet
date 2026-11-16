@@ -1,0 +1,87 @@
+# Copernicus DEM GLO-30 tile index: parquetry:parquetry/copernicus-dem/index/.
+#
+# One GeoParquet row per 1 degree tile of the AWS Open Data bucket
+# copernicus-dem-30m (about 26,000 COGs), with a PMTiles grid of the cells,
+# for pickers (Geobox's Elevation page) and GDAL's GTI driver.
+# scripts/datasets/copernicus_dem_index.py documents the source and the
+# columns (those of the 3DEP index, usgs_dem_index.py). Rows of unchanged
+# tiles are reused from the published index; gdalinfo (the GDAL image)
+# checks a sample of headers.
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-copernicus-dem
+
+on:
+  schedule:
+    - cron: "53 10 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check, upload nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-copernicus-dem
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/copernicus-dem
+  PUBLIC: https://parquetry.geomermaids.com/copernicus-dem
+  LC_ALL: C.UTF-8
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+  GDAL_IMAGE: ghcr.io/osgeo/gdal:ubuntu-small-3.13.3
+
+jobs:
+  copernicus-dem:
+    runs-on: ubuntu-24.04
+    # The bucket listing (about 350,000 objects, 350 requests); the first
+    # time, about 26,000 COG headers and as many 45 KB XML files.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        if: ${{ !inputs.dry_run }}
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: tylertoo and gdalinfo
+        run: |
+          uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
+          docker pull -q "$GDAL_IMAGE"
+          printf '#!/usr/bin/env bash\nexec docker run --rm -e GDAL_PAM_ENABLED "%s" gdalinfo "$@"\n' "$GDAL_IMAGE" \
+            > "$HOME/.local/bin/gdalinfo"
+          chmod +x "$HOME/.local/bin/gdalinfo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Tile index
+        run: |
+          uv run --project scripts python scripts/datasets/copernicus_dem_index.py build --out-dir index
+          cat index/index.json
+          ${{ inputs.dry_run && 'exit 0' || '' }}
+          uv run --project scripts python scripts/datasets/copernicus_dem_index.py publish \
+            --out-dir index --remote "$REMOTE"
+
+      - name: Check what is live
+        if: ${{ !inputs.dry_run }}
+        run: |
+          for f in index/index.json index/copernicus-glo30-tiles.parquet \
+                   index/copernicus-glo30-tiles.pmtiles; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; exit 1; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-16383 "$PUBLIC/index/copernicus-glo30-tiles.pmtiles")
+          [ "$range" = "206" ] || { echo "BAD PMTiles range request -> $range"; exit 1; }
