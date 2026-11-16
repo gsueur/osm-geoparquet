@@ -110,6 +110,10 @@ DATASETS = [
     ("or", "Oregon's statewide layers from the Oregon GEOHub: address points, ODOT's public "
            "roads and mileposts, urban growth boundaries and zoning, water rights and wells, "
            "fish habitat distribution, faults and landslides, checked weekly.", SITE),
+    ("vt", "Vermont's statewide layers from the Vermont Open Geodata Portal: parcels (without "
+           "owner names), E911 address points and roads, the towns' zoning maps, VTrans' "
+           "traffic counts and bridges, BioFinder, wetlands, geology and soils and the "
+           "broadband status, checked weekly.", SITE),
     ("usgs-rasters", "USGS base rasters listed where they are served, nothing copied: the 3DEP "
                      "seamless 1/3 arc-second DEM (one item per one-degree tile) and Annual NLCD "
                      "land cover, impervious surface and change since 1985, as Cloud-Optimized "
@@ -184,7 +188,7 @@ def build_root(children: list[dict], updated: str) -> dict:
             "land cover, a world basemap, place names, addresses, schools, building footprints, protected areas, "
             "wetlands, flood zones, wildfire perimeters, natural hazard risk, water features, "
             "census geography and estimates, and the statewide layers of Massachusetts, Maine, "
-            "New Hampshire, New York, California, Washington and Oregon, with thematic rasters "
+            "New Hampshire, New York, California, Washington, Oregon and Vermont, with thematic rasters "
             "for some (California's species habitat, New Hampshire's habitat land cover); and "
             "USGS elevation and "
             "land cover rasters, listed where they are served. One sub-catalog per dataset, each "
