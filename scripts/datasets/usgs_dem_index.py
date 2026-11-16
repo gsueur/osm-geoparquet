@@ -286,7 +286,7 @@ def published_rows(src: str = f"{PUBLIC}/{INDEX}.parquet") -> dict[str, dict]:
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
     try:
-        cur = con.execute(f"""SELECT * EXCLUDE (geometry, bbox, west, south, east, north),
+        cur = con.execute(f"""SELECT * EXCLUDE (geometry, bbox, west, south, east, north, published),
             strftime(published AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%SZ') AS published_s,
             ST_AsText(geometry) AS wkt FROM read_parquet('{src}')""")
     except duckdb.Error as e:
