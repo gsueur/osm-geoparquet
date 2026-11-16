@@ -71,7 +71,7 @@ jobs:
         run: |
           uv run --project scripts python scripts/datasets/pmtiles.py install --dest "$HOME/.local/bin"
           docker pull -q "$GDAL_IMAGE"
-          printf '#!/usr/bin/env bash\nexec docker run --rm "%s" gdalinfo "$@"\n' "$GDAL_IMAGE" \
+          printf '#!/usr/bin/env bash\nexec docker run --rm -e GDAL_PAM_ENABLED "%s" gdalinfo "$@"\n' "$GDAL_IMAGE" \
             > "$HOME/.local/bin/gdalinfo"
           chmod +x "$HOME/.local/bin/gdalinfo"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
