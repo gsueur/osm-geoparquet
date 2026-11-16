@@ -75,9 +75,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 CHUNK = 1 << 20
+# OVERVIEWS=IGNORE_EXISTING: the COG's overviews are always built here, with
+# the resampling the item calls for; by default the driver copies the
+# source's (CDFW's .ovr files: their own resampling, and m025's is damaged).
 COG_OPTIONS = ["-co", "COMPRESS=ZSTD", "-co", "LEVEL=9", "-co", "BLOCKSIZE=512",
                "-co", "BIGTIFF=IF_SAFER", "-co", "NUM_THREADS=ALL_CPUS",
-               "-co", "STATISTICS=NO"]
+               "-co", "STATISTICS=NO", "-co", "OVERVIEWS=IGNORE_EXISTING"]
 # Colour columns of a value table, as ArcGIS and GDAL name them.
 COLOUR_COLUMNS = (("red", "green", "blue"), ("r", "g", "b"))
 # exportImage blocks: pixels a side, and requests at a time.
