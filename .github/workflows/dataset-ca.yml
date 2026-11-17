@@ -47,6 +47,8 @@ env:
   PUBLISH: ${{ github.event_name == 'schedule' || inputs.stage == 'publish' }}
   CATALOG_ONLY: ${{ inputs.stage == 'catalog' }}
   LC_ALL: C.UTF-8
+  # Remotes come from the environment: no config file, no notice.
+  RCLONE_CONFIG: /dev/null
   RCLONE_CONFIG_PARQUETRY_TYPE: s3
   RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
   RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
