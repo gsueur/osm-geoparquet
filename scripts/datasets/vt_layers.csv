@@ -637,7 +637,6 @@ public_water_sources,water,Public Water Sources,Open_Data/OPENDATA_ANR_WATER_SP_
 river_main_stem_waterbodies_wbid,water,River Main Stem Waterbodies (WBID),Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,201,,,anr,,,,CC-BY-SA-4.0
 sga_phase_1_assessed_reaches,water,SGA Phase 1 Assessed Reaches,Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,169,,,anr,,,,CC-BY-SA-4.0
 sga_phase_2_assessed_reaches,water,SGA Phase 2 Assessed Reaches,Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,170,,,anr,,,,CC-BY-SA-4.0
-sga_phase_2_reach_segment_breaks,water,SGA Phase 2 Reach Segment Breaks,Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,172,,,anr,,,,CC-BY-SA-4.0
 sga_reach_breaks,water,SGA Reach Breaks,Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,171,,,anr,,,,CC-BY-SA-4.0
 shoreland_protection_act,water,Shoreland Protection Act,Open_Data/OPENDATA_ANR_WATER_SP_NOCACHE_v2,175,,,anr,,,,
 significant_wetlands_inventory,water,Vermont Significant Wetlands Inventory,Vermont_Significant_Wetland_Inventory,0,,,anr_ago,,,,

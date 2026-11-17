@@ -473,7 +473,7 @@ downloads are not read yet. Portolan catalog at
 
 Vermont (`scripts/datasets/vt.py`, workflow `dataset-vt.yml`, checked
 weekly) sits under `https://parquetry.geomermaids.com/vt/<theme>/`: one
-GeoParquet file and one PMTiles archive per statewide vector layer, 283 files
+GeoParquet file and one PMTiles archive per statewide vector layer, 282 files
 in 11 themes (boundaries, districts and zoning; parcels, addresses and
 protected lands; transportation; water; habitat and species; forests, farms
 and recreation; geology and soils; energy, utilities and broadband; waste
@@ -489,8 +489,10 @@ prior years of TickTracker reports. The parcels leave out the owner names
 and mailing addresses. Left out: the regional planning commissions' other
 layers, copies of national datasets published elsewhere (Census, NWI, NHD,
 WBD, GNIS), the statewide building footprints (USA Structures covers them),
-older editions, rasters, layers covering less than a fifth of the state and
-indexes of maps and surveys. Credit the agency each layer names; the 72
+older editions, rasters, layers covering less than a fifth of the state,
+indexes of maps and surveys, and the SGA phase 2 reach segment breaks (their
+service lists its ids but answers no query for its features). Credit the
+agency each layer names; the 71
 layers their publisher marks CC BY-SA 4.0 keep that licence, and their
 collections say so. Portolan catalog at
 `https://parquetry.geomermaids.com/vt/catalog/catalog.json`
