@@ -97,7 +97,9 @@ PAGE = 2000
 WKID_ALIASES = {102100: 3857, 102113: 3857, 900913: 3857}
 # A page the server cannot answer (Maine DEP's biomonitoring drainages: 50
 # full-resolution basins are 30 MB of JSON, 500 fail) is asked again in
-# halves, down to this many features.
+# halves, down to one feature (Vermont's glacial lakes: 9 polygons of up to
+# 470,000 vertices, a page of more than 5 fails). No first page is smaller
+# than this, however few rows the layer has.
 MIN_PAGE = 25
 # The longest a page may take to arrive, all of it: a server trickling a
 # page of huge polygons never trips the socket timeout (CDFW's eelgrass, 74
@@ -269,6 +271,15 @@ def source_info(p: Profile, src: dict) -> dict:
     # A service that can neither page nor order (the California Water Boards'
     # map services) is walked in windows of object ids instead.
     paging = (info.get("advancedQueryCapabilities") or {}).get("supportsPagination") is not False
+    # A query layer's virtual object id (Vermont ANR's ESRI_OID) orders the
+    # features but cannot be filtered on, and about one in twenty of its ids
+    # finds no feature when asked for: such a layer is walked by offset, in
+    # the order of its ids.
+    try:
+        get(u + "/query", {"where": f"{oid} > -1", "returnCountOnly": "true"}, attempts=2)
+        by_offset = False
+    except RuntimeError:
+        by_offset = paging
     max_oid = None
     if not edits or not paging:
         # No edit dates (Maine DEP's map services): the highest object id
@@ -282,6 +293,7 @@ def source_info(p: Profile, src: dict) -> dict:
         "crs": f"EPSG:{wkid}", "oid": oid, "max_oid": max_oid, "fields": fields,
         "field_names": sorted({f["name"].lower() for f in info.get("fields") or []}),
         "page": min(PAGE, info.get("maxRecordCount") or PAGE), "paging": paging,
+        "by_offset": by_offset,
         "geometry_type": info.get("geometryType"),
         "data_edited": ms_iso(edits.get("dataLastEditDate") or edits.get("lastEditDate")),
         "schema_edited": ms_iso(edits.get("schemaLastEditDate")),
@@ -420,7 +432,9 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
     on the same key keep this order, and the bytes stay the same)."""
     target_crs = target_crs or info["crs"]
     oid = info["oid"]
-    ranges = oid_ranges(info, workers)
+    by_offset = info.get("by_offset", False)
+    # The ranges are ranges of ids in a where clause: one walk by offset.
+    ranges = [(-1, None)] if by_offset else oid_ranges(info, workers)
     names = info.get("fold_names") or {}
     extra = "".join(
         f", {v}::{FOLD_COLUMNS[c]} AS {names.get(c, c)}" if FOLD_COLUMNS[c] != "VARCHAR"
@@ -458,36 +472,42 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
             # 74-row layer that times out takes six steps before a smaller
             # request reaches the server.
             page = min(page, max(info.get("count") or 0, MIN_PAGE))
+        done = 0  # rows read, when walked by offset
+
+        def request(page: int) -> dict | None:
+            """The query for the next page of this walk; None past its end."""
+            if by_offset:
+                return {"where": "1=1", "outFields": "*", "orderByFields": f"{oid} ASC",
+                        "resultOffset": done, "resultRecordCount": page}
+            if paging:
+                where = f"{oid} > {last}" + (f" AND {oid} <= {hi}" if hi is not None else "")
+                return {"where": where, "outFields": "*", "orderByFields": f"{oid} ASC",
+                        "resultRecordCount": page}
+            # No paging and no ordering: a window of ids at a time, sorted
+            # here, until the highest id.
+            if info.get("max_oid") is None or last >= info["max_oid"]:
+                return None
+            return {"where": f"{oid} > {last} AND {oid} <= {last + page}", "outFields": "*"}
+
         try:
             while not stop.is_set():
-                if paging:
-                    where = f"{oid} > {last}" + (f" AND {oid} <= {hi}" if hi is not None else "")
-                    params = {"where": where, "outFields": "*", "orderByFields": f"{oid} ASC",
-                              "resultRecordCount": page}
-                else:
-                    # No paging and no ordering: a window of ids at a time,
-                    # sorted here, until the highest id.
-                    if info.get("max_oid") is None or last >= info["max_oid"]:
-                        break
-                    params = {"where": f"{oid} > {last} AND {oid} <= {last + page}",
-                              "outFields": "*"}
-                params |= {"outSR": target_crs.split(":")[1], "returnZ": "false", "returnM": "false"}
+                if (params := request(page)) is None:
+                    break
+                srs = {"outSR": target_crs.split(":")[1], "returnZ": "false", "returnM": "false"}
                 while True:
                     try:
-                        # Two tries before halving; the smallest page gets them all.
-                        doc = get(info["url"] + "/query", params,
-                                  attempts=2 if page > MIN_PAGE else 6)
+                        # Two tries before halving; a page of one gets them all.
+                        doc = get(info["url"] + "/query", params | srs,
+                                  attempts=2 if page > 1 else 6)
                         break
                     except RuntimeError as e:
-                        if page <= MIN_PAGE:
+                        if page <= 1:
                             raise
-                        page = max(MIN_PAGE, page // 2)
-                        if paging:
-                            params["resultRecordCount"] = page
-                        else:
-                            params["where"] = f"{oid} > {last} AND {oid} <= {last + page}"
+                        page //= 2
+                        params = request(page)
                         print(f"    {table}: {e}; pages of {page}", flush=True)
                 feats = doc.get("features") or []
+                done += len(feats)
                 if not paging:
                     feats.sort(key=oid_of)
                     if not feats:
@@ -508,7 +528,8 @@ def fetch_source(con, info: dict, work: Path, table: str, target_crs: str | None
                 page_file.write_text(json.dumps(
                     {key: v for key, v in doc.items() if key != "features"} | {"features": feats}))
                 put((k, page_file, len(feats)))
-                last = max(oid_of(f) for f in feats) if paging else last + page
+                if not by_offset:
+                    last = max(oid_of(f) for f in feats) if paging else last + page
             put((k, None, 0))
         except BaseException as e:  # noqa: BLE001 - handed to the reading thread
             put((k, e, 0))
