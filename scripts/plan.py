@@ -10,6 +10,12 @@ Geofabrik's index carries `iso3166-2` / `iso3166-1:alpha2` per extract, so
 no hand-maintained mapping is needed; adding a country to the coverage is a
 GeoJSON change only.
 
+The live index is fetched again when it cannot be read or carries no ISO
+codes (2026-11-18: Geofabrik's servers handed out, besides the good index, a
+new one with no codes and download URLs that answered 404), and after the
+last try `geofabrik_index.json` stands in: a trimmed copy of the last good
+index.
+
 Usage:
   python3 scripts/plan.py --states-geojson data/admin_regions.geojson
   python3 scripts/plan.py ... --only US-RI US-VT          # manual subset
@@ -28,6 +34,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -35,6 +43,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from themes import THEMES  # noqa: E402
 
 INDEX_URL = "https://download.geofabrik.de/index-v1-nogeom.json"
+
+# The last good index (2026-11-17), trimmed to what is read here.
+INDEX_SNAPSHOT = Path(__file__).resolve().parent / "geofabrik_index.json"
+ISO_KEYS = ("iso3166-1:alpha2", "iso3166-2")
+# Seconds before each new try of a live index that is unreadable or broken.
+# The plan job has 10 minutes.
+INDEX_RETRY_WAITS = (30, 60, 120)
 
 # Present in the admin-region GeoJSON but out of coverage (matches validate.py).
 DEFAULT_EXCLUDE = ["US-AS", "US-GU", "US-MP", "US-UM"]
@@ -81,13 +96,27 @@ def load_isos(geojson: Path) -> list[str]:
 
 
 def load_index(src: str) -> list[dict]:
-    if src.startswith(("http://", "https://")):
-        req = urllib.request.Request(src, headers={"User-Agent": "osm-geoparquet-plan/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.load(r)
-    else:
-        data = json.loads(Path(src).read_text())
-    return [f["properties"] for f in data["features"]]
+    if not src.startswith(("http://", "https://")):
+        return [f["properties"] for f in json.loads(Path(src).read_text())["features"]]
+    waits = list(INDEX_RETRY_WAITS)
+    while True:
+        try:
+            req = urllib.request.Request(src, headers={"User-Agent": "osm-geoparquet-plan/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                index = [f["properties"] for f in json.load(r)["features"]]
+            if any(p.get(k) for p in index for k in ISO_KEYS):
+                return index
+            problem = "carries no ISO codes"
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError) as e:
+            problem = f"is unreadable ({type(e).__name__}: {e})"
+        if not waits:
+            print(f"::warning::Geofabrik's index {problem}; planned from {INDEX_SNAPSHOT.name}",
+                  file=sys.stderr, flush=True)
+            return load_index(str(INDEX_SNAPSHOT))
+        wait = waits.pop(0)
+        print(f"Geofabrik's index {problem}; fetching it again in {wait} s",
+              file=sys.stderr, flush=True)
+        time.sleep(wait)
 
 
 def depth(props: dict, by_id: dict[str, dict]) -> int:

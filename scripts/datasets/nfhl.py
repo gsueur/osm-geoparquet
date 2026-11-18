@@ -75,9 +75,11 @@ BBOX = ("{xmin: ST_XMin(geometry), ymin: ST_YMin(geometry), "
 MIN_LISTED = 2_400
 KEEP_RUNS = 120           # runs kept in changes.json
 NO_LAYER = "not in archive"   # the pipeline's error for a delivery without S_FLD_HAZ_AR
-# FEMA's portal resets connections for minutes at a time. A delivery it
-# would not serve is tried again by the next run; this many runs in a row
-# and it counts as failed.
+# FEMA's portal resets connections for minutes at a time, and its list may
+# name a file it does not serve (2026-11-17: Westmoreland PA listed as
+# 42129C_20260917.zip, a 404, then as the 20260916 file it holds). A
+# delivery it would not serve is tried again by the next run; this many runs
+# in a row and it counts as failed.
 RETRY_RUNS = 3
 # The index columns, in order. path is relative to latest/.
 INDEX_COLUMNS = {
@@ -270,6 +272,15 @@ def unreachable(e: BaseException) -> bool:
     if isinstance(e, httpx.TransportError):
         return True
     return isinstance(e, httpx.HTTPStatusError) and e.response.status_code >= 500
+
+
+def not_served(e: BaseException) -> bool:
+    """Whether FEMA did not serve a delivery its list names: unreachable, or a
+    404 for the file."""
+    import httpx
+    c = cause(e)
+    return unreachable(e) or (isinstance(c, httpx.HTTPStatusError)
+                              and c.response.status_code == 404)
 
 
 def get_json(url: str, default):
@@ -551,9 +562,9 @@ def update(args) -> None:
                 if d["dfirm_id"] not in {r["dfirm_id"] for r in past.get("retry", [])}:
                     break
                 streak += 1
-            if unreachable(e) and streak + 1 < RETRY_RUNS:
+            if not_served(e) and streak + 1 < RETRY_RUNS:
                 run["retry"].append({**key, "error": error})
-                print(f"  retry {d['state']} {d['county']} {d['dfirm_id']}: FEMA unreachable, "
+                print(f"  retry {d['state']} {d['county']} {d['dfirm_id']}: FEMA did not serve it, "
                       f"tried again next run ({error})", flush=True)
                 continue
             run["failed"].append({**key, "error": error})
