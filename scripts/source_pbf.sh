@@ -62,7 +62,10 @@ case "$cmd" in
   get)
     key="${2:?state key}"; url="${3:?url}"; dest="${4:?dest}"
     ua="${5:-osm-geoparquet/1.0 (+https://geoparquet.geomermaids.com/)}"
-    if rclone copyto "$key" "$dest" 2>/dev/null; then
+    # On R2 a missing key copies as an empty folder: rclone exits 0 and
+    # writes nothing, so the file itself is the test.
+    rm -f "$dest"
+    if rclone copyto "$key" "$dest" 2>/dev/null && [ -s "$dest" ]; then
       rep="$(replication "$dest")"
       if [ "$rep" = "none" ]; then
         echo "::warning::$key is unreadable or has no diffs to follow; downloading it whole"
