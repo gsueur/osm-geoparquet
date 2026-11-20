@@ -51,6 +51,10 @@ concurrency:
 
 env:
   REMOTE: parquetry:parquetry/osm
+  # Each region's source extract between runs, in a private bucket no Worker
+  # serves (scripts/source_pbf.sh): the nightly applies Geofabrik's daily
+  # diffs to it instead of downloading the region whole.
+  STATE: parquetry:parquetry-state/osm
   LC_ALL: C.UTF-8
   # rclone reads its remote config from the environment: no config file on disk.
   # Remotes come from the environment: no config file, no notice.
@@ -135,11 +139,20 @@ jobs:
         env:
           ADMIN_REGIONS_URL: ${{ vars.ADMIN_REGIONS_URL }}
 
-      - name: Download ${{ matrix.id }} from Geofabrik
+      - name: Update ${{ matrix.id }} from Geofabrik's diffs
         run: |
-          "$GITHUB_WORKSPACE/scripts/fetch_pbf.sh" "${{ matrix.url }}" "$WORK/source.osm.pbf" \
+          "$GITHUB_WORKSPACE/scripts/source_pbf.sh" get "$STATE/${{ matrix.id }}.osm.pbf" \
+            "${{ matrix.url }}" "$WORK/source.osm.pbf" \
             "osm-geoparquet-nightly/1.0 (+https://geoparquet.geomermaids.com/)"
           ls -lh "$WORK/source.osm.pbf"
+
+      # Kept whole, before the boundary jobs filter it, so tomorrow's diffs
+      # apply to it. Publishing runs only: a test run keeps nothing.
+      - name: Keep ${{ matrix.id }} for the next run
+        if: env.PUBLISH == 'true'
+        run: |
+          "$GITHUB_WORKSPACE/scripts/source_pbf.sh" save "$STATE/${{ matrix.id }}.osm.pbf" \
+            "$WORK/source.osm.pbf"
 
       # The parent-extract boundaries job: a country extract is 12 GB, and
       # only its administrative relations are wanted. One osmium pass leaves a
