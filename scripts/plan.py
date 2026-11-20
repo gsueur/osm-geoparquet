@@ -12,9 +12,10 @@ GeoJSON change only.
 
 The live index is fetched again when it cannot be read or carries no ISO
 codes (2026-11-18: Geofabrik's servers handed out, besides the good index, a
-new one with no codes and download URLs that answered 404), and after the
-last try `geofabrik_index.json` stands in: a trimmed copy of the last good
-index.
+new one with no codes; by 2026-11-20 the new one had the codes back, as
+strings, and a new URL layout, `us/vermont/vermont-latest.osm.pbf`), and
+after the last try `geofabrik_index.json` stands in: a trimmed copy of the
+last good index (2026-11-20, new layout).
 
 Usage:
   python3 scripts/plan.py --states-geojson data/admin_regions.geojson
@@ -44,7 +45,7 @@ from themes import THEMES  # noqa: E402
 
 INDEX_URL = "https://download.geofabrik.de/index-v1-nogeom.json"
 
-# The last good index (2026-11-17), trimmed to what is read here.
+# The last good index (2026-11-20), trimmed to what is read here.
 INDEX_SNAPSHOT = Path(__file__).resolve().parent / "geofabrik_index.json"
 ISO_KEYS = ("iso3166-1:alpha2", "iso3166-2")
 # Seconds before each new try of a live index that is unreadable or broken.
@@ -128,14 +129,21 @@ def depth(props: dict, by_id: dict[str, dict]) -> int:
     return d
 
 
+def codes(props: dict, key: str) -> list[str]:
+    """An extract's ISO codes under key: a list until 2026-11, a single
+    string since (`"iso3166-2": "US-VT"`)."""
+    v = props.get(key) or []
+    return [v] if isinstance(v, str) else list(v)
+
+
 def resolve(isos: list[str], index: list[dict]) -> dict[str, dict]:
     by_id = {p["id"]: p for p in index}
     by_iso2: dict[str, list[dict]] = {}
     by_country: dict[str, list[dict]] = {}
     for p in index:
-        for code in p.get("iso3166-2") or []:
+        for code in codes(p, "iso3166-2"):
             by_iso2.setdefault(code, []).append(p)
-        for code in p.get("iso3166-1:alpha2") or []:
+        for code in codes(p, "iso3166-1:alpha2"):
             by_country.setdefault(code, []).append(p)
 
     groups: dict[str, dict] = {}

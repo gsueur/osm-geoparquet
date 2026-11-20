@@ -6,8 +6,10 @@
 #                Ubuntu's packaged rclone is too old.
 set -euo pipefail
 
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends osmium-tool
+# Retries: the Azure Ubuntu mirror timed out on 2026-11-19 and failed two jobs.
+sudo apt-get -o Acquire::Retries=5 update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -qq \
+  --no-install-recommends osmium-tool
 
 curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
 

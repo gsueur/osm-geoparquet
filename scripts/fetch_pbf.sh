@@ -5,8 +5,10 @@
 #
 # URL is the `<region>-latest.osm.pbf` alias from Geofabrik's index. When the
 # alias fails (2026-09-30: it redirected to itself for hours while the dated
-# files were fine), the newest `<region>-YYMMDD.osm.pbf` named on the region's
-# HTML page is fetched instead and checked against its published md5.
+# files were fine), the newest `<region>-YYMMDD.osm.pbf` in the alias's own
+# directory listing is fetched instead and checked against its published md5.
+# The directory works for both of Geofabrik's layouts: `us/vermont-latest`
+# beside its siblings until 2026-11, `us/vermont/vermont-latest` since.
 set -euo pipefail
 
 URL="$1"
@@ -29,20 +31,21 @@ case "$URL" in
   *) echo "::error::download failed and $URL is not a -latest alias, no fallback" >&2; exit 1 ;;
 esac
 
-base="${URL%-latest.osm.pbf}"   # https://download.geofabrik.de/north-america/us/delaware
-name="${base##*/}"              # delaware
+dir="${URL%/*}"                 # https://download.geofabrik.de/north-america/us/delaware
+name="${URL##*/}"
+name="${name%-latest.osm.pbf}"  # delaware
 page="$(mktemp)"
-get "$base.html" "$page" --retry 5 --retry-all-errors
+get "$dir/" "$page" --retry 5 --retry-all-errors
 dated="$(grep -oE "$name-[0-9]{6}\.osm\.pbf" "$page" | sort -u | tail -n 1 || true)"
 rm -f "$page"
 if [ -z "$dated" ]; then
-  echo "::error::$URL failed and $base.html names no dated extract" >&2
+  echo "::error::$URL failed and $dir/ lists no dated extract" >&2
   exit 1
 fi
 
 echo "::warning::$URL failed, falling back to $dated"
-get "${base%/*}/$dated" "$DEST" --retry 5 --retry-all-errors
-want="$(get "${base%/*}/$dated.md5" - --retry 5 --retry-all-errors | cut -d' ' -f1)"
+get "$dir/$dated" "$DEST" --retry 5 --retry-all-errors
+want="$(get "$dir/$dated.md5" - --retry 5 --retry-all-errors | cut -d' ' -f1)"
 have="$(md5sum "$DEST" | cut -d' ' -f1)"
 if [ "$want" != "$have" ]; then
   echo "::error::$dated md5 is $have, Geofabrik publishes $want" >&2
