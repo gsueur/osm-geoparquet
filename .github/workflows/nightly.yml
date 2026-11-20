@@ -103,7 +103,10 @@ jobs:
     name: ${{ matrix.id }}
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # At most 5 downloads from Geofabrik at a time (20 until 2026-11-20,
+      # when its server refused some runners' connections): a run of about
+      # 440 job-minutes takes 1.5 to 2 hours instead of 80 minutes.
+      max-parallel: 5
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7

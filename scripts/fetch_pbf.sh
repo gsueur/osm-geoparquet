@@ -21,10 +21,18 @@ get() {  # get URL DEST [extra curl options]
   curl -fL -sS --max-redirs 5 --retry-delay 30 -A "$UA" "$@" -o "$dest" "$url"
 }
 
-if get "$URL" "$DEST" --retry 2 --retry-all-errors; then
-  echo "fetched $URL"
-  exit 0
-fi
+# Tries spaced over about 15 minutes (1, 2, 4 and 8 minutes apart): on
+# 2026-11-20 Geofabrik refused connections from some runners for minutes at
+# a time while others downloaded, and three tries 30 s apart all failed.
+for wait in 60 120 240 480 0; do
+  if get "$URL" "$DEST"; then
+    echo "fetched $URL"
+    exit 0
+  fi
+  [ "$wait" -eq 0 ] && break
+  echo "download failed, trying again in ${wait} s" >&2
+  sleep "$wait"
+done
 
 case "$URL" in
   *-latest.osm.pbf) ;;
