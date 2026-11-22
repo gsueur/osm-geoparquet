@@ -13,7 +13,7 @@ with `pmtiles:layers`, web-map-links v1.3.0, and the file as a `visual`
 asset), a default MapLibre style over it, the scale's basemap archive and
 its style as further assets, and a thumbnail. The thumbnails are committed under catalog/thumbnails/natural-earth/
 (the release is static) and rendered by the `thumbnails` command.
-Spec: portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+Spec: portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/natural_earth_catalog.py thumbnails --out-dir out/natural-earth/v5.1.2

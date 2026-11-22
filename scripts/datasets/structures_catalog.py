@@ -14,7 +14,7 @@ footprints collection registers each state's PMTiles (`rel: pmtiles` with
 its layers, web-map-links v1.3.0, the archive as a `visual` asset) and a
 default MapLibre style over all of them. Counts, sizes, checksums and the
 gate come from latest/_manifest.json, local (--out-dir) or published. Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/structures_catalog.py build --dest build/structures-catalog [--out-dir out/structures]

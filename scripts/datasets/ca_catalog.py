@@ -11,7 +11,7 @@ maine_catalog.py, nh_catalog.py and ny_catalog.py share). Counts, sizes,
 checksums, titles and the departments' own descriptions come from each
 theme's _manifest.json, local (--out-dir) or published. `updated` and
 `checked` come from the `ca` file stamp (scripts/filedates.py). Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/ca_catalog.py build --dest build/ca-catalog [--out-dir out/ca]

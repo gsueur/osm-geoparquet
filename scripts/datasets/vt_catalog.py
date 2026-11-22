@@ -13,7 +13,7 @@ agencies' own descriptions come from each theme's _manifest.json, local
 (--out-dir) or published. `updated` and `checked` come from the `vt` file
 stamp (scripts/filedates.py). The layers vt_layers.csv marks CC-BY-SA-4.0
 (their publisher's licence) say so in their collection. Spec: portolan-spec
-v0.2.0. Validator: rashid, through scripts/catalog.py.
+v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/vt_catalog.py build --dest build/vt-catalog [--out-dir out/vt]

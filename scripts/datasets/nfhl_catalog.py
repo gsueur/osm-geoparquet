@@ -12,7 +12,7 @@ every day by nfhl.py, so the catalog is rendered again after each update:
 counts, sizes and the index checksum come from the manifests and the index
 just published, column types from one delivery's footer (a range request
 when the source is a URL). The prose lives here. Spec: portolan-spec
-v0.2.0. Validator: rashid, pinned in pyproject.toml, shared with the other
+v0.3.0. Validator: rashid, pinned in pyproject.toml, shared with the other
 catalogs (scripts/catalog.py), as are the STAC constants, the rashid wrapper
 and the uploader.
 

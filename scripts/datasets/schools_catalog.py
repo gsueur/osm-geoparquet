@@ -11,7 +11,7 @@ schools.py's FILES drives it. Each collection has the file's GeoParquet
 a `visual` asset) with a MapLibre style on NCES's locale (city, suburb,
 town, rural). Column descriptions follow NCES's record layouts. Counts,
 sizes, checksums, school years and the gate come from latest/_manifest.json,
-local (--out-dir) or published. Spec: portolan-spec v0.2.0. Validator:
+local (--out-dir) or published. Spec: portolan-spec v0.3.0. Validator:
 rashid, through scripts/catalog.py.
 
 Usage:

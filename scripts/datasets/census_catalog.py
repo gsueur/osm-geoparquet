@@ -15,7 +15,7 @@ with the projection extension), its PMTiles registered as formats.md asks
 (a `rel: pmtiles` link with `pmtiles:layers`, web-map-links v1.3.0, and the
 file as a `visual` asset), two MapLibre styles under styles/ and a
 thumbnail. Counts, sizes and checksums come from the product's
-_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.2.0.
+_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Usage:

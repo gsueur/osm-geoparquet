@@ -9,7 +9,7 @@ through the partition extension (`partition:glob`) and one `data-<iso3>`
 asset each. The release is static, so every asset carries a checksum. Row counts, sizes and checksums come from the
 _manifest.json gaul.py writes; column types and the extent are read from the
 Parquet footers, which is a range request when the source is a URL. The
-prose lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
+prose lives here. Spec: portolan-spec v0.3.0. Validator: rashid, pinned in
 pyproject.toml, shared with the OSM catalog (scripts/catalog.py), as are the
 STAC constants, the rashid wrapper and the uploader.
 

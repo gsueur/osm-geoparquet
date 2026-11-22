@@ -10,7 +10,7 @@ nh.py's THEMES and nh_layers.csv drive it, through arcgis_catalog.py (which
 maine_catalog.py shares). Counts, sizes, checksums, titles and GRANIT's own
 descriptions come from each theme's _manifest.json, local (--out-dir) or
 published. `updated` and `checked` come from the `nh` file stamp
-(scripts/filedates.py). Spec: portolan-spec v0.2.0. Validator: rashid,
+(scripts/filedates.py). Spec: portolan-spec v0.3.0. Validator: rashid,
 through scripts/catalog.py.
 
 Usage:

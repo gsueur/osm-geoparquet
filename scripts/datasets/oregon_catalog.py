@@ -11,7 +11,7 @@ maine_catalog.py, nh_catalog.py, ny_catalog.py, ca_catalog.py and wa_catalog.py 
 checksums, titles and the departments' own descriptions come from each
 theme's _manifest.json, local (--out-dir) or published. `updated` and
 `checked` come from the `or` file stamp (scripts/filedates.py). Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/oregon_catalog.py build --dest build/or-catalog [--out-dir out/or]

@@ -14,7 +14,7 @@ Counts, sizes, checksums and the gates come from each group's
 _manifest.json, local (--out-dir, for the group just built) or published
 (the other group): a WFIGS run renders the MTBS collection from its live
 manifest. An empty layer (no active fire) keeps its collection, with the
-US extent and no PMTiles. Spec: portolan-spec v0.2.0. Validator: rashid,
+US extent and no PMTiles. Spec: portolan-spec v0.3.0. Validator: rashid,
 through scripts/catalog.py.
 
 Usage:
