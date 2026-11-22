@@ -12,17 +12,22 @@
 # replication timestamp with pyosmium-up-to-date (the URL of the diffs is in
 # the file's header). With no kept extract, a failed update or a result
 # older than MAX_AGE_DAYS, it downloads URL whole with fetch_pbf.sh instead.
+# If Geofabrik refuses that too and the kept extract is at most
+# MAX_STALE_DAYS old, it builds from the kept extract (with a warning).
 #
 # save: copies DEST back to STATE_KEY for the next run.
 #
 # Why: Geofabrik blocks an address that downloads more than 200 GB in three
 # days, and GitHub's runners share addresses; on 2026-11-20 a third of the
 # nightly's 68 downloads (31.6 GB a night) were refused. Geofabrik asked for
-# pyosmium-up-to-date: the daily diffs of a region are a few MB.
+# pyosmium-up-to-date: the daily diffs of a region are a few MB. The block is
+# per address and total (even state.txt is refused), so a blocked runner
+# falls back to the kept extract rather than failing the whole nightly.
 set -euo pipefail
 
 PYOSMIUM="osmium==4.3.2"
 MAX_AGE_DAYS=3
+MAX_STALE_DAYS=7
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 replication() {  # FILE -> "<sequence> <whole days since its timestamp>", or "none"
@@ -62,6 +67,8 @@ case "$cmd" in
   get)
     key="${2:?state key}"; url="${3:?url}"; dest="${4:?dest}"
     ua="${5:-osm-geoparquet/1.0 (+https://geoparquet.geomermaids.com/)}"
+    # osmium reads the format from the extension: keep .osm.pbf at the end.
+    kept="$(dirname "$dest")/kept.$(basename "$dest")"
     # On R2 a missing key copies as an empty folder: rclone exits 0 and
     # writes nothing, so the file itself is the test.
     rm -f "$dest"
@@ -79,11 +86,28 @@ case "$cmd" in
       else
         echo "::warning::the diffs did not apply to $key; downloading it whole"
       fi
-      rm -f "$dest"
+      # Set aside, not deleted: the fallback if the whole download is refused.
+      [ "$rep" != "none" ] && mv "$dest" "$kept" || rm -f "$dest"
     else
       echo "no kept extract at $key: downloading it whole"
     fi
-    "$HERE/fetch_pbf.sh" "$url" "$dest" "$ua"
+    if "$HERE/fetch_pbf.sh" "$url" "$dest" "$ua"; then
+      rm -f "$kept"
+      exit 0
+    else
+      rc=$?
+    fi
+    if [ -s "$kept" ]; then
+      rep="$(replication "$kept")"
+      if [ "$rep" != "none" ] && [ "${rep##* }" -le "$MAX_STALE_DAYS" ]; then
+        mv "$kept" "$dest"
+        echo "::warning::Geofabrik refused the download; building from the kept extract (sequence ${rep%% *}, ${rep##* } day(s) old)"
+        exit 0
+      fi
+      echo "::error::Geofabrik refused the download and the kept extract cannot stand in ($rep; limit $MAX_STALE_DAYS days)"
+      rm -f "$kept"
+    fi
+    exit "$rc"
     ;;
   save)
     key="${2:?state key}"; dest="${3:?dest}"
