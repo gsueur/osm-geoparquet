@@ -442,7 +442,9 @@ def projects_collection(rel: str, manifest: dict, columns, extent, updated: str)
                           for n, t in columns],
         "assets": {
             "data": {"href": f"{PUBLIC_BASE}/{path}", "type": PARQUET_TYPE,
-                     "title": "NWI mapping projects", "roles": ["data"],
+                     "title": "NWI mapping projects",
+                     "description": "GeoParquet, one row per mapping project footprint.",
+                     "roles": ["data"],
                      "file:size": p["bytes"], "file:checksum": "1220" + p["sha256"],
                      "alternate": asset_s3(path)},
             "thumbnail": {

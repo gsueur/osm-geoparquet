@@ -258,6 +258,8 @@ def shared_assets(manifest: dict) -> dict:
             "type": PARQUET_TYPE,
             "title": f"Code table {table}: Code, Dom" + (
                 f", {', '.join(e['columns'][2:])}" if len(e["columns"]) > 2 else ""),
+            "description": f"Parquet lookup table for the {table} codes of the feature "
+                           "classes: Code is the value in the data, Dom what it means.",
             "roles": ["metadata"],
             "file:size": e["bytes"],
             "file:checksum": "1220" + e["sha256"],
@@ -265,7 +267,9 @@ def shared_assets(manifest: dict) -> dict:
     xml = manifest["metadata"][METADATA_XML]
     assets["fgdc-metadata"] = {
         "href": f"{RELEASE_URL}/{METADATA_XML}", "type": XML_TYPE,
-        "title": "USGS's FGDC metadata for PAD-US 4.1, as shipped", "roles": ["metadata"],
+        "title": "USGS's FGDC metadata for PAD-US 4.1, as shipped",
+        "description": "The FGDC metadata record USGS publishes with the release, unchanged.",
+        "roles": ["metadata"],
         "file:size": xml["bytes"], "file:checksum": "1220" + xml["sha256"],
     }
     return assets

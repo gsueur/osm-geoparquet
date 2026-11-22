@@ -376,7 +376,10 @@ def build_collection(name: str, entry: dict, manifest: dict, tiles: dict | None,
         md = manifest["metadata"]
         assets["metadata"] = {
             "href": f"{url}/{md['file']}", "type": XML_TYPE,
-            "title": "MTBS's FGDC metadata, as shipped", "roles": ["metadata"],
+            "title": "MTBS's FGDC metadata, as shipped",
+            "description": "The FGDC metadata record MTBS publishes with the perimeters, "
+                           "unchanged.",
+            "roles": ["metadata"],
             "file:size": md["bytes"], "file:checksum": "1220" + md["sha256"]}
     links = [
         {"rel": "root", "href": "../catalog.json", "type": "application/json"},
