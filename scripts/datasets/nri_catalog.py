@@ -298,6 +298,8 @@ def build_collection(name: str, entry: dict, tiles: dict | None, extras: dict, e
             "href": f"{RELEASE_URL}/{extras['hazards']['file']}",
             "type": PARQUET_TYPE,
             "title": "The 18 hazards: column prefix, period of record, consequence types",
+            "description": "Parquet, one row per hazard, keyed by the prefix its columns "
+                           "carry in the data.",
             "roles": ["metadata"],
             "file:size": extras["hazards"]["bytes"],
             "file:checksum": "1220" + extras["hazards"]["sha256"],
@@ -306,6 +308,7 @@ def build_collection(name: str, entry: dict, tiles: dict | None, extras: dict, e
             "href": f"{RELEASE_URL}/{dictionary['file']}",
             "type": CSV_TYPE,
             "title": "FEMA's field dictionary, as shipped with the data",
+            "description": "CSV from FEMA describing every field of the data, unchanged.",
             "roles": ["metadata"],
             "file:size": dictionary["bytes"],
             "file:checksum": "1220" + dictionary["sha256"],

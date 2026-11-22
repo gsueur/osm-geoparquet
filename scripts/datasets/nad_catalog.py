@@ -371,6 +371,8 @@ def nad_collection(rel: str, manifest: dict, coverage: dict, columns, extent, up
             "coverage": {
                 "href": f"{PUBLIC_DATA}/{rel}/_coverage.json", "type": "application/json",
                 "title": "Coverage per state, and the states with no rows",
+                "description": "JSON, rewritten each build: the row count of each state in "
+                               "this release, and the states the source has no addresses for.",
                 "roles": ["metadata"]},
             "thumbnail": {
                 "href": "./thumbnail.png", "type": "image/png",
@@ -429,6 +431,8 @@ def coverage_collection(rel: str, manifest: dict, columns, extent, updated: str)
             "data": {
                 "href": f"{PUBLIC_BASE}/{cells_path}", "type": PARQUET_TYPE,
                 "title": "Address points per H3 cell, resolutions 4, 6 and 8",
+                "description": "GeoParquet, one row per cell and resolution: filter on "
+                               "h3_res before summing, or each address counts three times.",
                 "roles": ["data"], "file:size": h3["bytes"],
                 "file:checksum": "1220" + h3["sha256"], "alternate": asset_s3(cells_path)},
             "pmtiles": {

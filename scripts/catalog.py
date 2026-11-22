@@ -715,7 +715,36 @@ def now_rfc3339() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# What an asset of each role is for, when its builder gives no description.
+# Builders title these assets with what they show (the layer, the colours);
+# PTL-AST-010 (rashid 0.4.0) also wants a description, which for these roles
+# is the same in every collection.
+ROLE_DESCRIPTIONS = {
+    "thumbnail": "Static preview image for catalog browsers and search results, "
+                 "not for analysis.",
+    "default-style": "MapLibre GL style for this collection's map layer; catalog "
+                     "browsers apply it by default.",
+    "style": "Alternative MapLibre GL style for this collection's map layer.",
+}
+
+
+def describe_assets(doc: dict) -> None:
+    """Give each thumbnail and style asset of a STAC object that has no
+    description the one for its role."""
+    if not isinstance(doc, dict) or doc.get("type") not in ("Collection", "Feature"):
+        return
+    for asset in doc.get("assets", {}).values():
+        roles = asset.get("roles", [])
+        role = ("thumbnail" if "thumbnail" in roles else
+                "default-style" if "style" in roles and "default" in roles else
+                "style" if "style" in roles else None)
+        if role and not asset.get("description"):
+            asset["description"] = ROLE_DESCRIPTIONS[role]
+
+
 def write_json(path: Path, doc: dict) -> None:
+    """Every builder writes its catalog files through here."""
+    describe_assets(doc)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
 

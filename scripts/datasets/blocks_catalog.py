@@ -296,6 +296,8 @@ def cells_collection(m: dict, columns, extent, thumbs: Path, updated: str) -> di
         "assets": {
             "data": {"href": f"{PUBLIC_BASE}/{cells_path}", "type": PARQUET_TYPE,
                      "title": "Population and housing units per H3 cell, resolutions 4, 6 and 8",
+                     "description": "GeoParquet, one row per cell and resolution: filter on "
+                                    "h3_res before summing, or each person counts three times.",
                      "roles": ["data"], "file:size": h3["bytes"],
                      "file:checksum": "1220" + h3["sha256"], "alternate": asset_s3(cells_path)},
             "pmtiles": {"href": f"{PUBLIC_BASE}/{tiles_path}", "type": PMTILES_TYPE,

@@ -191,7 +191,10 @@ def item(cid: str, iid: str, bbox: list[float], props: dict, href: str, s3: str,
         "stac_extensions": [FILE_EXT, ALTERNATE_EXT, *extensions],
         "id": iid, "collection": cid, "bbox": bbox, "geometry": polygon(bbox),
         "properties": props,
-        "assets": {"data": {"href": href, "type": COG_TYPE, "title": title, "roles": ["data"],
+        "assets": {"data": {"href": href, "type": COG_TYPE, "title": title,
+                            "description": "Cloud-Optimized GeoTIFF, read in place where it "
+                                           "is hosted, over HTTPS or from the S3 alternate.",
+                            "roles": ["data"],
                             "file:size": size,
                             "alternate": {"s3": {"href": s3, "title": "S3, anonymous, us-west-2"}}}},
         "links": [
