@@ -11,7 +11,7 @@
 set -euo pipefail
 
 BROWSER_REPO=https://github.com/portolan-sdi/portolan-browser
-BROWSER_SHA=15af01335da62a60d209911c9bde994981fd29be  # main, 2026-11-06
+BROWSER_SHA=51947abc08d3c973965bbc3f725484f06b9aa980  # main, 2026-11-17
 PNPM=pnpm@10
 ACCENT='#d2553a'  # the site's --accent
 

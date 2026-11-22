@@ -12,10 +12,13 @@ dependencies = [
     "duckdb>=1.1.0",
     "geoarrow-pyarrow>=0.2",
     "geoparquet-io>=0.2.0",
-    # Portolan validator for the catalog (scripts/catalog.py). Pinned exactly:
-    # a newer rashid can add or retire rules, which should be a deliberate bump.
+    # rashid 0.4.0 asks for obstore>=0.9 but passes read_timeout, which 0.9.3
+    # rejects ("Invalid key: read_timeout") on its first remote read.
+    "obstore>=0.12.1",
     "pyarrow>=22",
     "pycountry>=24",
-    "rashid==0.1.8",
+    # Portolan validator for the catalog (scripts/catalog.py). Pinned exactly:
+    # a newer rashid can add or retire rules, which should be a deliberate bump.
+    "rashid==0.4.0",
     "rich>=13.0",
 ]

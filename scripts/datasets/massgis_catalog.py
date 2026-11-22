@@ -14,7 +14,7 @@ MapLibre style and the thumbnail the build rendered. A table without
 geometry (the assessor records) is a collection with its Parquet file and no
 tiles. Counts, sizes, checksums, titles and MassGIS's own descriptions come
 from each theme's _manifest.json, local (--out-dir) or published.
-Spec: portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+Spec: portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/massgis_catalog.py build --dest build/massgis-catalog [--out-dir out/massgis]

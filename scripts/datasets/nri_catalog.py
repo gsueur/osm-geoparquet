@@ -14,7 +14,7 @@ annual loss for states, which FEMA rates on that alone.
 The column descriptions are FEMA's field aliases from the dictionary shipped
 with the data, with what the metric means. Counts, sizes, checksums and the
 gate come from the release's _manifest.json, local (--out-dir) or
-published. Spec: portolan-spec v0.2.0. Validator: rashid, through
+published. Spec: portolan-spec v0.3.0. Validator: rashid, through
 scripts/catalog.py.
 
 Usage:

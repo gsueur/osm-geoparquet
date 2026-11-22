@@ -11,7 +11,7 @@ maine_catalog.py, nh_catalog.py, ny_catalog.py and ca_catalog.py share). Counts,
 checksums, titles and the departments' own descriptions come from each
 theme's _manifest.json, local (--out-dir) or published. `updated` and
 `checked` come from the `wa` file stamp (scripts/filedates.py). Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/wa_catalog.py build --dest build/wa-catalog [--out-dir out/wa]

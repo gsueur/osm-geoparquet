@@ -15,7 +15,7 @@ as a `visual` asset), with a MapLibre style on the GAP status. Column
 descriptions are USGS's attribute definitions from the FGDC metadata
 (recorded in the manifest). Counts, sizes, checksums and the gate come from
 the release's _manifest.json, local (--out-dir) or published, so the
-catalog stage never needs the geodatabase. Spec: portolan-spec v0.2.0.
+catalog stage never needs the geodatabase. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Usage:

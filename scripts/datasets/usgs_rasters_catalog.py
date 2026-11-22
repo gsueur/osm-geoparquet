@@ -28,7 +28,7 @@ its items, the root's the newest of its collections. The collection
 thumbnails are committed under catalog/thumbnails/usgs-rasters/, rendered by
 the `thumbnails` command from the files' overviews (3DEP: each tile's
 smallest; Annual NLCD: the latest year's mosaic, in its own colours). Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   uv run --project scripts --with rasterio --with matplotlib \

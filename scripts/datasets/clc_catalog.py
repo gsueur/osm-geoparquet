@@ -14,7 +14,7 @@ The data is EPSG:3035 and stays so (the projection extension says it on the
 data assets); the collection extent is that footer box, densified and
 reprojected to lon/lat. Sizes, checksums and counts come from the release's
 manifests, read locally from --out-dir or from the published files. Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 The catalog sits beside the data, at /clc/catalog/catalog.json.
 

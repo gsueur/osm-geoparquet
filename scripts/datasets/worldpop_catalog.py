@@ -11,7 +11,7 @@ extension and one `data-<iso3>` asset each), the world file at resolution 5
 `rel: pmtiles` link with `pmtiles:layers`, web-map-links v1.3.0, the file as
 a `visual` asset), with a MapLibre style on population density. Counts,
 sizes and checksums come from the release's _manifest.json, local
-(--out-dir) or published. Spec: portolan-spec v0.2.0. Validator: rashid,
+(--out-dir) or published. Spec: portolan-spec v0.3.0. Validator: rashid,
 through scripts/catalog.py.
 
 Usage:

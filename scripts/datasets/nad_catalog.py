@@ -13,7 +13,7 @@ asset per state for clients that read assets. Release paths carry the
 release number (r24), so each asset carries its size and checksum. Counts,
 sizes, checksums, coverage and the gate come from the release's
 _manifest.json and _coverage.json, local (--out-dir) or published. Spec:
-portolan-spec v0.2.0. Validator: rashid, through scripts/catalog.py.
+portolan-spec v0.3.0. Validator: rashid, through scripts/catalog.py.
 
 Usage:
   python3 scripts/datasets/nad_catalog.py build --dest build/nad-catalog [--out-dir out/addresses]

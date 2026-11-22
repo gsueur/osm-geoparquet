@@ -9,7 +9,7 @@ geobox_samples.py's SAMPLES drives it. Each collection carries its producer and 
 license link): Geobox reads them when a newcomer adds the sample from Get started and credits the dataset with them,
 on its maps and in the box. Each also has its GeoParquet (`data`), its PMTiles (a `visual` asset and a `rel: pmtiles`
 link, web-map-links v1.3.0), a MapLibre style, a thumbnail, and a README and an AGENTS guide. Counts, sizes and
-checksums come from the sample's _manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.2.0.
+checksums come from the sample's _manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Usage:

@@ -12,7 +12,7 @@ extensions, its grid, nodata and data type), its value table as Parquet
 (`classes`, for class rasters) and the thumbnail the build rendered. Sizes,
 checksums, grids and sources come from each theme's _manifest.json, local
 (--out-dir) or published; `updated` and `checked` from the file stamp
-(scripts/filedates.py). Spec: portolan-spec v0.2.0. Validator: rashid,
+(scripts/filedates.py). Spec: portolan-spec v0.3.0. Validator: rashid,
 through scripts/catalog.py.
 """
 

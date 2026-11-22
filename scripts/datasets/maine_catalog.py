@@ -16,7 +16,7 @@ file as a `visual` asset), a MapLibre style and the thumbnail the build
 rendered. Counts, sizes, checksums, titles and the GeoLibrary's own
 descriptions come from each theme's _manifest.json, local (--out-dir) or
 published. `updated` and `checked` come from the `maine` file stamp
-(scripts/filedates.py). Spec: portolan-spec v0.2.0. Validator: rashid,
+(scripts/filedates.py). Spec: portolan-spec v0.3.0. Validator: rashid,
 through scripts/catalog.py.
 
 Usage:

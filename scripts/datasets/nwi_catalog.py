@@ -13,7 +13,7 @@ the state files through the anonymous S3 endpoint, and one `data-<xx>` asset
 per state titled with the state's name. Release paths carry the release month
 (2026-10), so each asset carries its size and checksum. Counts, sizes,
 checksums, extents, the dedup and the gate come from the release's
-_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.2.0.
+_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Dates (scripts/filedates.py): each GeoParquet's `updated` is when its bytes

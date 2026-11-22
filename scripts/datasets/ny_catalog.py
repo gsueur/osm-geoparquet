@@ -11,7 +11,7 @@ ny.py's THEMES and ny_layers.csv drive it, through arcgis_catalog.py (which
 maine_catalog.py and nh_catalog.py share). Counts, sizes, checksums, titles
 and the agencies' own descriptions come from each theme's _manifest.json,
 local (--out-dir) or published. `updated` and `checked` come from the `ny`
-file stamp (scripts/filedates.py). Spec: portolan-spec v0.2.0. Validator:
+file stamp (scripts/filedates.py). Spec: portolan-spec v0.3.0. Validator:
 rashid, through scripts/catalog.py.
 
 Usage:

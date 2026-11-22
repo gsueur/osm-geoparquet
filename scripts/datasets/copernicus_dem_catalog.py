@@ -14,7 +14,7 @@ its URL, grid and elevation range), read with DuckDB or GDAL's GTI driver.
 Sizes, checksums and dates come from the published index.json; `updated` is
 the newest tile's Last-Modified in the bucket, `checked` the index's listing
 time. The thumbnail (the tiles coloured by highest elevation) is committed
-under catalog/thumbnails/copernicus-dem/. Spec: portolan-spec v0.2.0.
+under catalog/thumbnails/copernicus-dem/. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Usage:

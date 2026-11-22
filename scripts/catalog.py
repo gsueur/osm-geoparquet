@@ -12,7 +12,7 @@ for that reason.
 Everything measurable (row counts, file counts, extents, schemas, source
 timestamps) comes from the per-region _manifest.json files the pipeline
 writes (schema >= 0.3.0), so building the catalog reads no parquet. The prose
-lives here. Spec: portolan-spec v0.2.0. Validator: rashid, pinned in
+lives here. Spec: portolan-spec v0.3.0. Validator: rashid, pinned in
 pyproject.toml.
 
 publish.py's finalize stage writes it after the completeness gate, at
@@ -70,7 +70,7 @@ CONTACT_EMAIL = "gsueur@geomermaids.com"
 CATALOG_ID = "osm-geoparquet"
 
 # Every object declares the same profile version (PORTO-CORE-006, PTL-CNF-002).
-PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json"
 PARTITION_EXT = "https://schemas.portolan-sdi.org/incubating/partition/v1.0.0/schema.json"
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 FILE_EXT = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
@@ -769,10 +769,19 @@ def build(manifests_dir: Path, date: str, dest: Path, *, updated: str | None = N
 # thumbnails. The partitions sit behind a remote glob that rashid does not
 # expand; check_data covers them.
 LOCAL_DATA = ("--data-scope", "local")
+# Findings a throwaway tree with local relative globs gets by construction:
+# since rashid 0.4.0 and spec v0.3.0 a published partition:glob must be a
+# listable absolute URL (PTL-PRT-002, and the profile schema, PTL-SCH-001).
+# (rule, json_pointer) pairs; only that field, so a real schema error
+# elsewhere still fails.
+LOCAL_GLOB_FINDINGS = frozenset({("PTL-PRT-002", "/partition:glob"),
+                                 ("PTL-SCH-001", "/partition:glob")})
 
 
-def rashid(tree: Path, *args: str) -> tuple[int, list[dict]]:
-    """Run rashid over tree. Returns (error count, findings)."""
+def rashid(tree: Path, *args: str, ignore: frozenset[tuple[str, str]] = frozenset()
+           ) -> tuple[int, list[dict]]:
+    """Run rashid over tree. Returns (error count, findings), leaving out the
+    findings whose (rule_id, json_pointer) is in ignore."""
     if not shutil.which("rashid"):
         sys.exit("rashid not on PATH: run through `uv run --project scripts`")
     # --schema adds the bundled Portolan profile schema to the metadata and
@@ -784,7 +793,9 @@ def rashid(tree: Path, *args: str) -> tuple[int, list[dict]]:
     except json.JSONDecodeError:
         sys.exit(f"rashid produced no JSON report (exit {r.returncode}):\n"
                  f"{r.stdout[-2000:]}{r.stderr[-2000:]}")
-    return report["error_count"], report["findings"]
+    findings = [f for f in report["findings"]
+                if (f.get("rule_id"), f.get("json_pointer")) not in ignore]
+    return sum(f.get("severity") == "error" for f in findings), findings
 
 
 def print_findings(findings: list[dict]) -> None:
@@ -793,8 +804,8 @@ def print_findings(findings: list[dict]) -> None:
               f"{f.get('path', '')}{f.get('json_pointer', '')}  {f.get('message', '')}")
 
 
-def check(tree: Path, *args: str) -> int:
-    errors, findings = rashid(tree, *args)
+def check(tree: Path, *args: str, ignore: frozenset[tuple[str, str]] = frozenset()) -> int:
+    errors, findings = rashid(tree, *args, ignore=ignore)
     print_findings(findings)
     print(f"rashid: {errors} error(s), {len(findings) - errors} other finding(s)")
     return 1 if errors else 0
@@ -805,14 +816,16 @@ def check_data(out_dir: Path, date: str) -> int:
     statistics, the 150,000-row cap, GeoParquet version and one schema per
     theme (PTL-DAT-*). Those rules only expand a local relative glob, so this
     renders a throwaway catalog whose globs point into symlinked copies of
-    out_dir instead of the bucket."""
+    out_dir instead of the bucket. Those relative globs fail the absolute-glob
+    rules (LOCAL_GLOB_FINDINGS), which the published tree is held to at
+    finalize, so the data pass leaves those findings out."""
     with tempfile.TemporaryDirectory(prefix="catalog-data-") as tmp:
         tree = Path(tmp) / "catalog"
         aggs = build(out_dir, date, tree, local_glob=True)
         for name in aggs:
             for country in out_dir.glob("country=*"):
                 (tree / name / country.name).symlink_to(country.resolve())
-        return check(tree, "--data-scope", "all")
+        return check(tree, "--data-scope", "all", ignore=LOCAL_GLOB_FINDINGS)
 
 
 # ---------- selftest (negative controls) ----------

@@ -14,7 +14,7 @@ Render, validate and publish the Portolan catalog of the gazetteers.
 One catalog for both: one URL for whoever lists it, and the two answer the
 same question (a name to a point) for different footprints. gazetteer.py's
 tables drive it; counts, sizes and checksums come from each part's
-_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.2.0.
+_manifest.json, local (--out-dir) or published. Spec: portolan-spec v0.3.0.
 Validator: rashid, through scripts/catalog.py.
 
 Usage:
