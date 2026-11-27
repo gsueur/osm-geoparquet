@@ -20,9 +20,11 @@ name: dataset-sentinel2
 
 on:
   schedule:
-    # Three a day, off the hour (GitHub may start a run hours late or drop
-    # it). A scene is in the API about two hours after it is sensed.
-    - cron: "37 1,9,17 * * *"
+    # Once a day, off the hour. GitHub starts this repository's scheduled
+    # runs hours late (the nightly, set for 04:23, started at 13:56 on
+    # 2026-11-27) and drops some, so more slots did not mean a fresher
+    # index. A scene is in the API about two hours after it is sensed.
+    - cron: "37 1 * * *"
   workflow_dispatch:
     inputs:
       mode:

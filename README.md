@@ -537,7 +537,7 @@ index, built weekly by `dataset-copernicus-dem.yml`
 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under
 COPERNICUS by the European Union and ESA; all rights reserved."
 
-Sentinel-2 Level-2A has a scene index, built three times a day by
+Sentinel-2 Level-2A has a scene index, built once a day by
 `dataset-sentinel2.yml` (`scripts/datasets/sentinel2_index.py`) at
 `https://parquetry.geomermaids.com/sentinel-2/index/`: one Parquet file per
 year, `year=<YYYY>/scenes.parquet`, one row per scene of Element 84's Earth
