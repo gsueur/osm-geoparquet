@@ -322,16 +322,32 @@ def build(out: Path, full: bool, years: list[int] | None, workers: int) -> None:
         files[str(y)] = f
     if not files:
         sys.exit("no scene at all: nothing to publish")
+    # Readers open the current year's file from 1 January 00:00 UTC, hours before its first
+    # scene is in the API: the year that starts within a day gets its file now, empty.
+    for y in sorted({now.year, (now + dt.timedelta(days=1)).year}):
+        if str(y) not in files:
+            dest = out / f"year={y}" / "scenes.parquet"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            con.execute(f"""COPY (SELECT {ROW} FROM (SELECT NULL::VARCHAR AS id, NULL::VARCHAR AS grid,
+                NULL::TIMESTAMPTZ AS datetime, NULL::DOUBLE AS cloud_cover, NULL::DOUBLE AS nodata_percent,
+                NULL::DOUBLE AS snow_ice_percent, NULL::DOUBLE AS vegetation_percent, NULL::DOUBLE AS water_percent,
+                NULL::VARCHAR AS platform, NULL::VARCHAR AS processing_baseline, NULL::DOUBLE AS lat,
+                NULL::DOUBLE AS lon, NULL::DOUBLE[] AS bbox, NULL::TIMESTAMPTZ AS created,
+                NULL::TIMESTAMPTZ AS updated) WHERE false) TO '{dest}' (FORMAT parquet, COMPRESSION zstd)""")
+            files[str(y)] = {"rows": 0, "bytes": dest.stat().st_size, "newest": None, "updated": None,
+                             "sha256": hashlib.sha256(dest.read_bytes()).hexdigest()}
+            sources[y] = []
+            print(f"  {y}: no scene yet, an empty file", flush=True)
     through = max(f["updated"] for f in files.values() if f.get("updated"))
     (out / "index.json").write_text(json.dumps({
         "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": API.rsplit("/", 1)[0],
         "collection": COLLECTION, "attribution": ATTRIBUTION,
         "scenes": sum(f["rows"] for f in files.values()),
-        "newest": max(f["newest"] for f in files.values()), "updated_through": through,
+        "newest": max(f["newest"] for f in files.values() if f["newest"]), "updated_through": through,
         "rebuilt": sorted(str(y) for y in sources),
         "years": dict(sorted(files.items()))}, indent=1) + "\n")
     print(f"  {sum(f['rows'] for f in files.values()):,} scenes, newest "
-          f"{max(f['newest'] for f in files.values())}", flush=True)
+          f"{max(f['newest'] for f in files.values() if f['newest'])}", flush=True)
 
 
 def publish(out: Path, remote: str) -> None:
