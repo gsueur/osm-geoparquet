@@ -78,7 +78,7 @@ jobs:
           rclone version | sed -n 1p
 
       - name: Selftest
-        run: uv run --project scripts python scripts/datasets/sentinel2_index.py selftest | tail -1
+        run: uv run --project scripts python scripts/datasets/sentinel2_index.py selftest > selftest.log || { tail -40 selftest.log; exit 1; }
 
       - name: Scene index
         id: build
