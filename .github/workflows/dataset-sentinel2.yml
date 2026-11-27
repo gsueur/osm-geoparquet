@@ -10,9 +10,9 @@
 #   full    the whole collection, month by month (about an hour)
 #   years   only the years given, read again whole; the others are kept
 #
-# A run fails when a rebuilt year does not match the API's count, and when
-# the newest scene is more than 36 hours old (the API stopped taking scenes
-# in, or this index stopped following it).
+# The build fails when a year does not match the API's count, and when the
+# newest scene is more than 36 hours old (the API stopped taking scenes in,
+# or this index stopped following it). The script's selftest runs first.
 #
 # Needs the R2 secrets the nightly uses.
 
@@ -77,6 +77,9 @@ jobs:
           curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
           rclone version | sed -n 1p
 
+      - name: Selftest
+        run: uv run --project scripts python scripts/datasets/sentinel2_index.py selftest | tail -1
+
       - name: Scene index
         id: build
         run: |
@@ -93,11 +96,6 @@ jobs:
           jq 'del(.years[].sha256)' index/index.json
           jq -r '"\(.scenes) scenes, newest \(.newest), rebuilt \(.rebuilt | join(" "))"' index/index.json \
             | sed 's/^/summary=/' >> "$GITHUB_OUTPUT"
-          # The newest scene: older than 36 hours and something upstream stopped.
-          newest=$(jq -r .newest index/index.json)
-          age=$(( ($(date -u +%s) - $(date -u -d "$newest" +%s)) / 3600 ))
-          echo "newest scene: $newest, $age h ago"
-          [ "$age" -le 36 ] || { echo "BAD the newest scene is $age hours old"; exit 1; }
 
       - name: Upload
         if: ${{ !inputs.dry_run }}

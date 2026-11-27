@@ -547,7 +547,9 @@ scene id, its MGRS `tile`, `datetime`, `cloud_cover`, `nodata_percent` (the
 part of the square with no image), snow, vegetation and water percentages,
 the platform, the centre (`lat`, `lon`) and the box of the imaged part
 (`west`, `south`, `east`, `north`). Rows are sorted by tile then time in row
-groups of 20,000, so the images of one square are one or two range requests:
+groups of 20,000, so a filter on `tile` reads one or two row groups of a year
+(DuckDB-Wasm in a browser, a square over three months: 16 requests, 0.9 MB of
+a 170 MB file):
 
 ```sql
 SELECT id, datetime, cloud_cover FROM read_parquet(
@@ -558,8 +560,11 @@ WHERE tile = '31TGL' AND cloud_cover < 20 ORDER BY datetime DESC;
 No file is copied: a scene's COGs stay in Element 84's bucket on AWS Open
 Data, in a folder that follows from the row (the script's header gives the
 rule). A run asks the API only for the scenes it changed since the last one
-and rewrites the current year's file; each rebuilt year is counted against
-the API, and a run fails when the newest scene is more than 36 hours old.
+and rewrites the current year's file; every year is counted against the API
+(a year that differs is read again), and a run fails when the newest scene
+is more than 36 hours old. The host answers a HEAD that carries a Range
+with 200: DuckDB-Wasm reads it by ranges with `reliableHeadRequests: false,
+allowFullHTTPReads: true`.
 Geobox's Sentinel-2 page and its assistant tool read this index. Credit:
 "Contains modified Copernicus Sentinel data, processed by ESA; catalogued and
 hosted by Element 84 (Earth Search)."

@@ -11,11 +11,28 @@ only; the images stay in Element 84's bucket on AWS Open Data
 
 Source: Element 84's Earth Search STAC API, collection sentinel-2-c1-l2a
 (https://earth-search.aws.element84.com/v1). A scene is in the API about two
-hours after it is sensed. The first build reads the whole collection, month
-by month (about 31 million scenes, 2015 to now); later builds ask only for
-the scenes whose `updated` is past the published index's newest, and rewrite
-the year files those fall in (in practice the current year). Each rebuilt
-year is then counted against the API: a difference fails the build.
+hours after it is sensed. Three kinds of build:
+
+  the first, or --full   the whole collection, a year at a time, month by month
+                         (about 31 million scenes, 2015 to now)
+  an update (default)    the scenes whose `updated` is past the published index's mark
+                         (index.json's updated_through, less 6 hours), merged into the
+                         year files they fall in: in practice the current year's
+  --years                those years read again whole; the others and the mark are kept
+
+Checks, in every build:
+  - a rebuilt year is counted against the API: a finished year must match, the current
+    one may trail by the scenes that arrived meanwhile. A merged year that does not
+    match is read again whole.
+  - an update also counts the years nothing changed in (one request each): a scene the
+    API withdrew leaves no `updated` trace, and the year is read again.
+  - a published file is merged into only when it is the one index.json describes
+    (sha256); otherwise the year is read again.
+  - the newest scene must be less than 36 hours old (--max-age): older, and the API
+    stopped taking scenes in, or this index stopped following it.
+publish sends the years index.json lists as rebuilt, each checked against its sha256,
+then index.json. If a run stops between the two, the next update finds the file
+differs from index.json and reads that year again.
 
 Rows are sorted by tile then time, in row groups of 20,000: a reader that
 filters on `tile` fetches one or two row groups over HTTP.
@@ -52,8 +69,9 @@ hosted by Element 84 (Earth Search).
 Usage:
   python3 scripts/datasets/sentinel2_index.py build --out-dir out/index            # only what changed
   python3 scripts/datasets/sentinel2_index.py build --out-dir out/index --full     # the whole collection
-  python3 scripts/datasets/sentinel2_index.py build --out-dir out/index --years 2026
+  python3 scripts/datasets/sentinel2_index.py build --out-dir out/index --years 2024 2025
   python3 scripts/datasets/sentinel2_index.py publish --out-dir out/index --remote parquetry:parquetry/sentinel-2
+  python3 scripts/datasets/sentinel2_index.py selftest     # the builds against a stub API, no network
 """
 
 from __future__ import annotations
@@ -63,6 +81,7 @@ import concurrent.futures as cf
 import datetime as dt
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -184,10 +203,11 @@ def months(years: list[int], now: dt.datetime) -> list[tuple[str, str]]:
 
 
 def published() -> dict | None:
-    """The published index.json, or None when there is no index yet."""
+    """The published index.json, or None when there is no index yet. Asked past the
+    edge's cache (files there are kept 5 minutes): the last build's, not the one before."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"{PUBLIC}/index.json", headers=AGENT),
-                                    timeout=60) as r:
+        with urllib.request.urlopen(urllib.request.Request(
+                f"{PUBLIC}/index.json?t={time.time_ns()}", headers=AGENT), timeout=60) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -198,8 +218,8 @@ def published() -> dict | None:
 def fetch(url: str, dest: Path) -> bool:
     """A published year file, to a local path. False when there is none."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=AGENT), timeout=600) as r, \
-                dest.open("wb") as f:
+        with urllib.request.urlopen(urllib.request.Request(f"{url}?t={time.time_ns()}", headers=AGENT),
+                                    timeout=600) as r, dest.open("wb") as f:
             while chunk := r.read(1 << 20):
                 f.write(chunk)
         return True
@@ -209,9 +229,26 @@ def fetch(url: str, dest: Path) -> bool:
         raise
 
 
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def rows_of(paths: list[Path]) -> list[str]:
+    """The rows of JSON lines just read, as a query (none when every file is empty: an
+    empty file among them trips DuckDB's JSON reader)."""
+    names = ", ".join(f"'{p}'" for p in sorted(paths) if p.stat().st_size)
+    return [f"SELECT {ROW} FROM read_json([{names}], format = 'newline_delimited', "
+            f"columns = {JSON_COLUMNS})"] if names else []
+
+
 def write_year(con: duckdb.DuckDBPyConnection, y: int, sources: list[str], dest: Path) -> dict | None:
-    """The year's scenes, the latest version of each, sorted by tile then time. None when
-    the year has no scene (2015 and 2016, before Collection 1 starts)."""
+    """The year's scenes, the latest version of each, sorted by tile then time. None, and
+    no file, when the year has no scene."""
+    dest.unlink(missing_ok=True)
     if not sources:
         return None
     union = " UNION ALL BY NAME ".join(sources)
@@ -228,17 +265,34 @@ def write_year(con: duckdb.DuckDBPyConnection, y: int, sources: list[str], dest:
     con.execute(f"""COPY (SELECT * FROM scenes ORDER BY tile, datetime, id) TO '{dest}'
         (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9, ROW_GROUP_SIZE 20000)""")
     con.execute("DROP TABLE scenes")
+    # A box across the antimeridian has west > east: only the latitudes are ordered.
     rows, bad, newest, updated = con.execute(f"""SELECT count(*),
         count(*) FILTER (WHERE tile IS NULL OR NOT regexp_full_match(tile, '[0-9]{{2}}[C-X][A-Z]{{2}}')
                          OR split_part(id, '_', 2) <> 'T' || tile OR datetime IS NULL OR cloud_cover IS NULL
-                         OR west IS NULL OR south > north),
+                         OR west IS NULL OR south IS NULL OR east IS NULL OR north IS NULL OR south > north),
         strftime(max(datetime) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%SZ'),
         strftime(max(updated) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%gZ')
         FROM read_parquet('{dest}')""").fetchone()
     if bad:
-        sys.exit(f"{y}: {bad:,} rows without a tile, a time, a cloud cover or a box, or whose id names another tile")
+        sys.exit(f"{y}: {bad:,} rows without a tile, a time, a cloud cover or a whole box, or whose id "
+                 "names another tile")
     return {"rows": rows, "bytes": dest.stat().st_size, "newest": newest, "updated": updated,
-            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest()}
+            "sha256": sha256(dest)}
+
+
+def write_empty(con: duckdb.DuckDBPyConnection, dest: Path) -> dict:
+    """A year file with the columns and no row."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    nulls = ", ".join(f"NULL::{t} AS {c}" for c, t in (
+        ("id", "VARCHAR"), ("grid", "VARCHAR"), ("datetime", "TIMESTAMPTZ"), ("cloud_cover", "DOUBLE"),
+        ("nodata_percent", "DOUBLE"), ("snow_ice_percent", "DOUBLE"), ("vegetation_percent", "DOUBLE"),
+        ("water_percent", "DOUBLE"), ("platform", "VARCHAR"), ("processing_baseline", "VARCHAR"),
+        ("lat", "DOUBLE"), ("lon", "DOUBLE"), ("bbox", "DOUBLE[]"), ("created", "TIMESTAMPTZ"),
+        ("updated", "TIMESTAMPTZ")))
+    con.execute(f"COPY (SELECT {ROW} FROM (SELECT {nulls}) WHERE false) TO '{dest}' "
+                "(FORMAT parquet, COMPRESSION zstd)")
+    return {"rows": 0, "bytes": dest.stat().st_size, "newest": None, "updated": None,
+            "sha256": sha256(dest)}
 
 
 def counts_agree(rows: int, api: int, current: bool) -> bool:
@@ -247,116 +301,290 @@ def counts_agree(rows: int, api: int, current: bool) -> bool:
     return 0 <= api - rows <= (3000 if current else 0)
 
 
-def build(out: Path, full: bool, years: list[int] | None, workers: int) -> None:
+def build(out: Path, full: bool, years: list[int] | None, workers: int, max_age: float = 36) -> None:
+    now = dt.datetime.now(dt.UTC)
+    years = sorted(set(years or []))
+    if any(y < FIRST_YEAR or y > now.year for y in years):
+        sys.exit(f"--years: between {FIRST_YEAR} and {now.year}")
+    old = None if full else published()
+    if years and old is None:
+        sys.exit("--years rebuilds years of a published index, and there is none: the first build "
+                 "is --full")
     out.mkdir(parents=True, exist_ok=True)
     work = out / "_work"
-    work.mkdir(exist_ok=True)
-    now = dt.datetime.now(dt.UTC)
-    old = None if full else published()
+    if work.exists():           # nothing an earlier build read is used again
+        shutil.rmtree(work)
+    work.mkdir()
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
 
-    class fresh:  # the rows of the JSON lines just read
-        @staticmethod
-        def format(paths: list[Path]) -> list[str]:
-            # an empty file among them trips DuckDB's JSON reader: left out
-            names = ", ".join(f"'{p}'" for p in sorted(paths) if p.stat().st_size)
-            return [f"SELECT {ROW} FROM read_json([{names}], format = 'newline_delimited', "
-                    f"columns = {JSON_COLUMNS})"] if names else []
-
-
-    if old is None or years:
-        # The whole collection (or the years asked for), month by month.
-        todo = years or list(range(FIRST_YEAR, now.year + 1))
-        parts = months(todo, now)
-        print(f"  reading {len(parts)} months of {todo[0]} to {todo[-1]}", flush=True)
+    def read_years(ys: list[int]) -> dict[int, list[str]]:
+        """Each year read whole from the API, month by month."""
+        parts = months(ys, now)
+        print(f"  reading {len(parts)} months of {ys[0]} to {ys[-1]}", flush=True)
 
         def one(job: tuple[str, str]) -> int:
             part = work / f"{job[0]}.jsonl"
-            return sum(1 for _ in part.open()) if part.exists() else crawl(part, datetime=job[1])
+            return crawl(part, datetime=job[1])
 
         with cf.ThreadPoolExecutor(workers) as ex:
             for (name, _), n in zip(parts, ex.map(one, parts)):
                 print(f"    {name}: {n:,}", flush=True)
-        sources = {y: fresh.format(list(work.glob(f"{y}-*.jsonl"))) for y in todo}
+        return {y: rows_of(list(work.glob(f"{y}-*.jsonl"))) for y in ys}
+
+    files = dict(old["years"]) if old else {}
+    whole: set[int] = set()        # years read whole in this build
+    through = old["updated_through"] if old else None
+    # year -> the queries its rows come from; None: the year is read whole from the API, when
+    # its file is written (one year at a time: the whole collection is 12 GB of JSON lines)
+    sources: dict[int, list[str] | None]
+    if old is None:
+        # The whole collection.
+        sources = dict.fromkeys(range(FIRST_YEAR, now.year + 1))
+        whole = set(sources)
+    elif years:
+        # The years asked for, read again; the others and the update mark are kept.
+        sources = dict.fromkeys(years)
+        whole = set(sources)
     else:
-        # Only the scenes the API changed since the published index's newest.
-        since = dt.datetime.fromisoformat(old["updated_through"].replace("Z", "+00:00")) - OVERLAP
+        # Only the scenes the API changed since the published index's mark.
+        since = dt.datetime.fromisoformat(through.replace("Z", "+00:00")) - OVERLAP
         part = work / "updated.jsonl"
-        part.unlink(missing_ok=True)
         n = crawl(part, query={"updated": {"gte": iso(since)}})
         print(f"  {n:,} scenes updated since {iso(since)}", flush=True)
-        new = fresh.format([part])
-        touched = [r[0] for r in con.execute(
-            f"SELECT DISTINCT year(datetime) FROM ({new[0]}) ORDER BY 1").fetchall()] if new else []
-        sources = {}
+        new = rows_of([part])
+        seen, touched = (con.execute(
+            f"""SELECT strftime(max(updated) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%gZ'),
+                       list(DISTINCT year(datetime) ORDER BY year(datetime)) FROM ({new[0]})""").fetchone()
+            if new else (None, []))
+        through = max(through, seen or through)
+        sources, reread = {}, []
         for y in touched:
-            sources[y] = list(new)
-            if fetch(f"{PUBLIC}/year={y}/scenes.parquet", work / f"published-{y}.parquet"):
-                sources[y].append(f"SELECT * FROM read_parquet('{work}/published-{y}.parquet')")
-
-    files = dict((old or {}).get("years", {})) if not full else {}
-    whole = old is None or bool(years)
-    for y, src in sorted(sources.items()):
-        dest = out / f"year={y}" / "scenes.parquet"
-        f = write_year(con, y, src, dest)
-        if f is None:
-            if matched(year_range(y)):
-                sys.exit(f"{y}: no row read, but the API has scenes")
-            files.pop(str(y), None)
-            continue
-        # The API's own count for the year, asked after the read. Only scenes that arrived
-        # meanwhile may be missing; anything else (scenes the API dropped, a page lost) and
-        # the year is read again whole, once.
-        api = matched(year_range(y))
-        if not counts_agree(f["rows"], api, y == now.year) and not whole:
-            print(f"  {y}: {f['rows']:,} rows but the API counts {api:,}: reading the year again", flush=True)
-            for name, rng in months([y], now):
-                crawl(work / f"{name}.jsonl", datetime=rng)
-            f = write_year(con, y, fresh.format(list(work.glob(f"{y}-*.jsonl"))), dest)
+            want = files.get(str(y))
+            got = work / f"published-{y}.parquet"
+            if not want:
+                sources[y] = list(new)
+            elif fetch(f"{PUBLIC}/year={y}/scenes.parquet", got) and sha256(got) == want["sha256"]:
+                sources[y] = [*new, f"SELECT * FROM read_parquet('{got}')"]
+            else:
+                # the file is not the one index.json describes (an upload cut short): not merged into
+                print(f"  {y}: the published file is not the one index.json describes", flush=True)
+                reread.append(y)
+        # The years no scene changed in: still the API's count? (a scene it withdrew leaves no trace)
+        for y in sorted(int(k) for k in files if int(k) not in touched and int(k) not in reread):
             api = matched(year_range(y))
+            if not counts_agree(files[str(y)]["rows"], api, y == now.year):
+                print(f"  {y}: {files[str(y)]['rows']:,} rows published, the API counts {api:,}", flush=True)
+                reread.append(y)
+        sources |= dict.fromkeys(reread)
+        whole = set(reread)
+
+    def settle(y: int, src: list[str] | None) -> None:
+        """The year's file and its entry, counted against the API (asked after the read: only
+        scenes that arrived meanwhile may be missing). A year that was merged and does not
+        match is read again whole, once."""
+        dest = out / f"year={y}" / "scenes.parquet"
+        if src is None:
+            src = read_years([y])[y]
+        for attempt in (1, 2):
+            f = write_year(con, y, src, dest)
+            api = matched(year_range(y))
+            rows = f["rows"] if f else 0
+            if counts_agree(rows, api, y == now.year):
+                break
+            if attempt == 2 or y in whole:
+                sys.exit(f"{y}: {rows:,} rows but the API counts {api:,}")
+            print(f"  {y}: {rows:,} rows but the API counts {api:,}: reading the year again", flush=True)
+            src = read_years([y])[y]
+            whole.add(y)
+        for part in work.glob(f"{y}-*.jsonl"):
+            part.unlink()
+        if f is None:
+            files.pop(str(y), None)
+            print(f"  {y}: no scene", flush=True)
+            return
         print(f"  {y}: {f['rows']:,} rows, {f['bytes'] / 1e6:.1f} MB, newest {f['newest']} (API: {api:,})",
               flush=True)
-        if not counts_agree(f["rows"], api, y == now.year):
-            sys.exit(f"{y}: {f['rows']:,} rows but the API counts {api:,}")
         files[str(y)] = f
-    if not files:
-        sys.exit("no scene at all: nothing to publish")
+
+    rebuilt = set()     # the years whose file this build wrote (a year left without a scene has none)
+    for y, src in sorted(sources.items()):
+        settle(y, src)
+        if str(y) in files:
+            rebuilt.add(y)
     # Readers open the current year's file from 1 January 00:00 UTC, hours before its first
     # scene is in the API: the year that starts within a day gets its file now, empty.
     for y in sorted({now.year, (now + dt.timedelta(days=1)).year}):
+        if str(y) in files:
+            continue
+        if y <= now.year and matched(year_range(y)):
+            whole.add(y)
+            settle(y, None)
         if str(y) not in files:
-            dest = out / f"year={y}" / "scenes.parquet"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            con.execute(f"""COPY (SELECT {ROW} FROM (SELECT NULL::VARCHAR AS id, NULL::VARCHAR AS grid,
-                NULL::TIMESTAMPTZ AS datetime, NULL::DOUBLE AS cloud_cover, NULL::DOUBLE AS nodata_percent,
-                NULL::DOUBLE AS snow_ice_percent, NULL::DOUBLE AS vegetation_percent, NULL::DOUBLE AS water_percent,
-                NULL::VARCHAR AS platform, NULL::VARCHAR AS processing_baseline, NULL::DOUBLE AS lat,
-                NULL::DOUBLE AS lon, NULL::DOUBLE[] AS bbox, NULL::TIMESTAMPTZ AS created,
-                NULL::TIMESTAMPTZ AS updated) WHERE false) TO '{dest}' (FORMAT parquet, COMPRESSION zstd)""")
-            files[str(y)] = {"rows": 0, "bytes": dest.stat().st_size, "newest": None, "updated": None,
-                             "sha256": hashlib.sha256(dest.read_bytes()).hexdigest()}
-            sources[y] = []
+            files[str(y)] = write_empty(con, out / f"year={y}" / "scenes.parquet")
             print(f"  {y}: no scene yet, an empty file", flush=True)
-    through = max(f["updated"] for f in files.values() if f.get("updated"))
+        rebuilt.add(y)
+    if not any(f["rows"] for f in files.values()):
+        sys.exit("no scene at all: nothing to publish")
+    newest = max(f["newest"] for f in files.values() if f["newest"])
+    age = (now - dt.datetime.fromisoformat(newest.replace("Z", "+00:00"))).total_seconds() / 3600
+    print(f"  {sum(f['rows'] for f in files.values()):,} scenes, newest {newest} ({age:.1f} h ago)",
+          flush=True)
+    if max_age and age > max_age:
+        sys.exit(f"the newest scene is {age:.1f} hours old (more than {max_age:g}): the API stopped "
+                 "taking scenes in, or this index stopped following it")
+    if old is None:
+        # every year was read: the mark is the newest change seen, never past the start of the read
+        through = min(max(f["updated"] for f in files.values() if f["updated"]), iso(now))
     (out / "index.json").write_text(json.dumps({
         "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": API.rsplit("/", 1)[0],
         "collection": COLLECTION, "attribution": ATTRIBUTION,
-        "scenes": sum(f["rows"] for f in files.values()),
-        "newest": max(f["newest"] for f in files.values() if f["newest"]), "updated_through": through,
-        "rebuilt": sorted(str(y) for y in sources),
+        "scenes": sum(f["rows"] for f in files.values()), "newest": newest,
+        "updated_through": through, "rebuilt": sorted(str(y) for y in rebuilt),
         "years": dict(sorted(files.items()))}, indent=1) + "\n")
-    print(f"  {sum(f['rows'] for f in files.values()):,} scenes, newest "
-          f"{max(f['newest'] for f in files.values() if f['newest'])}", flush=True)
 
 
 def publish(out: Path, remote: str) -> None:
-    """The year files this build wrote, then index.json, which names them."""
+    """The year files the build rewrote (index.json's `rebuilt`, each checked against its
+    sha256 before anything is sent), then index.json, which describes them. Files of other
+    years that an earlier build left in the folder are not sent."""
+    index = json.loads((out / "index.json").read_text())
+    todo = []
+    for y in index["rebuilt"]:
+        path = out / f"year={y}" / "scenes.parquet"
+        if y not in index["years"]:
+            sys.exit(f"{y}: rebuilt, but not in index.json")
+        if not path.exists() or sha256(path) != index["years"][y]["sha256"]:
+            sys.exit(f"{path}: not the file index.json describes")
+        todo.append((y, path))
     cache = ["--header-upload", "Cache-Control: public, max-age=300", "--ignore-times"]
-    subprocess.run(["rclone", "copy", str(out), f"{remote}/index", "--filter", "+ year=*/scenes.parquet",
-                    "--filter", "- *", *cache], check=True)
+    for y, path in todo:
+        subprocess.run(["rclone", "copyto", str(path), f"{remote}/index/year={y}/scenes.parquet", *cache],
+                       check=True)
     subprocess.run(["rclone", "copyto", str(out / "index.json"), f"{remote}/index/index.json", *cache,
                     "--header-upload", "Content-Type: application/json"], check=True)
+
+
+def selftest() -> None:
+    """The three kinds of build against a stub of the API and of what is published: no network."""
+    import tempfile
+    g = globals()
+    now = dt.datetime.now(dt.UTC)
+    y0, y1, y2 = now.year - 2, now.year - 1, now.year
+
+    def scene(tile: str, when: dt.datetime, cloud: float, updated: dt.datetime) -> dict:
+        return {"id": f"S2A_T{tile}_{when:%Y%m%dT%H%M%S}_L2A", "bbox": [4.2, 45.0, 5.7, 46.0],
+                "properties": {"datetime": iso(when), "created": iso(updated), "updated": iso(updated),
+                               "eo:cloud_cover": cloud, "grid:code": f"MGRS-{tile.lstrip('0')}",
+                               "platform": "sentinel-2a", "proj:centroid": {"lat": 45.5, "lon": 5.0},
+                               "s2:nodata_pixel_percentage": 0, "s2:snow_ice_percentage": 0,
+                               "s2:vegetation_percentage": 50, "s2:water_percentage": 1,
+                               "s2:processing_baseline": "05.11"}}
+
+    def at(y: int, m: int = 6, d: int = 1) -> dt.datetime:
+        return dt.datetime(y, m, d, 10, 30, tzinfo=dt.UTC)
+
+    long_ago = now - dt.timedelta(days=40)
+    api = [scene("31TGL", at(y0), 10, long_ago), scene("09TWM", at(y0, 7), 20, long_ago),
+           scene("31TGL", at(y1), 30, long_ago), scene("31TFL", at(y1, 7), 40, long_ago),
+           scene("31TGL", now - dt.timedelta(hours=30), 50, now - dt.timedelta(hours=28))]
+
+    def stub_search(body: dict, attempts: int = 7) -> dict:
+        hits = api
+        if "datetime" in body:
+            a, b = body["datetime"].split("/")
+            hits = [s for s in hits if a <= s["properties"]["datetime"] <= b]
+        if "query" in body:
+            hits = [s for s in hits if s["properties"]["updated"] >= body["query"]["updated"]["gte"]]
+        return {"features": hits[:body["limit"]], "links": [], "context": {"matched": len(hits)}}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        live = Path(tmp) / "live"       # what is published
+
+        def stub_published() -> dict | None:
+            return json.loads((live / "index.json").read_text()) if (live / "index.json").exists() else None
+
+        def stub_fetch(url: str, dest: Path) -> bool:
+            src = live / url.removeprefix(f"{PUBLIC}/")
+            if src.exists():
+                shutil.copy(src, dest)
+            return src.exists()
+
+        def release(out: Path) -> dict:
+            """What publish does, into the folder: the rebuilt years, then index.json."""
+            index = json.loads((out / "index.json").read_text())
+            for y in index["rebuilt"]:
+                (live / f"year={y}").mkdir(parents=True, exist_ok=True)
+                shutil.copy(out / f"year={y}" / "scenes.parquet", live / f"year={y}" / "scenes.parquet")
+            shutil.copy(out / "index.json", live / "index.json")
+            return index
+
+        def rows(y: int) -> list[tuple]:
+            return duckdb.connect().execute(
+                f"SELECT id, tile, round(cloud_cover) FROM read_parquet('{live}/year={y}/scenes.parquet') "
+                "ORDER BY id").fetchall()
+
+        saved = {k: g[k] for k in ("search", "published", "fetch")}
+        g.update(search=stub_search, published=stub_published, fetch=stub_fetch)
+        try:
+            # 1. nothing published: --years is refused, a first build reads everything
+            try:
+                build(Path(tmp) / "a", False, [y1], 2)
+                raise AssertionError("--years with nothing published should stop")
+            except SystemExit:
+                pass
+            first = release((build(Path(tmp) / "a", False, None, 2), Path(tmp) / "a")[1])
+            assert first["scenes"] == 5 and [len(rows(y)) for y in (y0, y1, y2)] == [2, 2, 1], first
+            assert rows(y0)[0][1] == "09TWM", "zones 1 to 9 keep their zero"
+            assert set(first["rebuilt"]) >= {str(y0), str(y1), str(y2)}
+
+            # 2. an update: a past scene corrected, a new scene; the untouched year is left alone
+            api[2] = scene("31TGL", at(y1), 5, now - dt.timedelta(hours=1))
+            api.append(scene("31TFL", now - dt.timedelta(hours=3), 60, now - dt.timedelta(hours=1)))
+            second = release((build(Path(tmp) / "b", False, None, 2), Path(tmp) / "b")[1])
+            assert second["rebuilt"] == [str(y1), str(y2)], second["rebuilt"]
+            assert second["years"][str(y0)] == first["years"][str(y0)]
+            assert (api[2]["id"], "31TGL", 5.0) in rows(y1) and len(rows(y1)) == 2, rows(y1)
+            assert len(rows(y2)) == 2 and second["updated_through"] > first["updated_through"]
+            assert not (Path(tmp) / "b" / f"year={y0}").exists(), "an untouched year is not rewritten"
+
+            # 3. a scene withdrawn from a year nothing else changed in: seen by the count, read again
+            gone = api.pop(0)
+            third = release((build(Path(tmp) / "c", False, None, 2), Path(tmp) / "c")[1])
+            assert str(y0) in third["rebuilt"] and gone["id"] not in [r[0] for r in rows(y0)], third
+
+            # 4. --years reads those years again and keeps the update mark
+            api[0] = scene("09TWM", at(y0, 7), 99, now + dt.timedelta(hours=1))
+            fourth = release((build(Path(tmp) / "d", False, [y0, y0], 2), Path(tmp) / "d")[1])
+            assert fourth["rebuilt"] == [str(y0)] and rows(y0)[0][2] == 99.0, fourth
+            assert fourth["updated_through"] == third["updated_through"]
+
+            # 5. a published file that is not the one index.json describes is not merged into
+            (live / f"year={y2}" / "scenes.parquet").write_bytes(
+                (live / f"year={y0}" / "scenes.parquet").read_bytes())
+            api.append(scene("31TGL", now - dt.timedelta(hours=2), 70, now - dt.timedelta(minutes=30)))
+            fifth = release((build(Path(tmp) / "e", False, None, 2), Path(tmp) / "e")[1])
+            assert len(rows(y2)) == 3 and str(y2) in fifth["rebuilt"], rows(y2)
+
+            # 6. publish refuses a file that is not the one it built
+            (Path(tmp) / "e" / f"year={y2}" / "scenes.parquet").write_bytes(b"not the file")
+            try:
+                publish(Path(tmp) / "e", "nowhere:")
+                raise AssertionError("publish should stop on a changed file")
+            except SystemExit:
+                pass
+
+            # 7. a stale API stops the build
+            del api[:]
+            api.append(scene("31TGL", now - dt.timedelta(hours=40), 1, now - dt.timedelta(hours=39)))
+            try:
+                build(Path(tmp) / "f", True, None, 2)
+                raise AssertionError("a newest scene 40 hours old should stop the build")
+            except SystemExit:
+                pass
+        finally:
+            g.update(saved)
+    print("selftest ok")
 
 
 def main() -> None:
@@ -364,17 +592,24 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build")
     b.add_argument("--out-dir", type=Path, required=True)
-    b.add_argument("--full", action="store_true", help="read the whole collection again")
-    b.add_argument("--years", type=int, nargs="+", help="read these years again, keep the others")
+    which = b.add_mutually_exclusive_group()
+    which.add_argument("--full", action="store_true", help="read the whole collection again")
+    which.add_argument("--years", type=int, nargs="+",
+                       help="read these years again; the others, and the published index's update mark, are kept")
     b.add_argument("--workers", type=int, default=4, help="months read at a time")
+    b.add_argument("--max-age", type=float, default=36,
+                   help="stop when the newest scene is older than this many hours (0: no check)")
     p = sub.add_parser("publish")
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--remote", required=True)
+    sub.add_parser("selftest")
     a = ap.parse_args()
     if a.cmd == "build":
-        build(a.out_dir, a.full, a.years, a.workers)
-    else:
+        build(a.out_dir, a.full, a.years, a.workers, a.max_age)
+    elif a.cmd == "publish":
         publish(a.out_dir, a.remote)
+    else:
+        selftest()
 
 
 if __name__ == "__main__":
