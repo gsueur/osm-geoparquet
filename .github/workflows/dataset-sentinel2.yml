@@ -1,0 +1,142 @@
+# Sentinel-2 L2A scene index: parquetry:parquetry/sentinel-2/index/.
+#
+# One Parquet row per scene of Element 84's Earth Search collection
+# sentinel-2-c1-l2a (about 31 million, 14,000 more a day), one file per year,
+# for pickers (Geobox's Sentinel-2 page) and DuckDB.
+# scripts/datasets/sentinel2_index.py documents the source and the columns.
+#
+#   update  the scenes the API changed since the published index (a minute of
+#           API, then the current year's file rewritten); the scheduled runs
+#   full    the whole collection, month by month (about an hour)
+#   years   only the years given, read again whole; the others are kept
+#
+# The build fails when a year does not match the API's count, and when the
+# newest scene is more than 36 hours old (the API stopped taking scenes in,
+# or this index stopped following it). The script's selftest runs first.
+#
+# Needs the R2 secrets the nightly uses.
+
+name: dataset-sentinel2
+
+on:
+  schedule:
+    # Three a day, off the hour (GitHub may start a run hours late or drop
+    # it). A scene is in the API about two hours after it is sensed.
+    - cron: "37 1,9,17 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "update (what changed), full (everything) or years (those below)"
+        type: choice
+        options: [update, full, years]
+        default: update
+      years:
+        description: "With mode years: the years to read again, e.g. 2024 2025"
+        type: string
+        default: ""
+      dry_run:
+        description: "Build and check, upload nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dataset-sentinel2
+  cancel-in-progress: false
+
+env:
+  REMOTE: parquetry:parquetry/sentinel-2
+  PUBLIC: https://parquetry.geomermaids.com/sentinel-2
+  MODE: ${{ github.event_name == 'schedule' && 'update' || inputs.mode }}
+  YEARS: ${{ inputs.years }}
+  LC_ALL: C.UTF-8
+  # Remotes come from the environment: no config file, no notice.
+  RCLONE_CONFIG: /dev/null
+  RCLONE_CONFIG_PARQUETRY_TYPE: s3
+  RCLONE_CONFIG_PARQUETRY_PROVIDER: Cloudflare
+  RCLONE_CONFIG_PARQUETRY_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_PARQUETRY_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_PARQUETRY_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  RCLONE_CONFIG_PARQUETRY_ACL: private
+  RCLONE_CONFIG_PARQUETRY_NO_CHECK_BUCKET: "true"
+
+jobs:
+  sentinel2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      summary: ${{ steps.build.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+      - run: uv sync --project scripts
+
+      - name: rclone
+        if: ${{ !inputs.dry_run }}
+        run: |
+          curl -fsSL --retry 3 https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone version | sed -n 1p
+
+      - name: Selftest
+        run: uv run --project scripts python scripts/datasets/sentinel2_index.py selftest > selftest.log || { tail -40 selftest.log; exit 1; }
+
+      - name: Scene index
+        id: build
+        run: |
+          case "$MODE" in
+            full) args=(--full) ;;
+            years)
+              [[ "$YEARS" =~ ^[0-9]{4}(\ [0-9]{4})*$ ]] || { echo "years: e.g. 2024 2025"; exit 2; }
+              # shellcheck disable=SC2206
+              args=(--years $YEARS) ;;
+            *) args=() ;;
+          esac
+          uv run --project scripts python scripts/datasets/sentinel2_index.py build \
+            --out-dir index --workers 6 "${args[@]}"
+          jq 'del(.years[].sha256)' index/index.json
+          jq -r '"\(.scenes) scenes, newest \(.newest), rebuilt \(.rebuilt | join(" "))"' index/index.json \
+            | sed 's/^/summary=/' >> "$GITHUB_OUTPUT"
+
+      - name: Upload
+        if: ${{ !inputs.dry_run }}
+        run: |
+          uv run --project scripts python scripts/datasets/sentinel2_index.py publish \
+            --out-dir index --remote "$REMOTE"
+
+      - name: Check what is live
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set +e
+          fail=0
+          year=$(date -u +%Y)
+          for f in index/index.json "index/year=$year/scenes.parquet"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "$PUBLIC/$f")
+            [ "$code" = "200" ] || { echo "BAD $f -> $code"; fail=1; continue; }
+            echo "ok  $f"
+          done
+          range=$(curl -s -o /dev/null -w '%{http_code}' -r 0-16383 "$PUBLIC/index/year=$year/scenes.parquet")
+          [ "$range" = "206" ] || { echo "BAD range request -> $range"; fail=1; }
+          # What is served is what was built (the edge keeps a file 5 minutes).
+          live=$(curl -s "$PUBLIC/index/index.json?t=$(date +%s)" | jq -r .built)
+          [ "$live" = "$(jq -r .built index/index.json)" ] || { echo "BAD index.json live is of $live"; fail=1; }
+          exit $fail
+
+  notify:
+    needs: [sentinel2]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RESULT: ${{ needs.sentinel2.result }}
+          SUMMARY: ${{ needs.sentinel2.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && { echo "NTFY_TOPIC not set, skipping"; exit 0; }
+          # Routine refreshes are not news: failures only.
+          [[ "$RESULT" == "success" ]] && exit 0
+          curl -fsS --max-time 10 -H "Title: Sentinel-2 index FAILED" -H "Tags: warning" \
+            -H "Priority: high" -H "Click: $RUN_URL" -d "${SUMMARY:-no summary}" \
+            "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || echo "ntfy POST failed"
