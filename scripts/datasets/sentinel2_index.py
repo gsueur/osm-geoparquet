@@ -440,8 +440,9 @@ def build(out: Path, full: bool, years: list[int] | None, workers: int, max_age:
         if str(y) in files:
             rebuilt.add(y)
     # Readers open the current year's file from 1 January 00:00 UTC, hours before its first
-    # scene is in the API: the year that starts within a day gets its file now, empty.
-    for y in sorted({now.year, (now + dt.timedelta(days=1)).year}):
+    # scene is in the API: the year that starts within three days gets its file now, empty
+    # (the build runs once a day, hours late at times, and a run may be dropped).
+    for y in sorted({now.year, (now + dt.timedelta(days=3)).year}):
         if str(y) in files:
             continue
         if y <= now.year and matched(year_range(y)):
